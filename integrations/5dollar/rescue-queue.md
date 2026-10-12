@@ -32,7 +32,7 @@
 | 回溯天数 | **7** |
 | 单轮消费 | **8** |
 | 日上限（成功/late/no_odds） | **40** |
-| 开赛后 >3h | **R-D 晚补**：仍写规则格；`recommend_live_ok=false` |
+| 开赛后 >3h | 规则格走 **R-D**；真实格走 **R-F** 仍写 actual。两者 `recommend_live_ok=false`，准确 as-of 仍 `sim_ok/features_ok=true` |
 | approx | 中盘 **120**min / 临盘 **60**min；`far_open` 默认可标采纳 |
 | 禁消费 | 让路窗 + 11:00–11:20；due 前 15min |
 
@@ -40,5 +40,13 @@
 
 - `shared_api_yield` 让路窗：11:05–11:20、14:55–15:15、21:55–22:15
 - 额外：11:00–11:20 不消费（避开 11:10 高峰）
-- 禁止用 T 后即时盘冒充规则 mid/close
-- 真实通道（R-F）暂 defer，留 pending
+- 禁止用 T 后即时盘冒充规则 mid/close 或真实 t8/t1
+- 真实通道（R-F）与规则通道同一 Strict as-of：写 `channel=actual`、`point=t8|t1`，`rescue_rule=R-F`，不写规则格。补写行 `asof_backfill=true`、`phase_assign_late=true`（live 不计命中）。特征只收决策时刻截断后仍合法的水位
+
+真实队列条目试跑（不调 API、不写库）：
+
+```
+python scripts/live/rescue_worker.py --dry-run --ignore-due-avoid
+```
+
+`pending/` 里放一条 `channel=actual`、`point=t1`、`phase_variant=real` 的队列 JSON 时，输出 `action` 应为 `would_asof` 或 `would_asof_late`，`rescue_rule` 为 `R-F`，不再是 `defer_real_R-F`。

@@ -55,6 +55,8 @@ def _dt(v):
 
 
 def generate(conn) -> tuple[list[dict], dict]:
+    from app.table_matches import is_posthoc_rescue, posthoc_feature_blocked  # noqa: WPS433
+
     snaps: dict[tuple[int, str], Any] = {}
     for r in conn.execute("SELECT * FROM odds_snapshot WHERE market='asian' AND channel='rule' AND book='macau'"):
         snaps[(r["match_id"], r["point"])] = r
@@ -87,6 +89,13 @@ def generate(conn) -> tuple[list[dict], dict]:
         r_open, r_mid, r_close = _dt(so["recorded_at"]), _dt(sm["recorded_at"]), _dt(sc["recorded_at"])
         if not (kick and t_mid and t_close and r_open and r_mid and r_close) or not (
                 r_mid <= t_mid and r_close <= t_close and t_close < kick and r_open <= t_close):
+            stats["asof_violation"] += 1
+            continue
+        # 事后补写不是决策时刻的即时可见盘；只有截断后仍合法的水位才进特征
+        exo = json.loads(so["extras_json"] or "{}")
+        if (posthoc_feature_blocked(exo, r_open, t_close, source=so["source"])
+                or posthoc_feature_blocked(exm, r_mid, t_mid, source=sm["source"])
+                or posthoc_feature_blocked(exc, r_close, t_close, source=sc["source"])):
             stats["asof_violation"] += 1
             continue
         # The hand-recorded Crown opening quote is the book's data at opening, which is always earlier than the
@@ -135,6 +144,12 @@ def generate(conn) -> tuple[list[dict], dict]:
             "upper": u, "side": "AH_away" if lower == "客" else "AH_home",
             "settle_book": "macau_close", "test_only": True,
         }
+        if any(is_posthoc_rescue(ex, source=row["source"]) for ex, row in (
+                (exo, so), (exm, sm), (exc, sc))):
+            # 合法水位可以进特征，但不得当成决策时刻的即时可见盘 / live 命中
+            snap["asof_backfill"] = True
+            snap["phase_assign_late"] = True
+            snap["live_visible_at_decision"] = False
         rationale = [f"ledger_id={LEDGER}", "branch=steady_lower", "landing=prediction-landing-cards.md",
                      f"version={VERSION}", {"feature_snapshot": snap}]
         rows.append({"match_id": mid, "direction": lower, "rationale_json": json.dumps(rationale, ensure_ascii=False)})

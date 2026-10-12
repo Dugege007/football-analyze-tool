@@ -441,8 +441,66 @@ def _is_rescue_row(r: sqlite3.Row) -> bool:
     (analyst finding 2026-10-10), the same way as our own captures."""
     ex = _loads(r["extras_json"])
     src = r["source"] if "source" in r.keys() else None
-    return (src in RESCUE_SOURCES or ex.get("source") in RESCUE_SOURCES
+    return is_posthoc_rescue(ex, source=src)
+
+
+def is_posthoc_rescue(extras: dict | None, *, source: str | None = None) -> bool:
+    """事后补写（R-A / R-D / R-F）：不是窗内即时采集。"""
+    ex = extras or {}
+    return (source in RESCUE_SOURCES or ex.get("source") in RESCUE_SOURCES
             or ex.get("capture") in RESCUE_CAPTURES or ex.get("asof_backfill") is True)
+
+
+def posthoc_feature_blocked(extras: dict | None, recorded_at: datetime | None,
+                            decision_at: datetime | None, *, source: str | None = None) -> bool:
+    """事后补写行本身不是决策时刻的可见盘。
+
+    非补写行不在这里拦截。补写行只有 recorded_at ≤ 决策时刻才允许进特征；
+    缺失报价时刻或 recorded_at 晚于决策时刻一律拦住。
+    """
+    if not is_posthoc_rescue(extras, source=source):
+        return False
+    if recorded_at is None or decision_at is None:
+        return True
+    return recorded_at > decision_at
+
+
+def posthoc_counts_live_hit(extras: dict | None, *, source: str | None = None) -> bool:
+    """窗内即时采集才计 live 命中。事后补写与 phase_assign_late 不计。"""
+    ex = extras or {}
+    if is_posthoc_rescue(ex, source=source):
+        return False
+    if ex.get("phase_assign_late") is True:
+        return False
+    return True
+
+
+def _seal_posthoc_cell(cell: dict, snap: sqlite3.Row, rec: datetime | None, as_of: datetime) -> bool:
+    """事后补写标成非即时命中。水位未通过决策时刻截断则隐藏并关掉 features。
+
+    返回 True 表示格子已隐藏，调用方应结束。
+    """
+    if not _is_rescue_row(snap):
+        return False
+    ex = _loads(snap["extras_json"])
+    src = snap["source"] if "source" in snap.keys() else None
+    cell["asof_backfill"] = True
+    cell["phase_assign_late"] = True
+    if not posthoc_feature_blocked(ex, rec, as_of, source=src):
+        return False
+    lane = cell.get("book_lane")
+    source_label = cell.get("source")
+    probe = rec if rec is not None else as_of + timedelta(seconds=1)
+    _hide_by_as_of(cell, probe, as_of)
+    cell["asof_backfill"] = True
+    cell["phase_assign_late"] = True
+    cell["features_ok"] = False
+    cell["sim_ok"] = False
+    if lane is not None:
+        cell["book_lane"] = lane
+    if source_label is not None:
+        cell["source"] = source_label
+    return True
 
 
 def _is_own_capture(r: sqlite3.Row) -> bool:
@@ -722,6 +780,8 @@ def build_ah_cell(d: _Data, mpk: int, book: str, phase: str, sched: dict,
             **phase_feature_flags(snap),  # 0.3.20：列或 extras；缺省 features_ok=true
         })
         _set_water_fields(cell, snap["water_src"])
+        if _seal_posthoc_cell(cell, snap, rec, as_of):
+            return _mark_no_data(cell)
         if _hide_by_as_of(cell, rec, as_of):
             return _mark_no_data(cell)
     elif phase in PHASES:
@@ -900,6 +960,10 @@ def build_macau_5df_cell(d: _Data, mpk: int, phase: str, sched: dict,
             **phase_feature_flags(snap),
         })
         _set_water_fields(cell, snap["water_src"] or "actual")
+        if _seal_posthoc_cell(cell, snap, rec, as_of):
+            cell["book_lane"] = "macau_5df"
+            cell["source"] = MACAU_5DF_SOURCE_LABEL
+            return _mark_no_data(cell)
         if _hide_by_as_of(cell, rec, as_of):
             cell["book_lane"] = "macau_5df"
             cell["source"] = MACAU_5DF_SOURCE_LABEL
@@ -980,6 +1044,9 @@ def _fill_x_from_snap(cell: dict, r: sqlite3.Row, phase: str, as_of: datetime,
     cell["complete"] = all(cell[k] is not None for k in ("home", "draw", "away"))
     # api_closing 的报价时刻未知：开赛前一律视为未知 → as_of < 开赛则隐藏
     ts = rec if quote_time else (kickoff if basis == "api_closing" else None)
+    if _seal_posthoc_cell(cell, r, rec if quote_time else None, as_of):
+        cell["complete"] = False
+        return
     _hide_by_as_of(cell, ts, as_of)
 
 

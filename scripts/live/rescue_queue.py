@@ -54,7 +54,7 @@ FAILED = QROOT / "failed"
 SHADOW = QROOT / "shadow"
 QLOG = QROOT / "logs" / "enqueue.jsonl"
 
-# 入队范围：规则 mid/close；真实通道也可入队（执行走 R-F，worker 未上线前仅占位）
+# 入队范围：规则 mid/close 与真实通道 actual/t8|t1（执行走 R-F）
 ENQUEUE_POINTS = {("rule", "mid"), ("rule", "close"), ("actual", "t8"), ("actual", "t1")}
 # plan 里 point 可能是 mid/close + phase_variant rule/real
 ENQUEUE_VIA_VARIANT = {("rule", "mid"), ("rule", "close"), ("real", "mid"), ("real", "close")}
@@ -345,13 +345,15 @@ def enqueue_gap_targets(targets: list[dict], *, scenario: str = "S17",
                          "target_key": tk, "reason": reason})
             continue
         item = build_item(t, reason=reason, scenario=scenario)
-        # 多日积压：即时推荐仍可用的 +200；晚补仍走 R-A（recommend_live_off）
+        # 多日积压：即时推荐仍可用的 +200。开赛后 >3h 关即时推荐；真实通道仍是 R-F，规则通道为 R-D。
         if recommend_live_ok(item.get("kickoff_at")):
             item["priority"] = int(item["priority"]) + 200
         else:
-            item["rescue_plan"] = ["R-C", "R-D"]
+            real = item.get("phase_variant") == "real" or item.get("channel") == "actual"
+            item["rescue_plan"] = ["R-C", "R-F" if real else "R-D"]
             item["recommend_live_ok"] = False
-            item["notes"] = (item.get("notes") or "") + "gap_scan:kickoff_plus_3h→recommend_live_off"
+            tag = "R-F_recommend_live_off" if real else "recommend_live_off"
+            item["notes"] = (item.get("notes") or "") + f"gap_scan:kickoff_plus_3h→{tag}"
         path = queue_path(t, folder=PENDING)
         path.write_text(json.dumps(item, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         existing.add(tk)

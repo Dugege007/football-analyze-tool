@@ -4,9 +4,9 @@
 口径：schema/v2_0-live-miss-rescue-rules.md
 - 让路窗 + 11:00–11:20 不消费
 - 下一 due 目标前 15min 跳过（避免抢 live 配额）
-- 开赛后 >3h → R-D 晚补：仍 as-of 写入规则格（sim/features 可用），recommend_live_ok=false
-- 规则 mid/close → 调 asof_backfill_mid_rule（R-A / R-D）
-- 真实通道：暂 defer（R-F 未接线），留 pending 并记日志
+- 开赛后 >3h → 仍 as-of 写入（sim/features 可用），recommend_live_ok=false
+- 规则 mid/close → asof_backfill_mid_rule（R-A；晚补标签 R-D，写规则格）
+- 真实 mid/close（actual/t8|t1）→ 同一执行器 R-F，写真实格，不写规则通道
 
 例：
   python scripts/rescue_worker.py --dry-run
@@ -174,10 +174,10 @@ def is_real_item(it: dict) -> bool:
 
 
 def run_asof(D: str, target_key: str, db: Path, dry_run: bool,
-             recommend_live_ok: bool | None = None) -> dict:
+             recommend_live_ok: bool | None = None, rescue_rule: str | None = None) -> dict:
     from asof_backfill_mid_rule import run as asof_run  # noqa: WPS433
     return asof_run(D, [target_key], False, db, dry_run, False,
-                    recommend_live_ok=recommend_live_ok)
+                    recommend_live_ok=recommend_live_ok, rescue_rule=rescue_rule)
 
 
 def process_one(path: Path, it: dict, *, db: Path, dry_run: bool, now: datetime) -> dict:
@@ -185,20 +185,10 @@ def process_one(path: Path, it: dict, *, db: Path, dry_run: bool, now: datetime)
     D = it.get("jingcai_date") or (tk.split("|")[0] if tk else "")
     result = {"target_key": tk, "path": str(path)}
 
-    if is_real_item(it) and not is_rule_asof_item(it):
-        # R-F 未接线：留 pending，记 defer
-        it["attempts"] = int(it.get("attempts") or 0)
-        it["notes"] = (it.get("notes") or "") + "|defer_R-F_not_wired"
-        if not dry_run:
-            path.write_text(json.dumps(it, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        result["action"] = "defer_real_R-F"
-        append_consume_log({"at": iso(now), "event": "rescue_deferred", "target_key": tk,
-                            "reason": "R-F_not_wired"})
-        return result
-
-    # 开赛后 >3h：R-D 晚补标签（仍写规则格；禁即时推荐；sim/features 仍可用）
+    # 开赛后 >3h：禁即时推荐，sim/features 仍可用。真实通道标签保持 R-F，规则通道为 R-D。
     reco_ok = rq.recommend_live_ok(it.get("kickoff_at"), now=now, hours=SHADOW_HOURS)
-    rescue_rule = "R-A" if reco_ok else "R-D"
+    real = is_real_item(it) and not is_rule_asof_item(it)
+    rescue_rule = "R-F" if real else ("R-A" if reco_ok else "R-D")
     result["recommend_live_ok"] = reco_ok
     result["rescue_rule"] = rescue_rule
 
@@ -207,7 +197,8 @@ def process_one(path: Path, it: dict, *, db: Path, dry_run: bool, now: datetime)
         return result
 
     try:
-        rep = run_asof(D, tk, db, dry_run=False, recommend_live_ok=reco_ok)
+        rep = run_asof(D, tk, db, dry_run=False, recommend_live_ok=reco_ok,
+                       rescue_rule=rescue_rule)
     except Exception as e:
         attempts = int(it.get("attempts") or 0) + 1
         it["attempts"] = attempts
@@ -246,9 +237,14 @@ def process_one(path: Path, it: dict, *, db: Path, dry_run: bool, now: datetime)
             "sim_ok": True if status == "asof_backfilled" else False,
             "features_ok": True if status == "asof_backfilled" else False,
         }
-        # R-D：另落一份晚补索引到 shadow/（对照标签；主值已写入规则格）
+        # 开赛后 >3h：晚补索引落到 shadow/（主值已写入；禁即时推荐）
         if not reco_ok and status == "asof_backfilled":
             sp = rq.SHADOW / f"{path.stem}__late_report.json"
+            late_note = (
+                "准确 as-of 已写入真实 actual 格；禁即时推荐；可参与模拟与调参；live 不计命中"
+                if rescue_rule == "R-F"
+                else "准确 as-of 已写入规则 mid/close；禁即时推荐；可参与模拟与调参"
+            )
             jdump(sp, {
                 "schema": "live_rescue_late_v1",
                 "target_key": tk,
@@ -257,9 +253,9 @@ def process_one(path: Path, it: dict, *, db: Path, dry_run: bool, now: datetime)
                 "recommend_live_ok": False,
                 "sim_ok": True,
                 "features_ok": True,
-                "rescue_rule": "R-D",
+                "rescue_rule": rescue_rule,
                 "noted_at": iso(now),
-                "note": "准确 as-of 已写入规则 mid/close；禁即时推荐；可参与模拟与调参",
+                "note": late_note,
                 "asof_report": rep.get("report_path"),
             })
             extra["late_report"] = str(sp)
@@ -372,7 +368,9 @@ def main(argv=None) -> int:
         "pending_total": rep.get("pending_total"),
         "taking": rep.get("taking"),
         "daily_done": rep.get("daily_done"),
-        "actions": [{"target_key": x.get("target_key"), "action": x.get("action")}
+        "actions": [{"target_key": x.get("target_key"), "action": x.get("action"),
+                     "rescue_rule": x.get("rescue_rule"),
+                     "recommend_live_ok": x.get("recommend_live_ok")}
                     for x in rep.get("actions") or []],
         "report_path": rep.get("report_path"),
     }, ensure_ascii=False, indent=2))
