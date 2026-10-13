@@ -227,6 +227,8 @@ def _loads(raw: Any) -> dict:
 # 来源：odds_snapshot 列或 extras_json → phase_pending / features_ok / phase_assign_late；
 #       matches.kickoff_rev。列尚未建时按默认值返回，不改库、不算第二套。
 PHASE_FEATURE_DEFAULTS = {"phase_pending": False, "features_ok": True, "phase_assign_late": False}
+# 格子级：事后补写标记。默认 false；只有 _seal_posthoc_cell 认定的事后补写格子才改成 true（扁平格式列集合固定）。
+CELL_POSTHOC_DEFAULTS = {"asof_backfill": False}
 
 
 def _as_bool(v: Any, default: bool) -> bool:
@@ -327,7 +329,7 @@ def _empty_ah(phase: str) -> dict:
             "minutes_since_open": None, "return_rate": None, "return_rate_baseline": None,
             "return_rate_baseline_n": None, "return_rate_dev": None, "baseline_method": None,
             "water_move_eligible": None, "tier_cross": None, "tier_cross_mid": None,
-            **PHASE_FEATURE_DEFAULTS}  # 0.3.20：无快照时默认；有快照行时由 phase_feature_flags 覆盖
+            **PHASE_FEATURE_DEFAULTS, **CELL_POSTHOC_DEFAULTS}  # 0.3.20：无快照时默认；有快照行时由 phase_feature_flags 覆盖
 
 
 def _empty_x(phase: str) -> dict:
@@ -338,7 +340,7 @@ def _empty_x(phase: str) -> dict:
             "return_rate_baseline_n": None, "return_rate_dev": None, "baseline_method": None,
             "kelly": None, "kelly_base": None, "kelly_base_n_books": None,
             "kelly_multi_avg": None, "multi_avg_n_books": None, "n_avg": None, "water_source": None,
-            **PHASE_FEATURE_DEFAULTS}
+            **PHASE_FEATURE_DEFAULTS, **CELL_POSTHOC_DEFAULTS}
 
 
 def _empty_jc() -> dict:
@@ -350,7 +352,7 @@ def _empty_jc() -> dict:
             "fetch_lag_min": None,
             "missing_reason": None,  # collector_empty | legacy_home_only | …
             "quote_kind": None,  # official_first when the opening value is the official first published odds
-            **PHASE_FEATURE_DEFAULTS}
+            **PHASE_FEATURE_DEFAULTS, **CELL_POSTHOC_DEFAULTS}
 
 
 # ----------------------------------------------------------------------------- data load
@@ -777,7 +779,7 @@ def build_ah_cell(d: _Data, mpk: int, book: str, phase: str, sched: dict,
             "target_at": _iso(_to_cn(snap["target_at"])) if phase != "open" else None,
             "basis": basis, "source": f"odds_snapshot/{snap['channel']}/{snap['point']}",
             "available": True,
-            **phase_feature_flags(snap),  # 0.3.20：列或 extras；缺省 features_ok=true
+            **CELL_POSTHOC_DEFAULTS, **phase_feature_flags(snap),  # 0.3.20：列或 extras；缺省 features_ok=true
         })
         _set_water_fields(cell, snap["water_src"])
         if _seal_posthoc_cell(cell, snap, rec, as_of):
@@ -858,7 +860,7 @@ def build_ah_macau_manual_cell(d: _Data, mpk: int, phase: str, sched: dict,
             "target_at": _iso(_to_cn(snap["target_at"])) if phase != "open" and quote_time else None,
             "basis": basis, "source": f"odds_snapshot/{snap['channel']}/{snap['point']}",
             "available": True, "book_lane": "macau_manual",
-            **phase_feature_flags(snap),
+            **CELL_POSTHOC_DEFAULTS, **phase_feature_flags(snap),
         })
         # 手工主列：若行上意外带着 5DF actual 水，剥掉（防御）
         if is_5df_macau_row(snap):
@@ -957,7 +959,7 @@ def build_macau_5df_cell(d: _Data, mpk: int, phase: str, sched: dict,
             "source": MACAU_5DF_SOURCE_LABEL,
             "available": True,
             "book_lane": "macau_5df",
-            **phase_feature_flags(snap),
+            **CELL_POSTHOC_DEFAULTS, **phase_feature_flags(snap),
         })
         _set_water_fields(cell, snap["water_src"] or "actual")
         if _seal_posthoc_cell(cell, snap, rec, as_of):
@@ -1039,7 +1041,7 @@ def _fill_x_from_snap(cell: dict, r: sqlite3.Row, phase: str, as_of: datetime,
         "target_at": _iso(_to_cn(r["target_at"])) if (quote_time and phase != "open") else None,
         "basis": basis, "source": f"odds_snapshot/{r['channel']}/{r['point']}", "available": True,
         "water_source": _x1x2_water_source(r),
-        **phase_feature_flags(r),  # 0.3.20
+        **CELL_POSTHOC_DEFAULTS, **phase_feature_flags(r),  # 0.3.20
     })
     cell["complete"] = all(cell[k] is not None for k in ("home", "draw", "away"))
     # api_closing 的报价时刻未知：开赛前一律视为未知 → as_of < 开赛则隐藏
@@ -1244,7 +1246,7 @@ def _empty_jc_hhad() -> dict:
         "post_decision_line_change": False, "current_line": None,
         "from_hist": False, "decision_line": None,
         "usable_at_mid": None, "usable_at_close": None,
-        "hidden_reason": None, **PHASE_FEATURE_DEFAULTS,
+        "hidden_reason": None, **PHASE_FEATURE_DEFAULTS, **CELL_POSTHOC_DEFAULTS,
     }
 
 
@@ -1799,6 +1801,7 @@ class AhCell(_M_):
     phase_pending: Optional[bool] = False  # 0.3.20：快照行；待归阶段
     features_ok: Optional[bool] = True  # 0.3.20：默认 true；false=占位推算不进特征
     phase_assign_late: Optional[bool] = False  # 0.3.20：开赛确认晚于目标
+    asof_backfill: Optional[bool] = False  # 事后补写（R-A / R-D / R-F）才为 true
 
 
 class InstantAlt(_M_):
@@ -1905,6 +1908,7 @@ class X1x2Cell(_M_):
     phase_pending: Optional[bool] = False  # 0.3.20
     features_ok: Optional[bool] = True
     phase_assign_late: Optional[bool] = False
+    asof_backfill: Optional[bool] = False
 
 
 class ApiClosing(_M_):
@@ -1982,6 +1986,7 @@ class JcCell(_M_):
     phase_pending: Optional[bool] = False  # 0.3.20：竞彩格同快照口径
     features_ok: Optional[bool] = True
     phase_assign_late: Optional[bool] = False
+    asof_backfill: Optional[bool] = False
 
 
 class JcHhadCell(_M_):
@@ -2015,6 +2020,7 @@ class JcHhadCell(_M_):
     phase_pending: Optional[bool] = False
     features_ok: Optional[bool] = True
     phase_assign_late: Optional[bool] = False
+    asof_backfill: Optional[bool] = False
 
 
 class MatchInfo(_M_):
@@ -2377,6 +2383,23 @@ _OPEN_KEYS = ("open_basis", "open_basis_reason", "earliest_ts_quote_at", "ts_inf
 _KELLY_KEYS = ("kelly", "kelly_base", "kelly_base_n_books", "kelly_multi_avg", "multi_avg_n_books", "n_avg")
 
 
+def _fill_posthoc_flags(it: dict) -> None:
+    """事后补写标记：所有阶段格子（含空模板、澳门第五数据通道）都带 asof_backfill 与 phase_assign_late，空值一律补成 false。
+
+    必须在 _stable 生成全部空模板之后调用。
+    """
+    for mk in ("ah", "x1x2"):
+        for blk in (it.get(mk) or {}).values():
+            if not isinstance(blk, dict):
+                continue
+            for ph in PHASES + REAL_PHASES:
+                c = blk.get(ph)
+                if isinstance(c, dict):
+                    for k in ("asof_backfill", "phase_assign_late"):
+                        if c.get(k) is None:
+                            c[k] = False
+
+
 def _stable(item: dict) -> dict:
     """flat 用：把为 null 的子对象展开成全 null 模板，保证每行列集合一致（AG Grid columnDefs 固定）。"""
     it = json.loads(json.dumps(item))
@@ -2462,6 +2485,7 @@ def _stable(item: dict) -> dict:
         it["result"] = _blank(Result)
     if it.get("settlement") is None:
         it["settlement"] = _blank(Settlement)
+    _fill_posthoc_flags(it)
     return it
 
 
