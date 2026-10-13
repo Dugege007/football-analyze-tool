@@ -66,6 +66,15 @@ import shared_api_yield as _yield_mod  # noqa: E402
 _YIELD = _yield_mod.Gate("map_csl_fixtures")
 
 
+class _NoSuchError(Exception):
+    """占位：旧版 shared_api_yield 没有 SharedYieldWaitExceeded 时永不触发。"""
+
+
+# 共享限速器总等待超限（RuntimeError 子类）；捕获后本轮按额度停止处理，照常写映射与运行报告。
+SharedYieldWaitExceeded = getattr(_yield_mod, "SharedYieldWaitExceeded", _NoSuchError)
+YIELD_WAIT_EXCEEDED_CODE = 0
+
+
 def _gated_urlopen(req, timeout=60):
     _YIELD.before_request()
     try:
@@ -157,6 +166,7 @@ class RateClient:
         self.remaining: int | None = None
         self.reset_at: float | None = None
         self.stopped_quota = False
+        self.yield_wait_exceeded: str | None = None
         self.log_path = LOG_DIR / "csl_map_call_log.tsv"
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         if not self.log_path.exists():
@@ -185,6 +195,16 @@ class RateClient:
             code, body, headers = r.status, r.read(), r.headers
         except urllib.error.HTTPError as e:
             code, body, headers = e.code, e.read(), e.headers
+        except SharedYieldWaitExceeded as e:
+            # 限速器等太久：不发请求，标记停止，让 main 走正常收尾（写映射、写运行报告）
+            self.stopped_quota = True
+            self.yield_wait_exceeded = getattr(e, "reason", None) or "unknown"
+            with self.log_path.open("a", encoding="utf-8") as f:
+                f.write(
+                    f"{datetime.now(TZ).strftime('%H:%M:%S')}\t{name}\t{path}\tyield_wait_exceeded\t"
+                    f"{time.time() - t0:.2f}\t\t\t\n"
+                )
+            return YIELD_WAIT_EXCEEDED_CODE, {"_yield_wait_exceeded": self.yield_wait_exceeded}, {}
         self.last = time.time()
         self.calls += 1
         rem = headers.get("X-RateLimit-Remaining")
@@ -484,6 +504,8 @@ def load_or_fetch_day(
                 "lang": "zh-cn",
             },
         )
+        if client.yield_wait_exceeded:
+            return None, False, "yield_wait_exceeded"
         if code != 200 or not (isinstance(data, dict) and data.get("success")):
             err = RAW_CSL / f"{jingcai_date}.err.json"
             RAW_CSL.mkdir(parents=True, exist_ok=True)
@@ -707,14 +729,16 @@ def main() -> int:
                 report["stopped_reason"] = f"max_new_{args.max_new}"
                 break
             if client.stopped_quota:
-                report["stopped_reason"] = "rate_remaining_le_5"
+                report["stopped_reason"] = ("yield_wait_exceeded" if client.yield_wait_exceeded
+                                            else "rate_remaining_le_5")
                 break
 
             data, fetched, src = load_or_fetch_day(client, jd, force=args.force)
             if data is None:
                 report["days_failed"].append({"date": jd, "src": src})
                 if client.stopped_quota:
-                    report["stopped_reason"] = "rate_remaining_le_5"
+                    report["stopped_reason"] = ("yield_wait_exceeded" if client.yield_wait_exceeded
+                                            else "rate_remaining_le_5")
                     break
                 continue
 
