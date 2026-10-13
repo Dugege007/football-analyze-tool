@@ -333,3 +333,16 @@ def test_flat_columns_stable_v2d3(v2d3_copy):
               "postpone_void_check", "kickoff_jc_conflict", "manual_review", "manual_review_reason",
               "schedule_postpone_target_basis_mid", "schedule_kickoff_for_exception", "prediction_ledger_note"):
         assert k in rows[0]
+
+
+def test_flat_posthoc_flags_never_null_v2d3(v2d3_copy):
+    """2026-10-13：扁平格式里所有阶段格子的 asof_backfill 与 phase_assign_late 都不为空（含澳门第五数据通道与真实阶段空模板）。"""
+    rows = TestClient(app).get("/table/matches", params={"date_from": "2026-01-01", "date_to": "2026-12-31",
+                                                         "scope": "all", "format": "flat", "limit": 500,
+                                                         "strategy": "SHADOW_S2_V2"}).json()["items"]
+    assert rows
+    cols = [k for k in rows[0] if (k.startswith("ah_") or k.startswith("x1x2_"))
+            and (k.endswith("_asof_backfill") or k.endswith("_phase_assign_late"))]
+    assert any("macau_5df_mid_real" in k for k in cols) and any("close_real" in k for k in cols)
+    bad = [(r["match_id"], k) for r in rows for k in cols if r[k] is None]
+    assert not bad, bad[:10]

@@ -2383,6 +2383,23 @@ _OPEN_KEYS = ("open_basis", "open_basis_reason", "earliest_ts_quote_at", "ts_inf
 _KELLY_KEYS = ("kelly", "kelly_base", "kelly_base_n_books", "kelly_multi_avg", "multi_avg_n_books", "n_avg")
 
 
+def _fill_posthoc_flags(it: dict) -> None:
+    """事后补写标记：所有阶段格子（含空模板、澳门第五数据通道）都带 asof_backfill 与 phase_assign_late，空值一律补成 false。
+
+    必须在 _stable 生成全部空模板之后调用。
+    """
+    for mk in ("ah", "x1x2"):
+        for blk in (it.get(mk) or {}).values():
+            if not isinstance(blk, dict):
+                continue
+            for ph in PHASES + REAL_PHASES:
+                c = blk.get(ph)
+                if isinstance(c, dict):
+                    for k in ("asof_backfill", "phase_assign_late"):
+                        if c.get(k) is None:
+                            c[k] = False
+
+
 def _stable(item: dict) -> dict:
     """flat 用：把为 null 的子对象展开成全 null 模板，保证每行列集合一致（AG Grid columnDefs 固定）。"""
     it = json.loads(json.dumps(item))
@@ -2403,12 +2420,6 @@ def _stable(item: dict) -> dict:
                 a = c.get("alt") if isinstance(c.get("alt"), dict) else {}
                 c["alt"] = {ak: a.get(ak) for ak in JC_ALT_KEYS}
     for b in BOOKS:
-        for blk in (it["ah"][b], it["x1x2"][b]):  # 事后补写标记：每个阶段格子都带同一组键
-            for ph in PHASES + REAL_PHASES:
-                c = blk.get(ph)
-                if isinstance(c, dict):
-                    c.setdefault("asof_backfill", False)
-                    c.setdefault("phase_assign_late", False)
         for rp in REAL_PHASES:
             if it["ah"][b].get(rp) is None:
                 it["ah"][b][rp] = _blank(AhCell, _RR_KEYS + _OPEN_KEYS)
@@ -2474,6 +2485,7 @@ def _stable(item: dict) -> dict:
         it["result"] = _blank(Result)
     if it.get("settlement") is None:
         it["settlement"] = _blank(Settlement)
+    _fill_posthoc_flags(it)
     return it
 
 
