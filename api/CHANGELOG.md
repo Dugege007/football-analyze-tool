@@ -1,5 +1,12 @@
 # CHANGELOG · match-analysis-api
 
+## v0.1.11 — 2026-10-13（仓库版本 v0.1.11，经分析师验收后合并到 main；接口版本号保持 0.3.26）
+
+- R-F 真实通道事后补写（`scripts/live/asof_backfill_mid_rule.py`、`scripts/live/rescue_worker.py`）：真实临盘写 `actual/t1`，真实中盘写 `actual/t8`，`source = 5df_hist_asof`、`rescue_rule = R-F`、`asof_backfill = true`、`phase_assign_late = true`；开赛后超过 3 小时另写 `recommend_live_ok = false`。记录时刻晚于目标时刻的变化不入选。口径见 `docs/schema/v2_0-live-miss-rescue-rules.md` 第 2.6 节。
+- `app/table_matches.py`：事后补写行在数据表与影子回测中不计实时命中；特征只收记录时刻不晚于决策时刻的水位。所有阶段格子（含真实阶段空模板与澳门第五数据通道）都带 `asof_backfill` 与 `phase_assign_late`，默认 false；扁平格式列集合固定，这两列不为空。新增测试 `tests/test_rescue_rf_visibility.py`、`tests/test_postpone_0319.py::test_flat_posthoc_flags_never_null_v2d3`。
+- `app/shared_api_yield.py`：`Gate.before_request(max_wait_sec=None)` 增加总等待上限（默认 300 秒，环境变量 `SHARED_API_YIELD_MAX_WAIT_SEC`，让路时段等待不计入），超限抛出 `SharedYieldWaitExceeded(waited_sec, reason, *, caller, max_wait_sec)`（`RuntimeError` 的子类）；新增 `parse_reset_seconds()` 与共享暂停文件（账本同目录的 `*.pause.json`，账本格式不变）；每次睡眠前写 `sleep` 日志；作废预约会被删除，最多预约一个间隔之后的时刻。新增测试 `tests/test_shared_api_yield_wait_cap_1013.py`。
+- 调用方：补救脚本遇到该异常不计次数、条目留在待处理队列并停止本轮；`scripts/backfill/run_jc1x2_history_queue.py` 先导入已完成场次再停止；`scripts/backfill/5df-multibook-history-queue/run_queue.py` 把场次放回队首，状态写成停止并写出本轮报告。
+
 ## v0.1.10 — 2026-10-11（仓库版本 v0.1.10，经分析师验收后合并到 main；接口版本号保持 0.3.26）
 
 依据：用户 2026-10-10 规则（分析师下达）。
