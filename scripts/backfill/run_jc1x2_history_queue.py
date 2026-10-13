@@ -242,6 +242,18 @@ def import_batch(files: list[Path], db: Path, backup_root: Path) -> dict:
             "not_in_replica": [r["fixture_id"] for r in res if r["status"] == "skipped_unmapped"]}
 
 
+def _is_wait_exceeded(e: BaseException) -> bool:
+    """共享限速器总等待超限（shared_api_yield.SharedYieldWaitExceeded）。"""
+    try:
+        import shared_api_yield as Y
+        cls = getattr(Y, "SharedYieldWaitExceeded", None)
+        if cls is not None and isinstance(e, cls):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return type(e).__name__ == "SharedYieldWaitExceeded"
+
+
 # ----------------------------------------------------------------------------- main loop
 def run(p: dict, *, fetch: Optional[Callable[[str], tuple[int, bytes, dict]]] = None,
         gate=None, sleep: Callable[[float], None] = time.sleep, now: Callable[[], datetime] = now_cn,
@@ -326,6 +338,13 @@ def run(p: dict, *, fetch: Optional[Callable[[str], tuple[int, bytes, dict]]] = 
             code, body, headers = fetch(fid)
         except (urllib.error.URLError, OSError) as e:
             code, body, headers = 599, str(e).encode(), {}
+        except Exception as e:  # noqa: BLE001
+            if not _is_wait_exceeded(e):
+                raise
+            # 共享限速器等太久：本场不记次数、留给下一轮；stop() 会先 flush，把已完成的场次导入
+            log(p, "yield_wait_exceeded", fixture_id=fid, reason=getattr(e, "reason", None),
+                waited_sec=getattr(e, "waited_sec", None))
+            return stop("yield_wait_exceeded")
         kind = classify(code, body)
         rem = headers.get("X-RateLimit-Remaining") if headers else None
         if rem is not None:

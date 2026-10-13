@@ -353,3 +353,35 @@ def test_worker_executes_real_item_and_marks_late_flags(tmp_path, monkeypatch):
     assert late["recommend_live_ok"] is False
     assert late["sim_ok"] is True and late["features_ok"] is True
     assert "defer" not in json.dumps(got, ensure_ascii=False)
+
+
+def test_worker_wait_exceeded_keeps_item_without_attempt(tmp_path, monkeypatch):
+    """共享限速器总等待超限：不计 attempts，条目原样留在 pending，下一轮再试。"""
+    _isolate(monkeypatch, tmp_path)
+
+    def _boom(*a, **kw):
+        raise ab._yield_mod.SharedYieldWaitExceeded(0.0, "quota_pause", caller="asof_backfill_mid_rule",
+                                                    max_wait_sec=300)
+
+    monkeypatch.setattr(rw, "run_asof", _boom)
+    path = tmp_path / "2026-10-12__一002__t1__real__abcd.json"
+    item = _real_item(attempts=2)
+    raw = json.dumps(item, ensure_ascii=False)
+    path.write_text(raw, encoding="utf-8")
+    got = rw.process_one(path, json.loads(raw), db=tmp_path / "v2d3" / "app.db", dry_run=False,
+                         now=datetime(2026, 10, 13, 4, 0, tzinfo=TZ))
+    assert got["action"] == "yield_wait_exceeded" and got["reason"] == "quota_pause"
+    assert path.exists() and path.read_text(encoding="utf-8") == raw
+    assert json.loads(path.read_text(encoding="utf-8"))["attempts"] == 2
+    assert not list(rq.FAILED.glob("*.json"))
+
+
+def test_hist_client_get_propagates_wait_exceeded(monkeypatch):
+    """HistClient.get 在 try 外调用 before_request()，超限异常应原样抛给 worker。"""
+    def _raise():
+        raise ab._yield_mod.SharedYieldWaitExceeded(1.0, "rate_limit")
+
+    monkeypatch.setattr(ab._YIELD, "before_request", _raise)
+    cl = ab.HistClient.__new__(ab.HistClient)
+    with pytest.raises(ab._yield_mod.SharedYieldWaitExceeded):
+        cl.get("x", "/x")

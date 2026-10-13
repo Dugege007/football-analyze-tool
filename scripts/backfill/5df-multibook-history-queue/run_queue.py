@@ -488,7 +488,17 @@ def main() -> int:
 
         last_fixture_started = time.time()
         row = work.pop(0)
-        rep = pull_fixture(client, row, dry_run=args.dry_run)
+        try:
+            rep = pull_fixture(client, row, dry_run=args.dry_run)
+        except _yield_mod.SharedYieldWaitExceeded as e:
+            # 共享限速器等太久：本场放回队首、不计错误；停本轮，下面照常写状态（非运行）和本轮报告
+            work.insert(0, row)
+            if not args.dry_run:
+                write_jsonl(QUEUE / "pending.jsonl", work)
+            run["stop"] = "yield_wait_exceeded"
+            run["paused_events"].append({"at": now_iso(), "reason": "yield_wait_exceeded",
+                                         "wait_reason": e.reason, "waited_sec": round(e.waited_sec, 1)})
+            break
         append_jsonl(fill_log, rep)
         processed += 1
         run["api_calls"] = client.calls
