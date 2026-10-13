@@ -37,3 +37,35 @@ def test_wait_exceeded_writes_state_and_report(tmp_path, monkeypatch):
     assert rep["paused_events"][0]["wait_reason"] == "rate_limit"
     left = [json.loads(x) for x in (q / "pending.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [x["fixture_id"] for x in left] == [1, 2]
+
+
+def _load_fresh(monkeypatch, env_val):
+    import importlib
+    if env_val is None:
+        monkeypatch.delenv("MULTIBOOK_QUEUE_DIR", raising=False)
+    else:
+        monkeypatch.setenv("MULTIBOOK_QUEUE_DIR", str(env_val))
+    sys.modules.pop("run_queue", None)
+    mod = importlib.import_module("run_queue")
+    return mod
+
+
+def test_queue_dir_default_is_script_folder(monkeypatch):
+    mod = _load_fresh(monkeypatch, None)
+    try:
+        assert mod.DATA_ROOT == HERE
+        assert mod.QUEUE == HERE / "queue" and mod.DUAL_WRITE_MARKER == HERE / "DUAL_WRITE.off"
+    finally:
+        sys.modules.pop("run_queue", None)
+
+
+def test_queue_dir_env_override(monkeypatch, tmp_path):
+    mod = _load_fresh(monkeypatch, tmp_path)
+    try:
+        assert mod.DATA_ROOT == tmp_path
+        for name, sub in (("QUEUE", "queue"), ("LOG_DIR", "logs"), ("REPORTS", "reports")):
+            assert getattr(mod, name) == tmp_path / sub
+        assert mod.RAW_ODDS == tmp_path / "raw" / "odds" and mod.RAW_HIST == tmp_path / "raw" / "hist"
+        assert mod.DUAL_WRITE_MARKER == tmp_path / "DUAL_WRITE.off"
+    finally:
+        sys.modules.pop("run_queue", None)

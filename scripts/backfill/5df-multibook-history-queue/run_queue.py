@@ -76,11 +76,14 @@ def _gated_urlopen(req, timeout=60):
     return r
 
 
-QUEUE = ROOT / "queue"
-RAW_ODDS = ROOT / "raw" / "odds"
-RAW_HIST = ROOT / "raw" / "hist"
-LOG_DIR = ROOT / "logs"
-REPORTS = ROOT / "reports"
+# 队列数据目录（queue / raw / logs / reports / DUAL_WRITE.off）：缺省为脚本所在目录；
+# 设环境变量 MULTIBOOK_QUEUE_DIR 可指向运行中的 odds-data 队列目录（2026-10-13）。
+DATA_ROOT = Path(os.environ.get("MULTIBOOK_QUEUE_DIR", "").strip() or str(ROOT)).expanduser()
+QUEUE = DATA_ROOT / "queue"
+RAW_ODDS = DATA_ROOT / "raw" / "odds"
+RAW_HIST = DATA_ROOT / "raw" / "hist"
+LOG_DIR = DATA_ROOT / "logs"
+REPORTS = DATA_ROOT / "reports"
 BASE = "https://api.5dollarfootballapi.com/v1"
 BOOKS = ["macauslot", "pinnacle"]
 MARKET = "asian"
@@ -90,7 +93,7 @@ RESERVE = 5  # 本地二次闸；主闸是 shared Remaining≤24 + hist_yield re
 MAX_ERRORS = 5
 DEFAULT_MAX_PER_MIN = 1
 TZ = timezone(timedelta(hours=8))
-DUAL_WRITE_MARKER = ROOT / "DUAL_WRITE.off"
+DUAL_WRITE_MARKER = DATA_ROOT / "DUAL_WRITE.off"
 LEGACY_HIST = Path(
     str(_ODDS_DATA_DIR / "5dollar/macau-mid-backfill-2026-10-07/raw/hist")
 )
