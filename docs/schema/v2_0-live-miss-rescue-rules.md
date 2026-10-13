@@ -123,10 +123,12 @@
 | 项 | 内容 |
 |---|---|
 | **触发** | `mid\|real` / `close\|real` missed（例外场 actual/t8、t1） |
-| **取值** | 与 R-A 相同算法，T = 真实目标（开赛−8h / −1h） |
-| **写入** | `channel=actual`，`point=t8\|t1`；`source=5df_hist_asof`；`rescue_rule=R-F` |
+| **取值** | 与 R-A 相同：hist 赛前 tick 中 `recorded_at ≤ T` 的最近一次。T = 真实目标（开赛−8h / −1h）。禁止 `recorded_at > T` |
+| **写入** | `channel=actual`，`point=t8\|t1`；`source=5df_hist_asof`；`rescue_rule=R-F`。不写 rule 通道 |
+| **extras** | `asof_backfill=true`，`phase_assign_late=true`（事后补数，不是窗内即时采集；live 命中不计）。开赛后 >3h 另写 `recommend_live_ok=false`；as-of 准确时 `sim_ok=true`、`features_ok=true` |
+| **决策时刻** | 补写行本身不是决策时刻的即时可见盘。特征只收 `recorded_at ≤` 决策时刻、截断后仍然合法的水位 |
 | **features** | 可进「真实通道」特征；**分析默认仍用规则通道** |
-| **禁止** | 写入 rule 通道；与规则格混键 |
+| **禁止** | 写入 rule 通道；与规则格混键；覆盖 `5df_live` / 手工；DUAL_WRITE |
 
 ---
 
@@ -139,7 +141,7 @@
 | approx 阈值 | **中盘 120min / 临盘 60min**；仍写入，`approx=true` + `approx_threshold_min`；`far_open` 可标 | 已拍板 |
 | 过远首开 | **默认采纳**；标 `approx`/`far_open`；方案侧可降权或按算法决定是否采纳 | 已拍板 |
 | 开赛后 >3h 补 | **R-D 晚补**：仍写规则主值；`recommend_live_ok=false`；`sim_ok/features_ok=true`（准确时） | 已拍板（语义纠正） |
-| 真实通道 | 同逻辑独立 R-F；默认分析不用 | 否 |
+| 真实通道 | **R-F 已接线**（同 Strict as-of，写 actual 格）；默认分析仍用规则通道 | 否 |
 | 11:10 / 让路窗 | **禁止消费 rescue 队列** | 否 |
 | 积压排序 | ① 开赛更近优先 ② 同场 mid 先于 close ③ 规则先于真实 | 否 |
 | 自动消费 worker | **已有** `scripts/rescue_worker.py`（空闲窗消费；不堵 live due） | 否 |
@@ -233,7 +235,7 @@ heartbeat 可选计数：`rescue_pending`、`rescue_done_today`。
 | 自动 worker 消费 → asof | **已做** `scripts/rescue_worker.py`（让路窗/due 避让/日上限） |
 | R-A 执行器 | **已有** `asof_backfill_mid_rule.py` |
 | R-D 晚补 | **worker 已接线**（仍 asof 写规则格；`recommend_live_ok=false`；shadow/ 留索引） |
-| R-E / R-F 执行器 | R-E：worker 遇 `no_replica_match` 标 waiting_match；R-F：**暂 defer**（真实通道留 pending） |
+| R-E / R-F 执行器 | R-E：worker 遇 `no_replica_match` 标 waiting_match；R-F：**已接线**（Strict as-of 写 `actual/t8\|t1`，`rescue_rule=R-F`） |
 | 改现网 / DUAL_WRITE | **不做** |
 
 ### 4.4 已实现 / 仍待
@@ -241,16 +243,15 @@ heartbeat 可选计数：`rescue_pending`、`rescue_done_today`。
 **已实现（2026-10-09）**
 
 1. `rescue_gap_scan.py`：回溯 N 天（默认 7）扫应采未采 → 幂等入队。  
-2. `rescue_worker.py`：空闲窗消费 pending → R-A / R-D 晚补 asof；遵守让路窗、11:00–11:20、due 前 15min、日上限。  
+2. `rescue_worker.py`：空闲窗消费 pending → R-A / R-D 晚补 / R-F 真实通道 asof；遵守让路窗、11:00–11:20、due 前 15min、日上限。  
 3. `rescue_queue.py`：入队 + 消费辅助（排序、禁区、move）。  
 4. 恢复流程：`ensure-daemon` 后先 `gap-scan` 再 `rescue-consume`（见 live README；**不**在 tick 热路径跑）。
 
 **仍待**
 
-1. R-F 真实通道 asof 执行器（worker 现 defer）。  
-2. R-E：ingest 建场后自动唤醒 `waiting_match`。  
-3. `asof_backfill` 一键 `--missed-close-rule` / 读队列文件（worker 已按 target_key 调）。  
-4. 单测补强：入队幂等、让路窗、开赛后 3h → recommend_live_off。
+1. R-E：ingest 建场后自动唤醒 `waiting_match`。  
+2. `asof_backfill` 一键 `--missed-close-rule` / 读队列文件（worker 已按 target_key 调）。  
+3. 单测补强：入队幂等、让路窗、开赛后 3h → recommend_live_off。
 
 ---
 
@@ -263,6 +264,7 @@ heartbeat 可选计数：`rescue_pending`、`rescue_done_today`。
 | `capture --allow-late` | 现在 | **否**（staging） | — | — |
 | **R-A asof** | hist≤T | 是（`5df_hist_asof`） | **true** + late | **true**（开赛后≤3h） |
 | **R-D 晚补** | hist≤T | **是**（同 asof） | **true**（准确时）+ late | **false** |
+| **R-F 真实通道** | hist≤T | **否**（写 `actual/t8\|t1`） | **true**（准确且 `recorded_at≤` 决策时刻）+ late | 开赛后≤3h **true**；>3h **false** |
 
 ---
 
@@ -273,6 +275,7 @@ heartbeat 可选计数：`rescue_pending`、`rescue_done_today`。
 | 2026-10-09 | 首版：场景矩阵、R-A…R-F、默认策略、队列格式；`mark_missed` 入队最小接线；自动消费列为下一步 |
 | 2026-10-09 | §7 多日/全日缺口（S17–S19）；`rescue_gap_scan.py` + `rescue_worker.py`；默认回溯 7 天；恢复后先扫再消费 |
 | 2026-10-09 | 再拍：approx 中盘120/临盘60；R-D 改为晚补分层（关即时推荐、仍进模拟）；过远首开默认可标采纳 |
+| 2026-10-13 | R-F 接线：真实 close/mid 用同一 Strict as-of 写入 `actual/t1\|t8`（`rescue_rule=R-F`，`asof_backfill` + `phase_assign_late`）；开赛后 >3h 关即时推荐；worker 不再 `defer_real_R-F` |
 
 ---
 
@@ -342,4 +345,4 @@ python scripts/live_capture.py rescue-consume --dry-run
 |---|---|
 | 窗口内未抓到 | `mark_missed` → R-C（热路径只入队） |
 | 停机数小时～数天 / 全日漏 | `gap_scan` → 同一 pending 队列（幂等，不重复） |
-| 消费 | 同一 `rescue_worker`（R-A / R-D 晚补） |
+| 消费 | 同一 `rescue_worker`（R-A / R-D 晚补 / R-F 真实通道） |

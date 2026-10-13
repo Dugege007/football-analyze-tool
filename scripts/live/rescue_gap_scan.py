@@ -322,7 +322,7 @@ def main(argv=None) -> int:
     ap.add_argument("--days", type=int, default=None, help=f"回溯天数（默认 {DEFAULT_DAYS}）")
     ap.add_argument("--from", dest="d_from", help="起始竞彩日 YYYY-MM-DD")
     ap.add_argument("--to", dest="d_to", help="结束竞彩日 YYYY-MM-DD")
-    ap.add_argument("--include-real", action="store_true", help="同时扫真实 mid/close（R-F 占位入队）")
+    ap.add_argument("--include-real", action="store_true", help="同时扫真实 mid/close（入队后由 worker 走 R-F）")
     ap.add_argument("--dry-run", action="store_true", help="只出报告，不入队")
     ap.add_argument("--db", default=str(REPLICA_DB))
     a = ap.parse_args(argv)

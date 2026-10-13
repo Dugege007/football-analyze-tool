@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""规则中盘/临盘漏采后的 hist as-of 补写（只写 v2d3 研究副本）。
+"""规则中盘/临盘与真实通道漏采后的 hist as-of 补写（只写 v2d3 研究副本）。
 
-口径（用户 2026-10-09 拍板）：
+口径（用户 2026-10-09 拍板；2026-10-13 真实通道 R-F 同算法）：
   过点后从 5DF /odds/history 取「目标钟点 T 之前最近一次赛前盘口/水位变化」
-  （recorded_at ≤ T、minute IS NULL、非 suspended），写入 channel=rule point=mid|close。
-  禁止用 T 之后的即时盘冒充规则中盘/临盘。
+  （recorded_at ≤ T、minute IS NULL、非 suspended）。
+  规则目标写入 channel=rule point=mid|close（R-A / 开赛后 >3h 的 R-D）。
+  真实目标写入 channel=actual point=t8|t1（R-F），不写规则格。
+  禁止用 T 之后的即时盘冒充中盘/临盘。补写行 asof_backfill 与 phase_assign_late 均为 true。
 
 extras 必写：
   source=5df_hist_asof, asof_backfill=true, planned_target_at=T,
@@ -285,7 +287,7 @@ def fetch_hist(cl: HistClient, fid: int, slug: str, use_cache: bool = True) -> t
 
 
 def prematch_asof(ticks: list[dict], target: datetime, kickoff: datetime) -> dict | None:
-    """取 recorded_at ≤ T 的最近一次赛前有效变化。"""
+    """取 recorded_at ≤ T 的最近一次赛前有效变化。recorded_at > T 的 tick 不得入选。"""
     best = None
     for t in ticks:
         if t.get("minute") is not None:
@@ -334,6 +336,27 @@ def orientation(conn, m: sqlite3.Row, home5: str, away5: str) -> str:
     return "unverified"
 
 
+def _asof_target_ok(t: dict) -> bool:
+    """规则 mid/close，或真实通道 actual/t8|t1。"""
+    ch = t.get("channel")
+    pt = t.get("point")
+    var = t.get("phase_variant")
+    if ch == "rule" and pt in ("mid", "close"):
+        return True
+    if (var == "real" or ch == "actual") and pt in ("t8", "t1"):
+        return True
+    return False
+
+
+def infer_rescue_rule(t: dict, recommend_ok: bool) -> str:
+    """真实通道恒为 R-F；规则通道开赛后 >3h 为 R-D，否则 R-A。"""
+    ch = t.get("channel") or ""
+    var = t.get("phase_variant") or ""
+    if var == "real" or ch == "actual":
+        return "R-F"
+    return "R-A" if recommend_ok else "R-D"
+
+
 def resolve_targets(D: str, keys: list[str] | None, missed_mid_rule: bool) -> list[dict]:
     plan = load_plan(D)
     if not plan:
@@ -341,7 +364,7 @@ def resolve_targets(D: str, keys: list[str] | None, missed_mid_rule: bool) -> li
     st = jload(state_path(D), {}) or {}
     out = []
     for t in plan["targets"]:
-        if t.get("channel") != "rule" or t.get("point") not in ("mid", "close"):
+        if not _asof_target_ok(t):
             continue
         if keys and t["target_key"] not in keys:
             continue
@@ -400,7 +423,8 @@ def recommend_live_ok_default(kickoff_at: datetime | None, *, now: datetime | No
 
 
 def run(D: str, keys: list[str] | None, missed_mid_rule: bool, db: Path, dry_run: bool,
-        refresh_hist: bool, recommend_live_ok: bool | None = None) -> dict:
+        refresh_hist: bool, recommend_live_ok: bool | None = None, *,
+        rescue_rule: str | None = None) -> dict:
     db = assert_safe_db(db)
     targets = resolve_targets(D, keys, missed_mid_rule)
     if not targets:
@@ -434,6 +458,7 @@ def run(D: str, keys: list[str] | None, missed_mid_rule: bool, db: Path, dry_run
                 reco_ok = recommend_live_ok_default(kick)
             else:
                 reco_ok = bool(recommend_live_ok)
+            rule_name = rescue_rule or infer_rescue_rule(t, reco_ok)
             trep = {
                 "target_key": t["target_key"],
                 "match_uid": t["match_uid"],
@@ -444,8 +469,15 @@ def run(D: str, keys: list[str] | None, missed_mid_rule: bool, db: Path, dry_run
                 "channel": t["channel"],
                 "approx_threshold_min": thr_min,
                 "recommend_live_ok": reco_ok,
+                "rescue_rule": rule_name,
                 "books": {},
             }
+            # R-F 只写真实格，禁止落到规则通道
+            if rule_name == "R-F" and not (t.get("channel") == "actual" and t.get("point") in ("t8", "t1")):
+                trep["error"] = "real_channel_key_mismatch"
+                trep["target_status"] = "partial_or_error"
+                report["targets"].append(trep)
+                continue
             mid_row = conn.execute(
                 "SELECT * FROM matches WHERE match_uid=?", (t["match_uid"],)
             ).fetchone()
@@ -508,6 +540,7 @@ def run(D: str, keys: list[str] | None, missed_mid_rule: bool, db: Path, dry_run
                     "features_ok": True,
                     "sim_ok": True,
                     "recommend_live_ok": reco_ok,
+                    "rescue_rule": rule_name,
                     "phase_pending": False,
                     "phase": t["phase"],
                     "phase_variant": t["phase_variant"],
@@ -534,7 +567,12 @@ def run(D: str, keys: list[str] | None, missed_mid_rule: bool, db: Path, dry_run
                     "kickoff_at_5df": t["kickoff_at"],
                     "kickoff_source": "5df",
                     "catchup": False,
-                    "note": "漏采后 hist as-of≤T 补写；禁止 T 后即时盘；过远首开默认采纳可降权",
+                    "note": (
+                        "真实通道漏采后 hist as-of≤T 补写；事后补数，不是窗内即时采集；"
+                        "禁止 T 后 tick；不写规则格"
+                        if rule_name == "R-F"
+                        else "漏采后 hist as-of≤T 补写；禁止 T 后即时盘；过远首开默认采纳可降权"
+                    ),
                 }
                 # sha of tick for trace
                 tick_bytes = json.dumps(tick, ensure_ascii=False, sort_keys=True).encode()

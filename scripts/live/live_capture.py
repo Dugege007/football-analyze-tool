@@ -22,7 +22,7 @@ jingcai_date_from_code），与 /dispatch/pending 同一套函数；/dispatch/pe
   ensure-daemon              没在跑就后台拉起 daemon（幂等；看门狗用）
   capture --target-key K | --nearest [--allow-early-min N] [--allow-late]   手动抓一个目标（演练用）
   asof-backfill --date D (--target-key K … | --missed-mid-rule) [--dry-run]
-      漏采后 hist as-of≤T 补写 mid|rule/close|rule（委托 scripts/asof_backfill_mid_rule.py）
+      漏采后 hist as-of≤T 补写规则 mid/close 与真实 actual/t8|t1（委托 scripts/asof_backfill_mid_rule.py）
   gap-scan [--days 7] [--from D] [--to D] [--dry-run]   多日应采未采 → rescue_queue
   rescue-consume [--max 8] [--daily-cap 40] [--dry-run] 空闲窗消费队列（asof/shadow）
   ingest [--date D] [--dry-run] [--db PATH]
@@ -1327,7 +1327,8 @@ def summary(D: str) -> dict:
     by_target: dict[str, dict] = {}
     for t in plan["targets"]:
         k = f"{t['phase']}|{t['phase_variant']}"
-        b = by_target.setdefault(k, {"targets": 0, "captured": 0, "missed": 0, "pending": 0, "no_odds": 0, "error": 0})
+        b = by_target.setdefault(k, {"targets": 0, "captured": 0, "missed": 0, "pending": 0, "no_odds": 0,
+                                     "asof_backfilled": 0, "error": 0})
         b["targets"] += 1
         s = (st.get(t["target_key"]) or {}).get("status")
         if s in ("captured", "captured_late"):
@@ -1338,6 +1339,9 @@ def summary(D: str) -> dict:
             b["pending"] += 1
         elif s == "no_odds":
             b["no_odds"] += 1
+        elif s in ("asof_backfilled", "rescued"):
+            # 事后补写不是窗内即时命中
+            b["asof_backfilled"] += 1
         else:
             b["error"] += 1
     books: dict[str, dict] = {}
@@ -1569,7 +1573,7 @@ def main(argv=None) -> int:
     c.add_argument("--allow-late", action="store_true")
     c.add_argument("--no-ingest", action="store_true")
     ab = sub.add_parser("asof-backfill",
-                        help="漏采后 hist as-of≤T 补写 mid|rule/close|rule（禁止 T 后即时盘）")
+                        help="漏采后 hist as-of≤T 补写规则 mid/close 或真实 actual/t8|t1（禁止 T 后即时盘）")
     ab.add_argument("--date", required=True)
     ab.add_argument("--target-key", action="append", default=[])
     ab.add_argument("--missed-mid-rule", action="store_true")

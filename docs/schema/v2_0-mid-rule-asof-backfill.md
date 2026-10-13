@@ -34,7 +34,7 @@
 
 ## 工具
 
-- 独立脚本：`scripts/live/asof_backfill_mid_rule.py`
+- 独立脚本：`scripts/live/asof_backfill_mid_rule.py`（R-A / R-D 写规则格；R-F 用同一选取算法写 `actual/t8|t1`，见 `v2_0-live-miss-rescue-rules.md` §2.6）
 - 入口：`live_capture.py asof-backfill --date D (--target-key K … \| --missed-mid-rule)`
 - raw 缓存：`5dollar/live/asof_backfill/raw/`
 - 运行报告：`5dollar/live/asof_backfill/logs/asof_backfill_*.json`
