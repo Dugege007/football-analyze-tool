@@ -71,7 +71,41 @@ YIELD_WINDOWS: tuple[tuple[tuple[int, int], tuple[int, int]], ...] = (
     ((21, 55), (22, 15)),
 )
 LEDGER = Path(os.environ.get("SHARED_API_YIELD_LEDGER", str(_ODDS_DATA_DIR / "5dollar/backfill_yield_ledger.json")))
+# 单次 before_request() 的总等待上限（秒）：额度暂停 + 速率等待之和；让路时段的等待不计入（时段固定、可预期）。
+DEFAULT_MAX_WAIT_SEC = float(os.environ.get("SHARED_API_YIELD_MAX_WAIT_SEC", "300"))
+# 额度暂停的合理上限（秒），防止 Reset 头异常时睡几个小时
+MAX_QUOTA_PAUSE_SEC = 3600.0
 LOG = Path(os.environ.get("SHARED_API_YIELD_LOG", str(_ODDS_DATA_DIR / "5dollar/backfill_yield.jsonl")))
+
+
+class SharedYieldWaitExceeded(RuntimeError):
+    """before_request() 的总等待会超过上限：调用方应跳过本轮，而不是一直挂着。"""
+
+    def __init__(self, waited_sec: float, reason: str, *, caller: str = "", max_wait_sec: float = 0.0):
+        self.waited_sec = float(waited_sec)
+        self.reason = reason
+        self.caller = caller
+        self.max_wait_sec = float(max_wait_sec)
+        super().__init__(f"shared api yield wait exceeded: caller={caller} reason={reason} "
+                         f"waited={self.waited_sec:.1f}s max={self.max_wait_sec:.1f}s")
+
+
+def pause_path(ledger: Path) -> Path:
+    """全进程共享的额度暂停文件（与时间戳账本分开存放，旧版本进程读账本不受影响）。"""
+    return ledger.with_name(ledger.stem + ".pause.json")
+
+
+def parse_reset_seconds(reset: Any, now_epoch: float) -> Optional[float]:
+    """把 X-RateLimit-Reset 换成「距现在还有多少秒」：识别时间戳毫秒、时间戳秒和剩余秒数三种格式。"""
+    try:
+        r = float(reset)
+    except (TypeError, ValueError):
+        return None
+    if r > 1e12:  # 时间戳毫秒
+        return r / 1000.0 - now_epoch
+    if r > 1e9:  # 时间戳秒
+        return r - now_epoch
+    return r  # 剩余秒数
 
 
 def _cn(now: Optional[datetime] = None) -> datetime:
@@ -109,20 +143,27 @@ def _log(event: str, **kw: Any) -> None:
 
 
 class Gate:
-    """补数请求闸门：让路时段 + 合计 ≤16/分钟 + 剩余额度保底。"""
+    """补数请求闸门：让路时段 + 合计 ≤16/分钟 + 剩余额度保底（暂停时刻全进程共享）+ 总等待上限。"""
 
     def __init__(self, caller: str, *, sleep: Callable[[float], None] = time.sleep,
                  clock: Callable[[], float] = time.time,
                  now: Callable[[], datetime] = lambda: datetime.now(TZ_CN),
-                 ledger: Optional[Path] = None):
+                 ledger: Optional[Path] = None, max_wait_sec: Optional[float] = None):
         self.caller = caller
         self._sleep, self._clock, self._now = sleep, clock, now
         self.ledger = ledger if ledger is not None else LEDGER
+        self.max_wait_sec = DEFAULT_MAX_WAIT_SEC if max_wait_sec is None else float(max_wait_sec)
         self.pause_until = 0.0
+        self._last_stamp: Optional[float] = None
         self.stats = {"requests": 0, "yield_sleeps": 0, "yield_seconds": 0.0,
-                      "rate_sleeps": 0, "quota_pauses": 0}
+                      "rate_sleeps": 0, "quota_pauses": 0, "wait_exceeded": 0}
 
-    # ---- 让路时段
+    def _nap(self, reason: str, seconds: float) -> None:
+        """每次睡眠前写一行日志（原因 + 时长）。"""
+        _log("sleep", caller=self.caller, reason=reason, sleep_s=round(seconds, 3))
+        self._sleep(seconds)
+
+    # ---- 让路时段（逻辑不变）
     def wait_for_clear(self) -> float:
         slept = 0.0
         while True:
@@ -133,54 +174,154 @@ class Gate:
             _log("yield_window", caller=self.caller, until=w[1].isoformat() if w else None, sleep_s=round(s, 1))
             self.stats["yield_sleeps"] += 1
             self.stats["yield_seconds"] += s
-            self._sleep(s + 1.0)
+            self._nap("yield_window", s + 1.0)
             slept += s + 1.0
 
-    # ---- 跨进程速率账本
-    def _reserve_slot(self) -> float:
-        """在账本里占一个发送时刻，返回需要等待的秒数（0 = 现在就发）。"""
-        t = self._clock()
+    # ---- 全进程共享的额度暂停
+    def _pause_file(self) -> Path:
+        return pause_path(self.ledger)
+
+    def shared_pause_until(self) -> float:
         try:
-            self.ledger.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.ledger, "a+", encoding="utf-8") as f:
+            d = json.loads(self._pause_file().read_text(encoding="utf-8") or "{}")
+            return float(d.get("pause_until") or 0.0)
+        except (OSError, ValueError, TypeError, AttributeError):
+            return 0.0
+
+    def _write_shared_pause(self, until: float) -> None:
+        p = self._pause_file()
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "a+", encoding="utf-8") as f:
                 fcntl.flock(f, fcntl.LOCK_EX)
                 f.seek(0)
                 try:
-                    stamps = [float(x) for x in json.loads(f.read() or "[]")]
-                except (ValueError, TypeError):
-                    stamps = []
-                stamps = sorted(x for x in stamps if x > t - 60.0)
-                send = t
-                if stamps:
-                    send = max(send, stamps[-1] + MIN_INTERVAL_SEC)
-                if len(stamps) >= BACKFILL_MAX_PER_MIN:
-                    send = max(send, stamps[-BACKFILL_MAX_PER_MIN] + 60.0)
-                stamps.append(send)
+                    cur = float((json.loads(f.read() or "{}") or {}).get("pause_until") or 0.0)
+                except (ValueError, TypeError, AttributeError):
+                    cur = 0.0
+                if until <= cur:
+                    return
                 f.seek(0)
                 f.truncate()
-                f.write(json.dumps(stamps[-BACKFILL_MAX_PER_MIN * 2:]))
+                f.write(json.dumps({"pause_until": until, "set_by": self.caller, "set_at": self._clock()}))
         except OSError:
-            send = t + MIN_INTERVAL_SEC
-        return max(0.0, send - t)
+            pass
 
-    def before_request(self) -> None:
-        """每次调共享接口前调用：额度暂停 → 让路时段 → 速率。"""
+    # ---- 跨进程速率账本
+    def _ledger_update(self, fn: Callable[[list[float]], list[float]]) -> None:
+        self.ledger.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.ledger, "a+", encoding="utf-8") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.seek(0)
+            try:
+                stamps = [float(x) for x in json.loads(f.read() or "[]")]
+            except (ValueError, TypeError):
+                stamps = []
+            stamps = fn(stamps)
+            f.seek(0)
+            f.truncate()
+            f.write(json.dumps(stamps[-BACKFILL_MAX_PER_MIN * 2:]))
+
+    def _drop_stamp(self, stamp: Optional[float]) -> None:
+        """重新预约前删掉本进程作废的那个时间戳。"""
+        if stamp is None:
+            return
+        def fn(stamps: list[float]) -> list[float]:
+            out, removed = [], False
+            for x in stamps:
+                if not removed and abs(x - stamp) < 1e-6:
+                    removed = True
+                    continue
+                out.append(x)
+            return out
+        try:
+            self._ledger_update(fn)
+        except OSError:
+            pass
+        if self._last_stamp == stamp:
+            self._last_stamp = None
+
+    def _reserve_slot(self) -> float:
+        """在账本里占一个发送时刻，返回需要等待的秒数（0 = 现在就发）。
+
+        最多只预约到「现在 + 一个间隔」；更远的时刻不占位，只返回等待秒数，等完再来预约。
+        """
+        t = self._clock()
+        res: dict[str, Any] = {}
+
+        def fn(stamps: list[float]) -> list[float]:
+            stamps = sorted(x for x in stamps if x > t - 60.0)
+            send = t
+            if stamps:
+                send = max(send, stamps[-1] + MIN_INTERVAL_SEC)
+            if len(stamps) >= BACKFILL_MAX_PER_MIN:
+                send = max(send, stamps[-BACKFILL_MAX_PER_MIN] + 60.0)
+            res["send"] = send
+            if send - t <= MIN_INTERVAL_SEC + 1e-9:
+                stamps.append(send)
+                res["reserved"] = True
+            return stamps
+
+        try:
+            self._ledger_update(fn)
+        except OSError:
+            return MIN_INTERVAL_SEC
+        send = res.get("send", t)
+        if res.get("reserved"):
+            self._last_stamp = send
+            return max(0.0, send - t)
+        # 未占位：先等到「只差一个间隔」再来
+        return -max(0.0, send - t - MIN_INTERVAL_SEC)
+
+    def before_request(self, max_wait_sec: Optional[float] = None) -> None:
+        """每次调共享接口前调用：额度暂停 → 让路时段 → 速率。
+
+        额度暂停与速率等待合计超过 max_wait_sec（缺省 self.max_wait_sec）时抛 SharedYieldWaitExceeded；
+        让路时段的等待不计入上限。
+        """
+        cap = self.max_wait_sec if max_wait_sec is None else float(max_wait_sec)
+        waited = 0.0
+
+        def guard(reason: str, s: float) -> None:
+            if waited + s > cap:
+                self.stats["wait_exceeded"] += 1
+                _log("wait_exceeded", caller=self.caller, reason=reason, waited_s=round(waited, 1),
+                     need_s=round(s, 1), max_wait_s=cap)
+                raise SharedYieldWaitExceeded(waited, reason, caller=self.caller, max_wait_sec=cap)
+
         while True:
-            wait_q = self.pause_until - self._clock()
+            wait_q = max(self.pause_until, self.shared_pause_until()) - self._clock()
             if wait_q > 0:
-                self._sleep(wait_q)
+                guard("quota_pause", wait_q)
+                self._nap("quota_pause", wait_q)
+                waited += wait_q
             self.wait_for_clear()
             wait = self._reserve_slot()
-            if wait > 0:
+            if wait < 0:  # 预约太远：不占位，等一会再来
+                guard("rate_limit", -wait)
                 self.stats["rate_sleeps"] += 1
-                self._sleep(wait)
-            if must_yield(self._now()):  # 等速率时跨进了时段 → 再让一次
+                self._nap("rate_limit", -wait)
+                waited += -wait
                 continue
+            if wait > 0:
+                try:
+                    guard("rate_limit", wait)
+                except SharedYieldWaitExceeded:
+                    self._drop_stamp(self._last_stamp)
+                    raise
+                self.stats["rate_sleeps"] += 1
+                self._nap("rate_limit", wait)
+                waited += wait
+            if must_yield(self._now()) or self.shared_pause_until() > self._clock():
+                # 等速率时跨进了让路时段或被别的进程设了额度暂停 → 删掉作废的预约再来
+                self._drop_stamp(self._last_stamp)
+                continue
+            self._last_stamp = None
             self.stats["requests"] += 1
             return
 
     def after_response(self, headers: Optional[Mapping[str, Any]]) -> None:
-        """看 X-RateLimit-Remaining：≤24（分析师那份）→ 停到 Reset（缺省 61 秒）。"""
+        """看 X-RateLimit-Remaining：≤24（分析师那份）→ 按 Reset 一次算出暂停截止时刻，写进共享暂停文件。"""
         if not headers:
             return
         get = headers.get
@@ -191,14 +332,12 @@ class Gate:
             rem_i = None
         if rem_i is None or rem_i > REMAINING_FLOOR:
             return
-        pause = 61.0
-        try:
-            r = float(rst)
-            # Reset 可能是 epoch 秒，也可能是剩余秒数
-            pause = (r - self._clock()) + 1.0 if r > 1e9 else r + 1.0
-        except (TypeError, ValueError):
-            pass
-        pause = min(max(pause, 5.0), 120.0)
-        self.pause_until = self._clock() + pause
+        now = self._clock()
+        secs = parse_reset_seconds(rst, now)
+        pause = 61.0 if secs is None else secs + 1.0
+        pause = min(max(pause, 1.0), MAX_QUOTA_PAUSE_SEC)
+        until = now + pause
+        self.pause_until = max(self.pause_until, until)
+        self._write_shared_pause(until)
         self.stats["quota_pauses"] += 1
-        _log("quota_floor", caller=self.caller, remaining=rem_i, pause_s=round(pause, 1))
+        _log("quota_floor", caller=self.caller, remaining=rem_i, reset=rst, pause_s=round(pause, 1))
