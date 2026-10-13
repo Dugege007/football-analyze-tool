@@ -16,10 +16,15 @@ from __future__ import annotations
 import os as _rp_os
 from pathlib import Path as _RpPath
 _REPO_ROOT = _RpPath(__file__).resolve().parents[2]
-def _rp_load_dotenv(path=_REPO_ROOT / '.env'):
-    # 读仓库根 .env（KEY=VALUE；已存在的环境变量优先，不覆盖）；不打印任何值
+# 只读 .env：本模块不再把整份 .env 注入 os.environ（2026-10-13），只按名字取自己需要的几个值。
+_DOTENV_CACHE: dict | None = None
+
+
+def _read_dotenv(path=_REPO_ROOT / '.env') -> dict:
+    """解析仓库根 .env（KEY=VALUE），返回字典；不修改 os.environ，不打印任何值。"""
+    out: dict = {}
     if _rp_os.environ.get('FAT_DISABLE_DOTENV') == '1':  # 测试时由 conftest 设置，避免本机 .env 干扰
-        return
+        return out
     try:
         for _ln in path.read_text(encoding='utf-8').splitlines():
             _ln = _ln.strip()
@@ -30,13 +35,27 @@ def _rp_load_dotenv(path=_REPO_ROOT / '.env'):
             _v = _v.strip().strip('"').strip("'")
             if _v.startswith('YOUR_'):  # config.example.env 占位值视为未填写
                 continue
-            if _k and _k not in _rp_os.environ:
-                _rp_os.environ[_k] = _v
+            if _k:
+                out[_k] = _v
     except FileNotFoundError:
         pass
-_rp_load_dotenv()
-def _rp_env(name, default, base=None):
+    return out
+
+
+def env_value(name: str, default: str | None = None) -> str | None:
+    """先看进程环境变量，再看 .env；都没有时返回 default。不写 os.environ。"""
+    global _DOTENV_CACHE
     v = _rp_os.environ.get(name, '').strip()
+    if v:
+        return v
+    if _DOTENV_CACHE is None:
+        _DOTENV_CACHE = _read_dotenv()
+    v = (_DOTENV_CACHE.get(name) or '').strip()
+    return v or default
+
+
+def _rp_env(name, default, base=None):
+    v = env_value(name, '') or ''
     p = _RpPath(v).expanduser() if v else default
     return p if p.is_absolute() else (base or _REPO_ROOT) / p
 _MA_API_ROOT = _rp_env('MA_API_ROOT', _REPO_ROOT / 'api')
@@ -70,12 +89,12 @@ YIELD_WINDOWS: tuple[tuple[tuple[int, int], tuple[int, int]], ...] = (
     ((14, 55), (15, 15)),
     ((21, 55), (22, 15)),
 )
-LEDGER = Path(os.environ.get("SHARED_API_YIELD_LEDGER", str(_ODDS_DATA_DIR / "5dollar/backfill_yield_ledger.json")))
+LEDGER = Path(env_value("SHARED_API_YIELD_LEDGER", str(_ODDS_DATA_DIR / "5dollar/backfill_yield_ledger.json")))
 # 单次 before_request() 的总等待上限（秒）：额度暂停 + 速率等待之和；让路时段的等待不计入（时段固定、可预期）。
-DEFAULT_MAX_WAIT_SEC = float(os.environ.get("SHARED_API_YIELD_MAX_WAIT_SEC", "300"))
+DEFAULT_MAX_WAIT_SEC = float(env_value("SHARED_API_YIELD_MAX_WAIT_SEC", "300"))
 # 额度暂停的合理上限（秒），防止 Reset 头异常时睡几个小时
 MAX_QUOTA_PAUSE_SEC = 3600.0
-LOG = Path(os.environ.get("SHARED_API_YIELD_LOG", str(_ODDS_DATA_DIR / "5dollar/backfill_yield.jsonl")))
+LOG = Path(env_value("SHARED_API_YIELD_LOG", str(_ODDS_DATA_DIR / "5dollar/backfill_yield.jsonl")))
 
 
 class SharedYieldWaitExceeded(RuntimeError):

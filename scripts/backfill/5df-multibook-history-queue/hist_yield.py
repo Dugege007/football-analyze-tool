@@ -21,7 +21,28 @@ from typing import Any, Optional
 TZ = timezone(timedelta(hours=8))
 # 实时采集运行目录：$ODDS_DATA_DIR/5dollar/live（ODDS_DATA_DIR 默认 <仓库根>/data/odds-data，相对路径按仓库根解析）
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_odds_env = os.environ.get("ODDS_DATA_DIR", "").strip()
+
+
+def _odds_data_env() -> str:
+    """ODDS_DATA_DIR：先看环境变量，再只读仓库根 .env（不注入 os.environ）。"""
+    v = os.environ.get("ODDS_DATA_DIR", "").strip()
+    if v or os.environ.get("FAT_DISABLE_DOTENV") == "1":
+        return v
+    try:
+        for ln in (_REPO_ROOT / ".env").read_text(encoding="utf-8").splitlines():
+            ln = ln.strip()
+            if ln.startswith("#") or "=" not in ln:
+                continue
+            k, val = ln.split("=", 1)
+            if k.strip().removeprefix("export ").strip() == "ODDS_DATA_DIR":
+                val = val.strip().strip('"').strip("'")
+                return "" if val.startswith("YOUR_") else val
+    except OSError:
+        pass
+    return ""
+
+
+_odds_env = _odds_data_env()
 _ODDS_DATA_DIR = (Path(_odds_env).expanduser() if _odds_env else _REPO_ROOT / "data" / "odds-data")
 if not _ODDS_DATA_DIR.is_absolute():
     _ODDS_DATA_DIR = _REPO_ROOT / _ODDS_DATA_DIR
