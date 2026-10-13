@@ -180,6 +180,18 @@ def run_asof(D: str, target_key: str, db: Path, dry_run: bool,
                     recommend_live_ok=recommend_live_ok, rescue_rule=rescue_rule)
 
 
+def is_wait_exceeded(e: BaseException) -> bool:
+    """共享限速器总等待超限（SharedYieldWaitExceeded）：不是条目本身的错误。"""
+    try:
+        from asof_backfill_mid_rule import _yield_mod  # noqa: WPS433
+        cls = getattr(_yield_mod, "SharedYieldWaitExceeded", None)
+        if cls is not None and isinstance(e, cls):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return type(e).__name__ == "SharedYieldWaitExceeded"
+
+
 def process_one(path: Path, it: dict, *, db: Path, dry_run: bool, now: datetime) -> dict:
     tk = it.get("target_key") or ""
     D = it.get("jingcai_date") or (tk.split("|")[0] if tk else "")
@@ -200,6 +212,14 @@ def process_one(path: Path, it: dict, *, db: Path, dry_run: bool, now: datetime)
         rep = run_asof(D, tk, db, dry_run=False, recommend_live_ok=reco_ok,
                        rescue_rule=rescue_rule)
     except Exception as e:
+        if is_wait_exceeded(e):
+            # 限速器等太久：不计 attempts、不改条目文件，留在 pending 等下一轮
+            append_consume_log({"at": iso(now), "event": "rescue_yield_wait_exceeded", "target_key": tk,
+                                "reason": getattr(e, "reason", None),
+                                "waited_sec": getattr(e, "waited_sec", None)})
+            result["action"] = "yield_wait_exceeded"
+            result["reason"] = getattr(e, "reason", None)
+            return result
         attempts = int(it.get("attempts") or 0) + 1
         it["attempts"] = attempts
         it["last_error"] = str(e)[:300]
@@ -339,6 +359,10 @@ def run(*, max_n: int, daily_cap: int, db: Path, dry_run: bool,
                 break
         act = process_one(path, it, db=db, dry_run=dry_run, now=now_cn())
         report["actions"].append(act)
+        if act.get("action") == "yield_wait_exceeded":
+            # 共享额度紧张：本轮停止，其余条目留给下一轮
+            report["stopped_early"] = "yield_wait_exceeded"
+            break
 
     report["finished_at"] = iso(now_cn())
     REPORTS.mkdir(parents=True, exist_ok=True)
