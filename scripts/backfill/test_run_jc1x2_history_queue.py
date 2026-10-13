@@ -127,3 +127,32 @@ def test_yield_reason_sleeps_then_continues(tmp_path):
                busy=lambda n: seq.pop(0) if seq else None, fullmatch=lambda: False,
                importer=lambda fs: {"files": len(fs), "segments": 0, "imported": 0})
     assert slept == [60.0] and st["stop_reason"] == "queue_finished"
+
+
+def test_yield_wait_exceeded_flushes_done_items_and_stops(tmp_path):
+    """共享限速器超限：stop() 先 flush，已完成未导入的场次照样导入；状态为非运行；本场留给下一轮。"""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "api" / "app"))
+    import shared_api_yield as Y
+    p = _setup(tmp_path, 3)
+    imported = []
+
+    def fetch(fid):
+        if fid == "3":
+            raise Y.SharedYieldWaitExceeded(0.0, "quota_pause", caller="jc1x2", max_wait_sec=300)
+        return 200, _body(1), {"X-RateLimit-Remaining": "100"}
+
+    st = r.run(p, fetch=fetch, gate=_Gate(), sleep=lambda s: None, now=lambda: MON, busy=lambda n: None,
+               fullmatch=lambda: False, importer=lambda fs: imported.append(list(fs)) or {"files": len(fs),
+                                                                                    "segments": 1, "imported": 1},
+               batch_size=10)
+    assert st["stop_reason"] == "yield_wait_exceeded" and st["status"] == "stopped"
+    assert [f.name.split("_")[0] for f in imported[0]] == ["1", "2"]
+    assert "3" not in st["matches"]
+    saved = json.loads(p["state"].read_text(encoding="utf-8"))
+    assert saved["status"] == "stopped" and saved["imports"]
+    # 下一轮只抓第 3 场
+    calls = []
+    r.run(p, fetch=lambda fid: calls.append(fid) or (200, _body(1), {}), gate=_Gate(), sleep=lambda s: None,
+          now=lambda: MON, busy=lambda n: None, fullmatch=lambda: False,
+          importer=lambda fs: {"files": len(fs), "segments": 1, "imported": 1})
+    assert calls == ["3"]
