@@ -127,3 +127,22 @@ def test_macau_rescue_stays_off_manual_column(tmp_path):
     assert five["features_ok"] is True
     assert five["asof_backfill"] is True
     assert five["book_lane"] == "macau_5df"
+
+
+def test_live_cell_carries_false_posthoc_flags(tmp_path):
+    """非补写格子也带 asof_backfill 与 phase_assign_late，默认 false，扁平格式列集合保持一致。"""
+    c = _db(tmp_path, recorded_at=BEFORE, line=-0.5)
+    c.execute("UPDATE odds_snapshot SET source = '5df_live', extras_json = '{}'")
+    c.commit()
+    try:
+        d = tm._Data(c, [1])
+        live = tm.build_ah_cell(d, 1, "crown", "close_real", {}, T, KICK)
+        empty = tm.build_ah_cell(d, 1, "william", "close_real", {}, T, KICK)
+    finally:
+        c.close()
+    assert live["available"] is True
+    assert live["asof_backfill"] is False
+    assert live["phase_assign_late"] is False
+    if empty is not None:
+        assert empty["asof_backfill"] is False
+        assert empty["phase_assign_late"] is False
