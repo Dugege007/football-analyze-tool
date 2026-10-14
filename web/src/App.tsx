@@ -76,7 +76,7 @@ function AppShell() {
         style={{
           padding: '24px 24px 48px',
           // 赛程页展开五个预测方向列后需要更宽的版面，其他页面保持 1100 像素。
-          maxWidth: location.pathname === '/' ? 1560 : 1100,
+          maxWidth: location.pathname.startsWith('/sheet') ? 'none' : location.pathname === '/' ? 1560 : 1100,
           width: '100%',
           margin: '0 auto',
         }}

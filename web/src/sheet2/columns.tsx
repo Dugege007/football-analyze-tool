@@ -134,7 +134,7 @@ function oddsCol(book: Book, market: Market, phase: Phase, first: boolean): ColD
   return {
     colId: `${book}.${market}.${phase}`,
     headerName: label,
-    width: market === 'x1x2' ? 150 : 140,
+    width: 168,
     headerClass: first ? SEC : undefined,
     cellClass: (p) => {
       const c = p.data?.[market]?.[book]?.[phase] as { alert?: keyof typeof ALERT_CLASS | null; cell_status?: CellStatus } | undefined
