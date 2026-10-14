@@ -1,3 +1,5 @@
+import { teamAliasTip, teamCommon } from './teamName'
+import { leagueShort } from './leagueShort'
 import type { ColDef, ColGroupDef, ICellRendererParams } from 'ag-grid-community'
 import { Tag, Tooltip } from 'antd'
 import type { ReactNode } from 'react'
@@ -80,9 +82,15 @@ function baseChildren(): Col[] {
     },
     { colId: 'jcNo', headerName: '编号', width: w('base.jcNo'), pinned: 'left', valueGetter: (p) => p.data?.match.jc_id ?? '-', cellClass: (p) => dayClass(p.data), sort: 'asc', sortIndex: 1 },
     { colId: 'kickoff', headerName: '开赛时间', width: w('base.kickoff'), pinned: 'left', valueGetter: (p) => kickoffText(p.data?.match.kickoff_at ?? null) },
-    { colId: 'league', headerName: '赛事', width: w('base.league'), pinned: 'left', valueGetter: (p) => p.data?.match.league ?? '-' },
-    { colId: 'home', headerName: '主队', width: w('base.home'), pinned: 'left', valueGetter: (p) => p.data?.match.home_team ?? '-' },
-    { colId: 'away', headerName: '客队', width: w('base.away'), pinned: 'left', valueGetter: (p) => p.data?.match.away_team ?? '-' },
+    { colId: 'league', headerName: '赛事', width: w('base.league'), pinned: 'left', valueGetter: (p) => leagueShort(p.data?.match.league_canonical ?? p.data?.match.league) ?? '-',
+      // The cell shows the short name; hovering shows the full league name from the backend.
+      cellRenderer: (p: P) => <span title={p.data?.match.league ?? undefined}>{p.value}</span> },
+    { colId: 'home', headerName: '主队', width: w('base.home'), pinned: 'left', valueGetter: (p) => teamCommon(p.data?.match.home_team, p.data?.match.home_team_canonical) ?? '-',
+      // The cell shows the common name; hovering lists the other names of the same team.
+      cellRenderer: (p: P) => <span title={teamAliasTip(p.data?.match.home_team, p.data?.match.home_team_canonical)}>{p.value}</span> },
+    { colId: 'away', headerName: '客队', width: w('base.away'), pinned: 'left', valueGetter: (p) => teamCommon(p.data?.match.away_team, p.data?.match.away_team_canonical) ?? '-',
+      // The cell shows the common name; hovering lists the other names of the same team.
+      cellRenderer: (p: P) => <span title={teamAliasTip(p.data?.match.away_team, p.data?.match.away_team_canonical)}>{p.value}</span> },
     {
       colId: 'score', headerName: '比分', width: w('base.score'), pinned: 'left',
       cellRenderer: (p: P) => {

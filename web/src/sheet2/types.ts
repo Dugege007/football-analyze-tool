@@ -132,6 +132,11 @@ export interface Row {
     jingcai_date: string
     kickoff_at: string | null
     league: string | null
+    /** Canonical league name from the backend, present for only some leagues. */
+    league_canonical?: string | null
+    /** Canonical team names from the backend, present for only some matches. */
+    home_team_canonical?: string | null
+    away_team_canonical?: string | null
     home_team: string | null
     away_team: string | null
     status: MatchStatus | null
