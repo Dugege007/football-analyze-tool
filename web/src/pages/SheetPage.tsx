@@ -69,6 +69,11 @@ function orderBooks(def: Book[]): Book[] {
   const rest = ab.filter((b) => b !== 'avg')
   return [...(def.includes('avg') ? (['avg'] as Book[]) : []), ...rest, ...def.filter((b) => b !== 'avg' && !rest.includes(b))]
 }
+/** 每个表头都带悬停全名，表头被省略时也能看到 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function withHeaderTips(cols: any[]): any[] {
+  return cols.map((c) => ({ ...c, headerTooltip: c.headerTooltip ?? c.headerName, ...(c.children ? { children: withHeaderTips(c.children) } : {}) }))
+}
 const LS_BOOK = 'sheet2.predBook.v1'
 const lsResultOnly = (t: TabId) => `sheet2.resultOnly.v1.${t}`
 const readBool = (k: string) => {
@@ -157,7 +162,7 @@ export default function SheetPage() {
       for (const b of orderBooks(CMP_BOOKS)) cols.push(bookCols(b, [cmpMarket], ro))
       if (cmpMarket === 'x1x2') cols.push(jcCols(true, true))
     } else if (lockedBook) cols.push(predCols(lockedBook, ['ah', 'ou', 'x1x2', 'jc']), bookCols(lockedBook))
-    return cols
+    return withHeaderTips(cols)
   }, [tab, settleBook, cmpMarket, ro, lockedBook, rows])
 
   const showBookSelect = tab === 'predict' || !!cmpMarket

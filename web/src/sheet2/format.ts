@@ -98,9 +98,37 @@ export function bjTime(iso: string | null | undefined): string {
   const p = (n: number) => String(n).padStart(2, '0')
   return `${p(b.getUTCMonth() + 1)}-${p(b.getUTCDate())} ${p(b.getUTCHours())}:${p(b.getUTCMinutes())}`
 }
+/** 来源代码中文名（约定 7.8） */
 export const SOURCE_TEXT: Record<string, string> = {
-  '5df_live_opening': '5DollarFootballAPI 开盘数据',
-  '5df_live': '5DollarFootballAPI 实时采集',
-  '5df_hist_asof_full': '5DollarFootballAPI 历史补数',
+  '5df_live_opening': '开盘数据',
+  '5df_live': '实时采集',
+  '5df_hist_asof_full': '历史补数',
+  '5df_hist_asof': '时点补数',
+  '5df_macauslot_history': '澳门历史补数',
+  '5dollar_history': '早期历史补数',
+  '5df_odds_snap': '欧赔快照补数',
+  legacy_import: '旧手工录入',
+  '5df': '澳门 5DollarFootballAPI 列',
+  avg: '多家平均',
 }
-export const sourceText = (s: string | null | undefined): string => (s ? (SOURCE_TEXT[s] ?? (s.startsWith('5df') ? `5DollarFootballAPI（${s}）` : s)) : '未知')
+/**
+ * 来源显示：新写法是来源代码，查上表；后端统一之前仍可能是「表名/通道/点位」的取数路径，按前缀显示（约定 7.8）。
+ * 不认识的原样显示。source_path 字段页面不读。
+ */
+export function sourceText(s: string | null | undefined): string {
+  if (!s) return '不详'
+  if (SOURCE_TEXT[s]) return SOURCE_TEXT[s]
+  if (s.startsWith('odds_timeline_seg/')) {
+    const c = s.slice('odds_timeline_seg/'.length)
+    return `盘口时间线（${SOURCE_TEXT[c] ?? c}）`
+  }
+  if (s.startsWith('odds_snapshot/')) {
+    const ch = s.split('/')[1]
+    return ch === 'rule' ? '快照表（规则采集）' : ch === 'actual' ? '快照表（实际采集时刻）' : '快照表'
+  }
+  if (s.startsWith('odds_asian')) return '旧结算盘口表'
+  if (s.includes('(home_only)')) return '只有主胜的旧记录'
+  if (s.startsWith('odds_jc_had')) return '竞彩胜平负记录'
+  if (s.startsWith('5df_odds_history/chinasportslottery')) return '竞彩历史补数'
+  return s
+}

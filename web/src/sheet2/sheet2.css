@@ -14,9 +14,9 @@
 .sheet2 .wd-5 { background: #e6fffb; }
 .sheet2 .wd-6 { background: #e6f4ff; }
 .sheet2 .wd-7 { background: #f9f0ff; }
-.sheet2 .al-light { background: #fffbe6; }
-.sheet2 .al-medium { background: #ffe7ba; }
-.sheet2 .al-high { background: #ffccc7; }
+.sheet2 .al-light { background: #fff1b8; } /* 与 hl_v0 一致：gold-2 */
+.sheet2 .al-medium { background: #ffd591; } /* orange-3 */
+.sheet2 .al-high { background: #ffa39e; } /* red-3 */
 .sheet2 .f-win { background: #ff7875; color: #fff; }
 .sheet2 .f-winhalf { background: #ffccc7; }
 .sheet2 .f-losehalf { background: #d9f7be; }
@@ -49,3 +49,14 @@
 .sheet2 .ag-header-cell.al-center .ag-header-cell-label { justify-content: center; }
 .sheet2 .ag-header-cell.al-left .ag-header-cell-label { justify-content: flex-start; }
 .sheet2 .ag-cell.span-status { justify-content: center; }
+
+/* 表头不撑列宽：排序标记缩小、间距收紧，排序序号用小号字；放不下的表头省略，悬停显示全名（用户 2026-10-14 定） */
+.sheet2 .ag-header-cell { padding-left: 4px; padding-right: 4px; }
+.sheet2 .ag-header-cell-label { min-width: 0; overflow: hidden; }
+.sheet2 .ag-header-cell-text { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.sheet2 .ag-sort-indicator-container { flex: none; padding-left: 1px; }
+.sheet2 .ag-sort-indicator-icon { padding-left: 0; margin-left: 1px; }
+.sheet2 .ag-sort-indicator-icon .ag-icon { font-size: 11px; width: 11px; height: 11px; }
+.sheet2 .ag-sort-order { font-size: 9px; padding-left: 1px; margin-left: 0; opacity: .75; }
+/* 表头分隔竖线：AG Grid 默认画在拖拽区内 2–4px，比单元格右边框（列边界前 1px）偏左；右移 1px，使竖线右缘与列边界对齐 */
+.sheet2 .ag-header-cell-resize::after { left: 3px; }
