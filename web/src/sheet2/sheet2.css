@@ -1,0 +1,28 @@
+.sheet2 .ag-cell { display: flex; align-items: center; }
+.sheet2 .sec-start { border-left: 2px solid #8c8c8c !important; }
+.sheet2 .ag-header-group-cell.sec-start, .sheet2 .ag-header-cell.sec-start { border-left: 2px solid #8c8c8c; }
+.sheet2 .t-gray { color: #999; }
+.sheet2 .t-yellow { color: #d4a106; font-weight: 600; }
+.sheet2 .t-red { color: #cf1322; }
+.sheet2 .t-green { color: #389e0d; }
+.sheet2 .t-orange { color: #d46b08; }
+.sheet2 .t-blue { color: #1d39c4; }
+.sheet2 .wd-1 { background: #fff1f0; }
+.sheet2 .wd-2 { background: #fff7e6; }
+.sheet2 .wd-3 { background: #feffe6; }
+.sheet2 .wd-4 { background: #f6ffed; }
+.sheet2 .wd-5 { background: #e6fffb; }
+.sheet2 .wd-6 { background: #e6f4ff; }
+.sheet2 .wd-7 { background: #f9f0ff; }
+.sheet2 .al-light { background: #fffbe6; }
+.sheet2 .al-medium { background: #ffe7ba; }
+.sheet2 .al-high { background: #ffccc7; }
+.sheet2 .f-win { background: #ff7875; color: #fff; }
+.sheet2 .f-winhalf { background: #ffccc7; }
+.sheet2 .f-losehalf { background: #d9f7be; }
+.sheet2 .f-lose { background: #73d13d; color: #fff; }
+.sheet2 .fallback-tag { margin-left: 6px; font-size: 11px; line-height: 16px; padding: 0 4px; }
+.sheet2 .avg-hover { cursor: help; border-bottom: 1px dashed #bbb; }
+.avg-tip { font-size: 12px; line-height: 1.6; }
+.sheet2-tabs .ant-tabs-nav { margin-bottom: 8px; }
+.sheet2-group-label { color: #888; font-size: 12px; margin-right: 6px; }
