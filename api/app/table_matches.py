@@ -38,6 +38,7 @@ from app import db as app_db
 from app import kickoff_drift as kd
 from app import leak_suspect as leak
 from app import fundamentals as fund  # 0.3.21
+from app import team_pending as tp  # 2026-10-14 待确认球队
 from app import open_status as osx  # opening status and source fields (user rule 2026-10-10)
 from app import avg_cells  # 多家平均三格（接口约定第 3 版第 7 节）
 from app import alert_baseline as alb  # 预警档位按每格抓取时刻固定基准（2026-10-14）
@@ -2082,6 +2083,8 @@ class MatchInfo(_M_):
     away_team: Optional[str] = None
     home_team_canonical: Optional[str] = None
     away_team_canonical: Optional[str] = None
+    home_team_pending_confirm: bool = False  # 2026-10-14：认不出的球队（按来源原名写），前端悬停「待确认」
+    away_team_pending_confirm: bool = False
 
 
 class Schedule(_M_):
@@ -2120,10 +2123,13 @@ class Prediction(_M_):
 
 
 class Result(_M_):
-    home_goals: int
-    away_goals: int
+    # status：finished = 有完场比分；refund / postponed / cancelled / abandoned = 特殊场次（来自 result_ingest_flags），
+    # 这时比分各列为 null，不结算。
+    status: Optional[str] = None
+    home_goals: Optional[int] = None
+    away_goals: Optional[int] = None
     total_goals: Optional[int] = None
-    score: str
+    score: Optional[str] = None
     wdl: Optional[str] = None
 
 
@@ -2605,6 +2611,25 @@ def _normalize_sources(blk: Any) -> None:
                     _normalize_one(sub)
 
 
+RESULT_SPECIAL_STATUSES = ("refund", "postponed", "cancelled", "abandoned")
+_SPECIAL_PRIORITY = {f: i for i, f in enumerate(RESULT_SPECIAL_STATUSES)}
+
+
+def load_result_special_status(conn: sqlite3.Connection) -> dict[int, str]:
+    """result_ingest_flags 里未解决的特殊场次标记 → {match_id: status}；表不存在（例如正式库）时返回空字典。
+    同一场有多个标记时按 refund > postponed > cancelled > abandoned 取一个。只读。"""
+    try:
+        rows = conn.execute("SELECT match_id, flag FROM result_ingest_flags WHERE resolved_at IS NULL AND flag IN "
+                            "('refund','postponed','cancelled','abandoned')").fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    out: dict[int, str] = {}
+    for mid, f in rows:
+        if mid not in out or _SPECIAL_PRIORITY[f] < _SPECIAL_PRIORITY[out[mid]]:
+            out[mid] = f
+    return out
+
+
 def _flat_row(item: dict) -> dict:
     """扁平：嵌套键用 _ 连接；live / rationale / consensus.books 等列表原样保留；match.* 去掉前缀。"""
     src = _stable(item)
@@ -2698,6 +2723,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             ORDER BY m.jingcai_date, COALESCE(m.kickoff_hour, 99), COALESCE(m.jc_no, 999999), m.id
             LIMIT ? OFFSET ?""", args + [limit, offset]).fetchall()
     page_ids = [r["id"] for r in rows]
+    _pending = tp.load_pending(conn)
     d = _Data(conn, page_ids)
 
     # 基准样本：库内全部场（不受本次日期/scope/分页影响），按同一取数口径算 open/mid/close 返还率
@@ -2755,6 +2781,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
     preds = {r["match_id"]: r for r in conn.execute(
         "SELECT * FROM predictions WHERE strategy = ?", (strategy,))}
     results = {r["match_id"]: r for r in conn.execute("SELECT * FROM results")}
+    special_status = load_result_special_status(conn)
 
     items: list[dict] = []
     trunc_table = osx.load_quantile_table()  # None when the analyst has not supplied the table
@@ -2890,11 +2917,13 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             res_hidden = "before_kickoff"
         elif eff_as_of < kick + RESULT_VISIBLE_AFTER_KICKOFF:
             res_hidden = "not_visible_yet"  # 开赛后 3h 内不显示赛果
+        elif mpk in special_status and (res_row is None or res_row["home_goals"] is None):
+            res_hidden = special_status[mpk]  # 退款、推迟、取消、腰斩：无比分，不结算
         elif res_row is None or res_row["home_goals"] is None or res_row["away_goals"] is None:
             res_hidden = "no_result"
         else:
             hg, ag = int(res_row["home_goals"]), int(res_row["away_goals"])
-            result = {"home_goals": hg, "away_goals": ag,
+            result = {"status": "finished", "home_goals": hg, "away_goals": ag,
                       "total_goals": res_row["total_goals"] if res_row["total_goals"] is not None else hg + ag,
                       "score": f"{hg}-{ag}", "wdl": res_row["wdl"]}
         if result is not None:  # 欧赔 api_closing：只在完赛（赛果可见）后单独返回
@@ -2904,6 +2933,9 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                     x_out[b]["api_closing"] = apc
         if result is None:
             settlement, set_hidden = None, ("no_prediction" if pr is None else res_hidden)
+            if res_hidden in RESULT_SPECIAL_STATUSES:
+                result = {"status": res_hidden, "home_goals": None, "away_goals": None,
+                          "total_goals": None, "score": None, "wdl": None}
         else:
             settlement, set_hidden = _settle(pr if prediction is not None else None, result, d, mpk, s_ver)
             # 0.3.19：人工复核 / 推迟待核 → 不结算（validate 同口径单独计数）；void_postponed 钩子（时限未定 = 不生效）
@@ -2990,6 +3022,8 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 "competition_type": row["competition_type"],
                 "home_team": row["home_team"], "away_team": row["away_team"],
                 "home_team_canonical": row["home_canonical"], "away_team_canonical": row["away_canonical"],
+                "home_team_pending_confirm": tp.is_pending(row["home_team_id"], row["home_canonical"], _pending),
+                "away_team_pending_confirm": tp.is_pending(row["away_team_id"], row["away_canonical"], _pending),
             },
             "phase_exception": exc,
             "schedule": {k: v for k, v in sched.items() if k != "live_rule_1110_target_time"},
