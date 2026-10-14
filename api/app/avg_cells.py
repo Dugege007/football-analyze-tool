@@ -186,7 +186,7 @@ def build_avg_cell(market: str, phase: str, quotes: dict[str, dict], missing: di
     else:
         status, reason = "insufficient", "too_few_books"
     cell.update({"cell_status": status, "cell_status_reason": reason, "source": "avg", "recorded_at": None,
-                 "move": None, "alert": None, "avg_detail": detail})
+                 "move": None, "alert": None, "alert_sample_n": None, "avg_detail": detail})
     return cell
 
 

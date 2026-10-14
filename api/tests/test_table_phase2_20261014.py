@@ -267,7 +267,12 @@ def test_v2d3_moves_and_alert(v2d3_table):
                     if mk == "x1x2":
                         assert c.get("alert") is None  # 欧赔不显示预警（分析师 2026-10-14 决定）
                     else:
-                        assert c.get("alert") == c.get("fallback_hl_level")
+                        # 2026-10-14：预警档位改按这一格抓取时刻固定的基准，样本不足 100 时为空值。
+                        n = c.get("alert_sample_n")
+                        if mk == "ou" or n is None or n < 100:
+                            assert c.get("alert") is None
+                        else:
+                            assert c.get("alert") in (None, "light", "medium", "high")
     assert seen_nc > 0
 
 

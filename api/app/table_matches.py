@@ -40,6 +40,7 @@ from app import leak_suspect as leak
 from app import fundamentals as fund  # 0.3.21
 from app import open_status as osx  # opening status and source fields (user rule 2026-10-10)
 from app import avg_cells  # 多家平均三格（接口约定第 3 版第 7 节）
+from app import alert_baseline as alb  # 预警档位按每格抓取时刻固定基准（2026-10-14）
 
 router = APIRouter(tags=["table"])
 
@@ -2530,7 +2531,13 @@ def _apply_alert(cells: dict, market: str = "ah") -> None:
         if isinstance(c, dict):
             # 欧赔不显示预警（分析师 2026-10-14 决定）：样本不够 100 前不放宽门槛，欧赔格子 alert 一律为空值。
             # 亚盘初盘也不出预警（分析师 2026-10-14 决定），只有亚盘中盘和临盘保留。
-            c["alert"] = None if (market == "x1x2" or ph == "open") else c.get("fallback_hl_level")
+            # 2026-10-14（分析师、算法顾问）：预警档位改用按这一格抓取时刻固定的基准（alert_level），
+            # 不再取随统计时刻变化的 fallback_hl_level；alert_sample_n 是这一格实际用的样本数。
+            level = c.pop("alert_level", None)
+            n = c.pop("alert_sample_n", None)
+            on = market == "ah" and ph in alb.ALERT_PHASES
+            c["alert"] = level if on else None
+            c["alert_sample_n"] = n if on else None
 
 
 def _row_source(r: Any) -> Optional[str]:
@@ -2622,7 +2629,7 @@ def _flat_row(item: dict) -> dict:
             for ph, cell in blk.items():
                 if not isinstance(cell, dict) or ph not in PHASES + REAL_PHASES:
                     continue
-                for k in ("cell_status", "cell_status_reason", "alert", "source_path"):
+                for k in ("cell_status", "cell_status_reason", "alert", "alert_sample_n", "source_path"):
                     cell.setdefault(k, None)
                 mv = cell.get("move") if isinstance(cell.get("move"), dict) else {}
                 cell["move"] = {k: mv.get(k) for k in mv_keys}
@@ -2696,6 +2703,8 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
     baseline = _Baseline(baseline_window_days, baseline_min_n)
     fb_q = _FallbackQ()  # hl_v0.3.1：返还率兜底分位数 P10/P25/P90 = 每家 × 每阶段真实水位返还率（as-of，n=场次）
     cells_cache: dict[int, tuple] = {}
+    # 预警基准：样本按格子记录时刻排，查询时只取严格早于这一格抓取时刻、且不是同一场的格子（只在内存里）。
+    alert_base = alb.AsOfCellBaseline(FALLBACK_QS)
     for mr in all_rows:
         extras = meta.get(mr["id"], {})
         kick = M.resolve_kickoff_dt(mr, extras)
@@ -2717,6 +2726,9 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                         ah[b][p]["water_source"] not in BASELINE_EXCLUDED_WATER_SOURCES:
                     baseline.add(("ah", b, p), mr["jingcai_date"], ah[b][p]["return_rate"])
                     fb_q.add(("ah", b, p), mr["jingcai_date"], mr["id"], ah[b][p]["return_rate"])
+                    if p in alb.ALERT_PHASES:
+                        alert_base.add(("ah", b, p), mr["id"], _to_cn(ah[b][p]["recorded_at"]),
+                                       ah[b][p]["return_rate"])
                 # 0.3.18 E：欧赔基准同样 real_only（water_source=actual）
                 if x[b][p].get("water_source") == "actual":
                     baseline.add(("x1x2", b, p), mr["jingcai_date"], x[b][p]["return_rate"])
@@ -2727,9 +2739,14 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 if c5.get("water_source") == "actual":
                     baseline.add(("ah", MACAU_5DF_BOOK_KEY, p), mr["jingcai_date"], c5["return_rate"])
                     fb_q.add(("ah", MACAU_5DF_BOOK_KEY, p), mr["jingcai_date"], mr["id"], c5["return_rate"])
+                    if p in alb.ALERT_PHASES:
+                        alert_base.add(("ah", MACAU_5DF_BOOK_KEY, p), mr["id"], _to_cn(c5["recorded_at"]),
+                                       c5["return_rate"])
         cells_cache[mr["id"]] = (kick, has_ka, sched, ah, x, extras, ah_macau_5df)
     baseline.freeze()
     fb_q.freeze()
+    alert_base.freeze()
+    _alert_min_n = alb.alert_min_n()
 
     preds = {r["match_id"]: r for r in conn.execute(
         "SELECT * FROM predictions WHERE strategy = ?", (strategy,))}
@@ -2758,6 +2775,9 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                     c["fallback_hl_eligible"] = fn >= FALLBACK_MIN_N
                     c["fallback_hl_level"] = fallback_hl_level(c["return_rate"], c.get("water_source"), qs,
                                                                c["fallback_hl_eligible"])
+                    if market == "ah" and p in alb.ALERT_PHASES:
+                        alb.apply_alert_level(c, ("ah", b, p), mpk, alert_base, fallback_hl_level,
+                                              _alert_min_n, _to_cn)
                     # 0.3.17（前端 §13 对账）：返还率本身为空 → baseline_method 也为空
                     c["baseline_method"] = (None if c["return_rate"] is None
                                             else BASELINE_METHOD_EMPIRICAL if med is not None
@@ -2810,6 +2830,9 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             c["fallback_hl_eligible"] = fn >= FALLBACK_MIN_N
             c["fallback_hl_level"] = fallback_hl_level(c["return_rate"], c.get("water_source"), qs,
                                                        c["fallback_hl_eligible"])
+            if p in alb.ALERT_PHASES:
+                alb.apply_alert_level(c, ("ah", MACAU_5DF_BOOK_KEY, p), mpk, alert_base, fallback_hl_level,
+                                      _alert_min_n, _to_cn)
             c["baseline_method"] = (None if c["return_rate"] is None
                                     else BASELINE_METHOD_EMPIRICAL if med is not None
                                     else BASELINE_METHOD_FALLBACK)
@@ -2945,7 +2968,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                     for _ph in PHASES + REAL_PHASES:
                         _c = _blk.get(_ph)
                         if isinstance(_c, dict):
-                            for _k in ("cell_status", "cell_status_reason", "move", "alert", "source_path"):
+                            for _k in ("cell_status", "cell_status_reason", "move", "alert", "alert_sample_n", "source_path"):
                                 _c.setdefault(_k, None)
         items.append({
             "match_id": row["match_uid"],
@@ -3053,6 +3076,15 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 "min_n": FALLBACK_MIN_N, "below_min_n": "no highlight, grey text 「样本不足，暂不判断」",
                 "excludes": ["manual_review matches", "tier_midpoint / unknown water_source"],
                 "changed_from_0_3_19": "0.3.19 pooled open+mid+close and counted cells; 0.3.20 per phase, n = matches"},
+            "alert_asof": {
+                "decided": "2026-10-14 analyst + algorithm advisor",
+                "applies_to": "ah mid / close cells only; ah open and every x1x2 cell alert = null",
+                "rule": "same P10 / P25 / P90 levels as fallback_hl_level, but the sample is the same (market, book, "
+                        "phase) cells of OTHER matches whose recorded_at is strictly earlier than this cell's "
+                        "recorded_at; the cell's own match never counts; real water only, manual_review excluded",
+                "min_n": _alert_min_n, "min_n_env": "APP_ALERT_MIN_N",
+                "below_min_n": "alert = null", "cell_fields": ["alert", "alert_sample_n"],
+                "deterministic": "depends only on data recorded before the cell's capture time; no DB writes, in-memory only"},
             "kelly_highlight": {"version": "hl_v0.3", "margin": KELLY_HL_MARGIN, "levels": KELLY_HL,  # hl_v0.3.1 未改凯利
                                 "transitional": True,
                                 "next": "hl_v0.4: per-outcome quantile thresholds kelly_thr_{h,d,a} / kelly_n_{h,d,a} (P85/P92/P97 of kelly/return_rate-1)"},
