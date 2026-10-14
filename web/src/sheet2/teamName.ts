@@ -5,6 +5,7 @@
  * odds-data/backfill/dc-aliases-review-2026-10-08/corrections.csv winning on conflicts (the approved set in REVIEW.md section 7),
  * together with the teams and team_aliases tables (rules in docs/schema/data-conventions-v1.md section 2).
  * Aliases that are valid only in some leagues come from LEAGUE_SCOPED below.
+ * Copied by hand into this file on 2026-10-14. When the backend API returns standard names, delete this table and read the API field instead.
  * Teams in the KuPS group and teams with no record show the source name unchanged;
  * they are listed in web/docs/team-names-pending.csv.
  */
@@ -96,6 +97,7 @@ const TEAM_OTHER_NAMES: Record<string, string[]> = {
 /**
  * League-scoped team aliases, copied row for row from
  * odds-data/backfill/dc-aliases-review-2026-10-08/league_scoped_aliases.csv.
+ * Copied row for row on 2026-10-14; delete it when the backend API returns standard names.
  * Each alias maps to its team only when the match's standard league name (after league mapping)
  * is one of the listed leagues; elsewhere the source name is shown. Add new rows here when that file changes.
  */

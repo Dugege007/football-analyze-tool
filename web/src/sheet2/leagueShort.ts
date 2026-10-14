@@ -8,6 +8,7 @@
  * which matched every legacy name to the 竞彩 and 5DollarFootballAPI names.
  * Where that file conflicts with the user's decision documents, the decision documents win
  * (docs/schema/v2_0-0316-followup-decisions.md: 巴西甲级联赛 is shown as 巴甲).
+ * Copied by hand into this file on 2026-10-14. When the backend API returns standard names, delete this table and read the API field instead.
  * A league with no such record, or one marked pending_user_confirmation, shows its source name unchanged.
  */
 const LEAGUE_DISPLAY: Record<string, string> = {
