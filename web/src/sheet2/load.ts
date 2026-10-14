@@ -105,6 +105,9 @@ export function mapApiRow(it: Raw): Row {
       away_team_canonical: m.away_team_canonical ?? null,
       home_team: m.home_team ?? null,
       away_team: m.away_team ?? null,
+      // 待确认字段：接口给布尔值时以接口为准；没给时为 undefined，页面改用 teams.csv 的兜底名单。
+      home_team_pending_confirm: typeof m.home_team_pending_confirm === 'boolean' ? m.home_team_pending_confirm : undefined,
+      away_team_pending_confirm: typeof m.away_team_pending_confirm === 'boolean' ? m.away_team_pending_confirm : undefined,
       status: deriveStatus(it),
     },
     prediction: it.prediction ? { direction: it.prediction.direction ?? null } : null,

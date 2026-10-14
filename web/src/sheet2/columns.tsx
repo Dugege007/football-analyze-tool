@@ -307,7 +307,7 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
       // On alert cells, hovering shows the alert level and the sample size when the backend provides them.
       const sampleN = sub.alert ? ((cell as { alert_sample_n?: number | null }).alert_sample_n ?? null) : null
       const alertLv = sub.alert ? ((cell as { alert?: string | null }).alert ?? null) : null
-      const tipParts = [alertLv && t.phase !== 'open' ? `预警等级：${ALERT_NAME[alertLv] ?? alertLv}。` : null, sub.alert && !alertLv && !sampleN ? NO_ALERT_TEXT : sampleN == null ? null : sampleText(sampleN)].filter(Boolean)
+      const tipParts = [alertLv && t.phase !== 'open' ? `预警等级：${ALERT_NAME[alertLv] ?? alertLv}。` : null, sub.alert && !alertLv && !sampleN && ((cell as { line?: number | null }).line == null || !(cell as { recorded_at?: string | null }).recorded_at) ? NO_ALERT_TEXT : sampleN == null ? null : sampleText(sampleN)].filter(Boolean)
       const bodyTip = tipParts.length ? <Tooltip title={tipParts.join('')}><span className="alert-sample-tip">{body}</span></Tooltip> : body
       return t.avg ? <AvgTip d={cell.avg_detail as AvgDetail | null | undefined} market={t.avg} phase={t.phase}>{bodyTip}</AvgTip> : bodyTip
     },
