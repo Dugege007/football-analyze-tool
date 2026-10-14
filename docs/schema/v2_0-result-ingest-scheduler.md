@@ -34,3 +34,37 @@ nohup setsid /workspace/odds-data/.venv-dc/bin/python scripts/live/result_ingest
 - 单实例锁是输出目录里的 `daemon.lock`（`flock`），第二份启动会直接退出。
 - 输出目录里有 `daemon.log`（每轮日志）、`heartbeat.json`、`state.json`（每场上次拉取时刻）、`call_log.tsv`（每次接口请求和剩余额度）、`csl_raw/`、`sporttery_raw/`，以及每 30 分钟重写一次的 `daily_summary.md`。
 - `backfill` 子命令只用本地已刷新的缓存补录，不受 6 小时截止限制，用于一次性补缺口。
+
+## 竞彩网缓存每日刷新（2026-10-14 分析师决定）
+
+本机出口请求竞彩网会被拦，所以每天北京时间 11:30 之前在用户的 MSI 电脑上请求一次，再把结果拷回本机导入：
+
+1. MSI 上执行：`pwsh -NoProfile -ExecutionPolicy Bypass -File C:\Users\win10\fat-sporttery\refresh_sporttery.ps1`
+   （脚本在仓库 `scripts/live/msi/refresh_sporttery.ps1`，请求最近 4 天到今天的赛果，所有分页合成一个文件 `latest_bundle.json`）。
+2. 把 `C:\Users\win10\fat-sporttery\latest_bundle.json` 拷到本机 `/workspace/uploads/sporttery_bundle/latest_bundle.json`。
+3. 本机执行：`python scripts/live/result_ingest.py sporttery_import --bundle /workspace/uploads/sporttery_bundle/latest_bundle.json`。
+   MSI 不在线、没拿到文件时也要执行一次，改成 `--note "原因"` 且不带 `--bundle`，这样汇总里会记一次失败。
+
+导入时把分页写进 `/workspace/odds-data/research/jingcai-competition-whitelist/cache/sporttery/msi_<开始>_<结束>_p<页>.json`，
+并在输出目录的 `sporttery_refresh.jsonl` 追加一条记录；`daily_summary.md` 的「竞彩网缓存刷新」列按这些记录写成功或失败。
+文件生成超过 3 小时、MSI 请求失败或分页内容不对，都记为失败。
+
+## 只有 5DF 一个来源的场次
+
+`result_ingest_log.source = '5df_csl'` 的场次用 Football-Data.co.uk 公开 CSV 再核对一次（常驻程序每 12 小时最多下载一次 CSV，
+每 30 分钟核对最近 7 天；手动执行 `result_ingest.py crosscheck [--fd-refresh] [--dry-run]`）：
+
+- 对上且比分一致：`source` 改为 `5df_csl+football_data_co_uk`，`fd_score` 写入。
+- 对上但比分不一致：`result_ingest_flags.flag = 'fd_score_mismatch'`，赛果保留，等人工抽查。
+- 对不上：`result_ingest_flags.flag = 'single_source'`（单一来源）。以后核对上了会把这个标记的 `resolved_at` 填上。
+
+中文队名到 Football-Data 英文名的对应来自定稿表 teams.csv 的英文别名、库里 team_aliases 的英文别名，以及输出目录的 `fd_team_map.csv`（手工补充）。
+
+## 数据表接口里的退款、推迟、取消、腰斩
+
+`GET /table/matches` 读取 `result_ingest_flags` 里未解决的 refund、postponed、cancelled、abandoned 标记（表不存在时，例如正式库，就不输出）：
+
+- 嵌套格式：`result.status`，取值 `finished`（有完场比分）、`refund`、`postponed`、`cancelled`、`abandoned`；特殊场次的比分各列为 null。
+  同时 `result_hidden_reason` 和 `hidden_reason` 等于同一个值，`settlement` 为 null。
+- 扁平格式：列名 `result_status`。
+- 没有赛果也没有标记时，`result` 仍为 null（扁平格式 `result_status` 为 null），`result_hidden_reason` 照旧。
