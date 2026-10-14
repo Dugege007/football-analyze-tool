@@ -2536,6 +2536,10 @@ def _apply_alert(cells: dict, market: str = "ah") -> None:
             level = c.pop("alert_level", None)
             n = c.pop("alert_sample_n", None)
             on = market == "ah" and ph in alb.ALERT_PHASES
+            # 2026-10-14（分析师）：盘口为空或抓取时刻为空的格子不计算预警，alert 与 alert_sample_n 都为空值；
+            # 没有抓取时刻就无法保证基准样本严格早于它，可能用到未来数据。
+            if c.get("line") is None or c.get("recorded_at") is None:
+                on = False
             c["alert"] = level if on else None
             c["alert_sample_n"] = n if on else None
 

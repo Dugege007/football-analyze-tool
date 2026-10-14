@@ -81,14 +81,41 @@ def test_min_n_configurable(monkeypatch):
 
 
 def test_apply_alert_only_ah_mid_close():
-    blk = {p: {"alert_level": "light", "alert_sample_n": 120, "fallback_hl_level": "medium"} for p in tm.PHASES}
+    blk = {p: {"alert_level": "light", "alert_sample_n": 120, "fallback_hl_level": "medium",
+               "line": -0.5, "recorded_at": "2026-10-10T12:00:00+08:00"} for p in tm.PHASES}
     tm._apply_alert(blk, "ah")
     assert blk["open"]["alert"] is None and blk["open"]["alert_sample_n"] is None
     assert blk["mid"]["alert"] == "light" and blk["mid"]["alert_sample_n"] == 120
     assert "alert_level" not in blk["close"]
-    xb = {p: {"alert_level": "light", "alert_sample_n": 120} for p in tm.PHASES}
+    xb = {p: {"alert_level": "light", "alert_sample_n": 120,
+              "line": -0.5, "recorded_at": "2026-10-10T12:00:00+08:00"} for p in tm.PHASES}
     tm._apply_alert(xb, "x1x2")
     assert all(xb[p]["alert"] is None and xb[p]["alert_sample_n"] is None for p in tm.PHASES)
+
+
+
+@pytest.mark.parametrize("missing", [{"line": None}, {"recorded_at": None}, {"line": None, "recorded_at": None}])
+def test_missing_line_or_capture_time_gives_null_alert(missing):
+    """盘口或抓取时刻为空的格子不计算预警（分析师 2026-10-14）：alert 与 alert_sample_n 都为空值。"""
+    cell = {"alert_level": "high", "alert_sample_n": 255, "line": -0.5, "recorded_at": "2026-10-10T12:00:00+08:00"}
+    cell.update(missing)
+    blk = {p: dict(cell) for p in tm.PHASES}
+    tm._apply_alert(blk, "ah")
+    for p in tm.PHASES:
+        assert blk[p]["alert"] is None and blk[p]["alert_sample_n"] is None
+        assert "alert_level" not in blk[p]
+
+
+def test_missing_key_treated_as_missing():
+    blk = {"mid": {"alert_level": "high", "alert_sample_n": 255}}
+    tm._apply_alert(blk, "ah")
+    assert blk["mid"]["alert"] is None and blk["mid"]["alert_sample_n"] is None
+
+
+def test_line_zero_is_not_missing():
+    blk = {"mid": {"alert_level": "medium", "alert_sample_n": 200, "line": 0.0, "recorded_at": "2026-10-10T12:00:00+08:00"}}
+    tm._apply_alert(blk, "ah")
+    assert blk["mid"]["alert"] == "medium" and blk["mid"]["alert_sample_n"] == 200
 
 
 _DB = os.environ.get("ALERT_ASOF_V2D3_DB")
