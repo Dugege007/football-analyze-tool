@@ -55,6 +55,28 @@ REASON_ZH: dict[str, str] = {
     "post_match_only": "只有赛后数据，不能使用",
     "empty_from_source": "来源返回为空",
     "not_collected": "还没有采集",
+    # 2026-10-14 补登记：基本面合同核对清单与第一期合同 7.7 节
+    "source_not_covered": "来源不收录这场比赛",
+    "no_standings": "这项赛事没有积分榜",
+    "no_pinnacle_1x2": "没有平博欧赔",
+    "injury_list_empty_unconfirmed": "伤停名单为空，未确认是否无伤停",
+    "conversion_failed": "这家机构的水位无法换算到统一盘口，已剔除",
+    # 2026-10-14 补登记：接口实际会返回的其余原因
+    "after_as_of": "这一格的记录时刻晚于所选的查看时刻，已隐藏",
+    "jc_official_first_quote_missing": "没有竞彩官方首开赔率，自采的首次赔率只作参考，不当作初盘",
+    "no_line_visible_at_decision": "决策时刻还看不到可用的让球线",
+    "quantile_table_missing": "缺少截断分位数表，没有做截断检查",
+    "first_record_or_kickoff_unknown": "首条记录时刻或开赛时刻未知，没有做截断检查",
+    "own_capture_out_of_window": "自采时刻不在十一点到十一点二十分之间，主值改用时间线数据",
+    "own_capture_out_of_window;no_timeline": "自采时刻不在十一点到十一点二十分之间，而且没有时间线数据可用",
+    "produced_after_as_of": "预测产出时刻晚于所选的查看时刻，已隐藏",
+    "kickoff_unknown": "开赛时刻未知，赛果暂不显示",
+    "no_settle_line": "没有可用于结算的盘口，无法结算",
+    "bad_direction": "预测方向无法识别，无法结算",
+    # 影子策略不可评估子原因（验证与对比接口的 not_evaluable_items 会返回）
+    "fit_not_converged": "模型拟合没有收敛，这场不可评估",
+    "real_water_lt_3": "有真实水位的机构不足三家，这场不可评估",
+    "stale_tick": "最后一次报价距离目标时点超过六十分钟，报价过旧，这场不可评估",
 }
 
 
