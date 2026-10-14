@@ -60,6 +60,8 @@ REASON_ZH: dict[str, str] = {
     "no_standings": "这项赛事没有积分榜",
     "no_pinnacle_1x2": "没有平博欧赔",
     "injury_list_empty_unconfirmed": "伤停名单为空，未确认是否无伤停",
+    "home_not_due": "主队尚未到取数时间",
+    "away_not_due": "客队尚未到取数时间",
     "conversion_failed": "这家机构的水位无法换算到统一盘口，已剔除",
     # 2026-10-14 补登记：接口实际会返回的其余原因
     "after_as_of": "这一格的记录时刻晚于所选的查看时刻，已隐藏",

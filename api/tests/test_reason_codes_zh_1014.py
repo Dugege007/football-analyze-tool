@@ -125,6 +125,7 @@ API_REASON_CODES = (
     # 基本面
     "no_team_id", "extra_time_unverified", "post_match_only", "empty_from_source", "not_collected",
     "source_not_covered", "no_standings", "no_pinnacle_1x2", "injury_list_empty_unconfirmed",
+    "home_not_due", "away_not_due",
     # 影子策略不可评估子原因
     "fit_not_converged", "real_water_lt_3", "stale_tick",
 )
