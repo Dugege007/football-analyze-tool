@@ -56,7 +56,7 @@ interface CellCommon {
   avg_detail?: AvgDetail | null
 }
 
-/** 亚盘格：line 按草案为「雷速写法，主让为负」 */
+/** 亚盘格：line 主队让球为正（主让半球 0.5，主队受让半球 -0.5） */
 export interface AhCell extends CellCommon {
   line: number | null
   home_water: number | null

@@ -25,8 +25,8 @@ function mapAh(src: Raw | null | undefined): Phased<AhCell> | undefined {
   for (const p of PH) {
     const c = src[p] as Raw | null
     const has = c != null && c.line != null && c.home_water != null && c.away_water != null
-    // 现有接口 line 为仓库口径「主让为正」，草案为「主让为负」，这里翻号
-    const line = has ? (c!.line === 0 ? 0 : -c!.line) : null
+    // 亚盘 line 主队让球为正（后端确认，见约定第 3 节 ah_line_convention）
+    const line = has ? c!.line : null
     out[p] = { line, home_water: has ? c!.home_water : null, away_water: has ? c!.away_water : null, ...stOf(c, has), move: c?.move ?? null, alert: c?.alert ?? null }
   }
   return out

@@ -9,7 +9,6 @@ import {
   ahLineText,
   ahMove,
   fmtNum,
-  homeGives,
   ouMove,
   statusOf,
   x1x2Move,
@@ -204,7 +203,7 @@ function resultCol(book: Book, market: Market, first: boolean): ColDef<Row> {
         if (a.push) return '走水'
         if (!a.side) return <StatusText st={a.cell_status ?? 'unavailable'} />
         const side = a.side === 'home' ? '主' : '客'
-        return <span className={a.side === 'home' ? 't-orange' : 't-blue'}>{formatPick({ market: 'ah', side, line: homeGives(a.line) })}</span>
+        return <span className={a.side === 'home' ? 't-orange' : 't-blue'}>{formatPick({ market: 'ah', side, line: a.line })}</span>
       }
       if (market === 'ou') {
         const o = x as { line: number | null; side: 'over' | 'under' | null; push: boolean; cell_status?: CellStatus }
@@ -315,7 +314,7 @@ export function predCols(book: Book, blocks: PredBlock[]): ColGroupDef<Row> {
         if (dir !== '主' && dir !== '客') return '-'
         const s = r.settlement_by_book?.[book]?.ah
         const line = s?.line ?? r.prediction?.line ?? null
-        return <span className={dir === '主' ? 't-orange' : 't-blue'}>{formatPick({ market: 'ah', side: dir, line: homeGives(line) })}</span>
+        return <span className={dir === '主' ? 't-orange' : 't-blue'}>{formatPick({ market: 'ah', side: dir, line })}</span>
       },
     })
     children.push({

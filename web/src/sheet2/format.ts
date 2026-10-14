@@ -1,9 +1,8 @@
 import { formatHandicap } from '../sheet/handicap'
 import type { AhCell, CellStatus, MoveDir, Move, OuCell, Phase, Phased, X1x2Cell } from './types'
 
-/** 草案亚盘 line 为「主让为负」；仓库显示口径 formatHandicap 为「主让为正」（雷速：+ 表示让球）。 */
-export const homeGives = (line: number | null | undefined): number | null => (line == null ? null : line === 0 ? 0 : -line)
-export const ahLineText = (line: number | null | undefined): string => formatHandicap(homeGives(line))
+/** 亚盘 line 主队让球为正（与现有接口、formatHandicap 一致）；显示时让球方带 +。 */
+export const ahLineText = (line: number | null | undefined): string => formatHandicap(line)
 
 export const STATUS_TEXT: Record<Exclude<CellStatus, 'ok'>, string> = {
   pending: '未填写',
