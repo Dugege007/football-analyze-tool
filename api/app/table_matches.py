@@ -37,6 +37,7 @@ from app import collection_schedule as cs
 from app import db as app_db
 from app import kickoff_drift as kd
 from app import leak_suspect as leak
+from app import reason_codes
 from app import fundamentals as fund  # 0.3.21
 from app import team_pending as tp  # 2026-10-14 待确认球队
 from app import open_status as osx  # opening status and source fields (user rule 2026-10-10)
@@ -2725,6 +2726,10 @@ def _flat_row(item: dict) -> dict:
                 cell["move"] = {k: mv.get(k) for k in mv_keys}
     flat = {**{k: v for k, v in match.items()}, **flatten({k: v for k, v in src.items() if k != "match_id"})}
     flat.update(avg_details)
+    # 中文说明列按平铺后的原因列重新生成，保证每行列集合一致（原因列本身已由上面的模板保证一致）
+    flat = {k: v for k, v in flat.items() if not k.endswith("reason_zh")}
+    for k in [k for k in flat if k.endswith("reason") and (flat[k] is None or isinstance(flat[k], str))]:
+        flat[k + "_zh"] = reason_codes.zh(flat[k])
     flat["match_id"] = item["match_id"]
     flat["prediction_rationale"] = rationale
     flat["live"] = live
@@ -3109,6 +3114,13 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             "settlement_hidden_reason": set_hidden,
         })
 
+    # 2026-10-14：竞彩未开售胜平负的场次改原因代码；所有原因代码同时返回中文说明（前端不再维护对照表）
+    _not_on_sale = reason_codes.load_jc_not_on_sale()
+    for _it in items:
+        reason_codes.apply_jc_not_on_sale(_it, _not_on_sale)
+        # prediction 块要与单场预测接口完全一致，不加中文说明（扁平格式里仍有对应的 _zh 列）
+        _ann = reason_codes.annotate({k: v for k, v in _it.items() if k != "prediction"})
+        _it.update({k: v for k, v in _ann.items() if k.endswith("reason_zh")})
     out_items = items if fmt == "nested" else [_flat_row(i) for i in items]
     return {
         "meta": app_db.db_meta(),  # 0.3.18：db=live|v2d3、promoted、readonly
