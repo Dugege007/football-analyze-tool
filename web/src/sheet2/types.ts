@@ -139,6 +139,9 @@ export interface Row {
     /** Canonical team names from the backend, present for only some matches. */
     home_team_canonical?: string | null
     away_team_canonical?: string | null
+    /** True when the backend cannot identify the team yet; absent on backends without the field. */
+    home_team_pending_confirm?: boolean | null
+    away_team_pending_confirm?: boolean | null
     home_team: string | null
     away_team: string | null
     status: MatchStatus | null
@@ -150,6 +153,8 @@ export interface Row {
   jc_1x2: Phased<X1x2Cell>
   jc_hhad: Phased<JcHhadCell>
   result: {
+    /** Result status from the backend (nested format result.status); absent on backends that do not serve it yet. */
+    status?: 'finished' | 'refund' | 'postponed' | 'cancelled' | 'abandoned' | null
     home_goals: number | null
     away_goals: number | null
     total_goals: number | null

@@ -130,6 +130,7 @@ export function mapApiRow(it: Raw): Row {
     jc_hhad: mapHhad(it.jc_hhad),
     result: r
       ? {
+          status: typeof r.status === 'string' ? (r.status as NonNullable<Row['result']>['status']) : null,
           home_goals: r.home_goals ?? null,
           away_goals: r.away_goals ?? null,
           total_goals: r.total_goals ?? (r.home_goals != null && r.away_goals != null ? r.home_goals + r.away_goals : null),

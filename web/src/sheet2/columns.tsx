@@ -1,8 +1,17 @@
-import { teamAliasTip, teamCommon } from './teamName'
+import { isTeamPending, teamAliasTip, teamCommon } from './teamName'
 import { leagueShort } from './leagueShort'
 import type { ColDef, ColGroupDef, ICellRendererParams } from 'ag-grid-community'
 import { Tag, Tooltip } from 'antd'
 import type { ReactNode } from 'react'
+
+/** Small marker next to a team that is not yet identified; the hover says 待确认. */
+function PendingMark() {
+  return (
+    <Tooltip title="待确认">
+      <span className="team-pending-mark" style={{ marginLeft: 2, fontSize: 10, color: '#faad14', cursor: 'help', verticalAlign: 'super' }}>*</span>
+    </Tooltip>
+  )
+}
 import { formatPick } from '../api/pickFormat'
 import { alignClass, w, type WidthKey } from './columnWidths'
 import {
@@ -50,7 +59,31 @@ function kickoffText(iso: string | null): string {
   return `${p(bj.getUTCMonth() + 1)}-${p(bj.getUTCDate())} ${p(bj.getUTCHours())}:${p(bj.getUTCMinutes())}`
 }
 
-const finished = (r?: Row) => r?.match.status === 'finished' && r.result?.home_goals != null
+
+/**
+ * Void result statuses. result.status from the backend decides first; the older match.status values cancelled and postponed
+ * still apply when that field is absent, so nothing changes on backends without it.
+ * For these matches the score and settlement are null, so the result columns show grey text instead of an empty result.
+ */
+const VOID_TEXT: Record<string, { text: string; tip?: string }> = {
+  refund: { text: '退款', tip: '竞彩网标为无效场次，不参与结算。' },
+  postponed: { text: '推迟' },
+  cancelled: { text: '取消' },
+  abandoned: { text: '腰斩' },
+}
+function voidOf(r?: Row): { text: string; tip?: string } | null {
+  const rs = r?.result?.status
+  if (rs && VOID_TEXT[rs]) return VOID_TEXT[rs]
+  const ms = r?.match.status
+  return ms === 'cancelled' || ms === 'postponed' ? VOID_TEXT[ms] : null
+}
+function VoidText({ r }: { r?: Row }) {
+  const v = voidOf(r)
+  if (!v) return null
+  const el = <span className="t-gray">{v.text}</span>
+  return v.tip ? <Tooltip title={v.tip}>{el}</Tooltip> : el
+}
+const finished = (r?: Row) => !voidOf(r) && r?.match.status === 'finished' && r.result?.home_goals != null
 
 // ───────────── 基本数据列 ─────────────
 export function baseCols(): Col[] {
@@ -87,10 +120,10 @@ function baseChildren(): Col[] {
       cellRenderer: (p: P) => <span title={p.data?.match.league ?? undefined}>{p.value}</span> },
     { colId: 'home', headerName: '主队', width: w('base.home'), pinned: 'left', valueGetter: (p) => teamCommon(p.data?.match.home_team, p.data?.match.home_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league)) ?? '-',
       // The cell shows the common name; hovering lists the other names of the same team.
-      cellRenderer: (p: P) => <span title={teamAliasTip(p.data?.match.home_team, p.data?.match.home_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league))}>{p.value}</span> },
+      cellRenderer: (p: P) => <span title={teamAliasTip(p.data?.match.home_team, p.data?.match.home_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league))}>{p.value}{isTeamPending(p.data?.match.home_team, p.data?.match.home_team_canonical, p.data?.match.home_team_pending_confirm) && <PendingMark />}</span> },
     { colId: 'away', headerName: '客队', width: w('base.away'), pinned: 'left', valueGetter: (p) => teamCommon(p.data?.match.away_team, p.data?.match.away_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league)) ?? '-',
       // The cell shows the common name; hovering lists the other names of the same team.
-      cellRenderer: (p: P) => <span title={teamAliasTip(p.data?.match.away_team, p.data?.match.away_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league))}>{p.value}</span> },
+      cellRenderer: (p: P) => <span title={teamAliasTip(p.data?.match.away_team, p.data?.match.away_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league))}>{p.value}{isTeamPending(p.data?.match.away_team, p.data?.match.away_team_canonical, p.data?.match.away_team_pending_confirm) && <PendingMark />}</span> },
     {
       colId: 'score', headerName: '比分', width: w('base.score'), pinned: 'left',
       cellRenderer: (p: P) => {
@@ -98,20 +131,21 @@ function baseChildren(): Col[] {
         if (!r) return null
         const s = r.match.status
         const sc = r.result?.home_goals != null && r.result?.away_goals != null ? `${r.result.home_goals}-${r.result.away_goals}` : null
+        if (voidOf(r)) return <VoidText r={r} />
         if (s === 'not_started') return <span className="t-gray">未开始</span>
         if (s === 'live') return <span className="t-yellow">{sc ?? '比赛中'}</span>
         if (s === 'finished') return sc ?? '-'
         return '-'
       },
     },
-    { colId: 'goals', headerName: '总进球', width: w('base.goals'), pinned: 'left', valueGetter: (p) => (finished(p.data) ? (p.data!.result!.total_goals ?? '-') : '-') },
+    { colId: 'goals', headerName: '总进球', width: w('base.goals'), pinned: 'left', valueGetter: (p) => (finished(p.data) ? (p.data!.result!.total_goals ?? '-') : '-'),
+      cellRenderer: (p: P) => (voidOf(p.data) ? <VoidText r={p.data} /> : p.value) },
     {
       colId: 'outcome', headerName: '赛果', width: w('base.outcome'), pinned: 'left',
       cellRenderer: (p: P) => {
         const r = p.data
         if (!r) return null
-        if (r.match.status === 'cancelled') return <span className="t-gray">取消</span>
-        if (r.match.status === 'postponed') return <span className="t-gray">推迟</span>
+        if (voidOf(r)) return <VoidText r={r} />
         if (!finished(r)) return '-'
         const gd = r.result!.home_goals! - r.result!.away_goals!
         return gd > 0 ? <span className="t-red">胜</span> : gd < 0 ? <span className="t-green">负</span> : '平'
@@ -229,9 +263,12 @@ interface TripleSpec {
 /** Chinese names of the alert levels for the hover text. */
 const ALERT_NAME: Record<string, string> = { high: '高', medium: '中', light: '轻' }
 
+/** Hover text for cells with a null alert and a null or 0 sample count (wording from the backend change, 2026-10-14). */
+const NO_ALERT_TEXT = '盘口或抓取时刻缺失的格子不计算预警。'
+
 /** Hover text for the sample size behind an alert, written as a complete sentence. */
 function sampleText(n: number): string {
-  return n === 0 ? '样本数：0，这一格没有抓取时刻，所以没有可用的历史样本。' : `样本数：${n}。`
+  return n === 0 ? NO_ALERT_TEXT : `样本数：${n}。`
 }
 
 /** 一个阶段一组三列（主水 / 盘口 / 客水 等）；格子没有数据时左列跨三列显示状态文字。 */
@@ -260,7 +297,7 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
         if (i !== 0) return null
         // A cell without data still shows its sample size, for example 0 when there is no capture time.
         const emptyN = t.subs.some((x) => x.alert) ? ((cell as { alert_sample_n?: number | null } | undefined)?.alert_sample_n ?? null) : null
-        const stxTip = <StatusText st={st} reason={st === 'insufficient' ? null : ((cell?.cell_status_reason as string) ?? null)} extra={emptyN != null ? sampleText(emptyN) : null} />
+        const stxTip = <StatusText st={st} reason={st === 'insufficient' ? null : ((cell?.cell_status_reason as string) ?? null)} extra={t.subs.some((x) => x.alert) ? (emptyN ? sampleText(emptyN) : NO_ALERT_TEXT) : null} />
         return t.avg && cell?.avg_detail ? <AvgTip d={cell.avg_detail as AvgDetail} market={t.avg} phase={t.phase}>{stxTip}</AvgTip> : stxTip
       }
       const v = cell[sub.field] as number | null
@@ -270,7 +307,7 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
       // On alert cells, hovering shows the alert level and the sample size when the backend provides them.
       const sampleN = sub.alert ? ((cell as { alert_sample_n?: number | null }).alert_sample_n ?? null) : null
       const alertLv = sub.alert ? ((cell as { alert?: string | null }).alert ?? null) : null
-      const tipParts = [alertLv && t.phase !== 'open' ? `预警等级：${ALERT_NAME[alertLv] ?? alertLv}。` : null, sampleN == null ? null : sampleText(sampleN)].filter(Boolean)
+      const tipParts = [alertLv && t.phase !== 'open' ? `预警等级：${ALERT_NAME[alertLv] ?? alertLv}。` : null, sub.alert && !alertLv && !sampleN ? NO_ALERT_TEXT : sampleN == null ? null : sampleText(sampleN)].filter(Boolean)
       const bodyTip = tipParts.length ? <Tooltip title={tipParts.join('')}><span className="alert-sample-tip">{body}</span></Tooltip> : body
       return t.avg ? <AvgTip d={cell.avg_detail as AvgDetail | null | undefined} market={t.avg} phase={t.phase}>{bodyTip}</AvgTip> : bodyTip
     },
@@ -324,6 +361,7 @@ function resultCol(book: Book, market: Market, first: boolean): ColDef<Row> {
     cellClass: [alignClass(`res.${market}`), first ? SEC : ''].join(' '),
     cellRenderer: (p: P) => {
       const r = p.data
+      if (voidOf(r)) return <VoidText r={r} />
       if (!r || !finished(r)) return '-'
       const bb = r.result?.by_book
       if (!bb) return <StatusText st="unavailable" />
@@ -376,6 +414,7 @@ export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
       colId: 'jc.res.had', headerName: '胜平负赛果', width: w('jc.res.had'), headerClass: `al-hdr ${alignClass('jc.res.had')} ${SEC}`, cellClass: `${alignClass('jc.res.had')} ${SEC}`,
       cellRenderer: (p: P) => {
         const r = p.data
+        if (voidOf(r)) return <VoidText r={r} />
         if (!r || !finished(r)) return '-'
         const h = r.result?.jc?.had
         if (!h?.side) return <StatusText st={h?.cell_status ?? 'unavailable'} />
@@ -388,6 +427,7 @@ export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
       colId: 'jc.res.hhad', headerName: '让球胜平负赛果', width: w('jc.res.hhad'), headerClass: `al-hdr ${alignClass('jc.res.hhad')}`, cellClass: alignClass('jc.res.hhad'),
       cellRenderer: (p: P) => {
         const r = p.data
+        if (voidOf(r)) return <VoidText r={r} />
         if (!r || !finished(r)) return '-'
         const h = r.result?.jc?.hhad
         if (!h?.side) return <StatusText st={h?.cell_status ?? 'unavailable'} />

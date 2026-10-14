@@ -7,12 +7,15 @@
  * Aliases that are valid only in some leagues come from LEAGUE_SCOPED below.
  * Updated on 2026-10-14 from the finalised standard approved by 分析师:
  * odds-data/research/name-standard-2026-10-14/teams.csv (with README.md); every alias maps to its canonical name,
- * and the aliases appear in the hover. 杜连斯 shows as 托伦斯, a guess that is not yet confirmed.
+ * and the aliases appear in the hover. Teams that cannot be identified keep their source name and get a 待确认 marker (see PENDING_TEAMS).
+ * 济州SK FC is an alias of 济州SK (one team), per 分析师 on 2026-10-14; teams.csv did not yet list it when copied.
  * Copied by hand into this file on 2026-10-14. When the backend API returns standard names, delete this table and read the API field instead.
- * Teams in the KuPS group (the merge waits for user approval) and teams with no record show the source name unchanged;
+ * PAUN古比斯 is listed in the merge_pending_aliases column, not as an alias, so it keeps its source name until the user approves the merge;
+ * teams in the KuPS group and teams with no record show the source name unchanged;
  * they are listed in web/docs/team-names-pending.csv.
  */
 const TEAM_DISPLAY: Record<string, string> = {
+  "KuPS": "古比斯",
   "AC奥卢": "奥卢",
   "Al Wasl": "瓦斯尔",
   "Beijing Guoan": "北京国安",
@@ -49,8 +52,8 @@ const TEAM_DISPLAY: Record<string, string> = {
   "圣吉卢瓦斯联合": "圣吉罗斯",
   "圣吉罗斯联": "圣吉罗斯",
   "大田韩亚市民": "大田市民",
-  "杜连斯": "托伦斯",
   "柏雷索尔": "柏太阳神",
+  "济州SK FC": "济州SK",
   "济州联": "济州SK",
   "浦项制铁": "浦项铁人",
   "科里迪巴": "科里蒂巴",
@@ -90,7 +93,7 @@ const TEAM_OTHER_NAMES: Record<string, string[]> = {
   "北京国安": ["Beijing Guoan"],
   "南安普顿": ["南安普敦"],
   "卡尔马": ["卡马尔"],
-  "古比斯": ["PAUN古比斯"],
+  "古比斯": ["KuPS"],
   "吉达联合": ["伊蒂哈德"],
   "哈姆斯塔德": ["哈尔姆斯塔德", "哈尔姆斯达斯"],
   "哥德堡": ["IFK哥德堡"],
@@ -111,7 +114,6 @@ const TEAM_OTHER_NAMES: Record<string, string[]> = {
   "巴黎圣日耳曼": ["巴黎圣日尔曼"],
   "布鲁日": ["Club Brugge"],
   "帕特博恩": ["帕德博恩"],
-  "托伦斯": ["杜连斯", "Torreense（推测）"],
   "拉普拉塔大学生": ["Estudiantes"],
   "拉科鲁尼亚体育": ["拉科鲁尼亚"],
   "曼城": ["曼彻斯特城"],
@@ -127,7 +129,7 @@ const TEAM_OTHER_NAMES: Record<string, string[]> = {
   "沙尔克": ["沙尔克04"],
   "波兹南莱赫": ["Lech Poznan"],
   "泰港": ["Port FC"],
-  "济州SK": ["济州联", "Jeju SK"],
+  "济州SK": ["济州SK FC", "济州联", "Jeju SK"],
   "浦项铁人": ["浦项制铁"],
   "瓦斯尔": ["阿尔瓦斯尔SC", "阿尔瓦斯尔", "Al Wasl"],
   "瓦斯特拉斯": ["韦斯特罗斯"],
@@ -186,4 +188,20 @@ export function teamAliasTip(name: string | null | undefined, canonical?: string
   if (canonical) others.add(canonical)
   others.delete(shown)
   return others.size ? `其他名称：${[...others].join('、')}` : undefined
+}
+
+/**
+ * Teams that cannot be identified yet. Rule from the user via 分析师 on 2026-10-14: such a team shows its source name
+ * with a small 待确认 marker next to it.
+ * The API field match.home_team_pending_confirm / match.away_team_pending_confirm (backend branch
+ * backend/team-pending-confirm-20261014) decides first. Only when that field is absent does this fallback list apply,
+ * taken from the pending_confirm column of odds-data/research/name-standard-2026-10-14/teams.csv (rows marked true) on 2026-10-14.
+ * Delete this set once the API field is served everywhere.
+ */
+const PENDING_TEAMS = new Set<string>(['杜连斯'])
+
+/** Returns true when the team is not yet identified and should carry the 待确认 marker. */
+export function isTeamPending(name: string | null | undefined, canonical?: string | null, apiPending?: boolean | null): boolean {
+  if (typeof apiPending === 'boolean') return apiPending
+  return [name, canonical].some((n) => !!n && PENDING_TEAMS.has(n.trim()))
 }
