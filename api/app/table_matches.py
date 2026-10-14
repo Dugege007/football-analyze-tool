@@ -109,6 +109,7 @@ X1X2_RETURN_HL_WATER = "real_only"  # 欧赔返还率基准 / 上色只认 water
 # 识别：odds_snapshot.source 或 odds_asian.extras.source ∈ 下列；通常 water_src=actual
 MACAU_5DF_SOURCES = frozenset({"5df_macauslot_history", "5dollar_history"})
 MACAU_5DF_BOOK_KEY = "macau_5df"
+MACAU_MANUAL_BOOK_KEY = "macau_manual"  # 旧手工列的新键名（分析师 2026-10-14 确认）
 MACAU_5DF_SOURCE_LABEL = "5df"
 
 
@@ -2447,6 +2448,21 @@ def _stable(item: dict) -> dict:
             for k in ("kelly", "kelly_multi_avg"):
                 if c.get(k) is None:
                     c[k] = dict(tri)
+    # 旧手工列 ah.macau_manual：补齐和其他机构相同的固定列（扁平格式每行列集合一致）。
+    mm = it.get("ah", {}).get(MACAU_MANUAL_BOOK_KEY)
+    if isinstance(mm, dict):
+        for rp in REAL_PHASES:
+            if mm.get(rp) is None:
+                mm[rp] = _blank(AhCell, _RR_KEYS + _OPEN_KEYS)
+        for ph in PHASES + REAL_PHASES:
+            c = mm.get(ph)
+            if isinstance(c, dict) and c.get("tier_cross") is None:
+                c["tier_cross"] = {"kind": None, "from": {"phase": None, "line": None, "home": None, "away": None},
+                                   "to": {"phase": None, "line": None, "home": None, "away": None}, "sides": None}
+        if mm.get("last_prematch") is None:
+            mm["last_prematch"] = dict(live_blank)
+        for k in _OPEN_KEYS:
+            mm.setdefault("open", {}).setdefault(k, None)
     # 0.3.22：flat 列固定 — macau_5df 三阶段 + 空 mid_real/close_real/last_prematch
     m5 = it.get("ah", {}).get(MACAU_5DF_BOOK_KEY)
     if not isinstance(m5, dict):
@@ -2491,6 +2507,15 @@ def _stable(item: dict) -> dict:
         it["settlement"] = _blank(Settlement)
     _fill_posthoc_flags(it)
     return it
+
+
+def _apply_alert(cells: dict) -> None:
+    """alert 先取现有的 fallback_hl_level（分析师 2026-10-14 确认）；没有这个字段的格子为空值。
+    放在本模块里，因为预警字段只允许在数据表接口里使用（见 test_highlight_fields_not_used_by_strategy_code）。"""
+    for ph in PHASES:
+        c = cells.get(ph)
+        if isinstance(c, dict):
+            c["alert"] = c.get("fallback_hl_level")
 
 
 def _flat_row(item: dict) -> dict:
@@ -2709,6 +2734,11 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
         ah_out[MACAU_5DF_BOOK_KEY]["mid_real"] = None
         ah_out[MACAU_5DF_BOOK_KEY]["close_real"] = None
         ah_out[MACAU_5DF_BOOK_KEY]["last_prematch"] = None
+        # 分析师 2026-10-14 确认：页面的澳门一律用 5DollarFootballAPI 来源。ah.macau 改为指向它，
+        # 旧手工列改名为 ah.macau_manual（只做存档，页面不读）；ah.macau_5df 暂时保留为同一个对象的别名，
+        # 方便还在读旧键的页面过渡，过渡结束后再删除。
+        ah_out[MACAU_MANUAL_BOOK_KEY] = ah_out["macau"]
+        ah_out["macau"] = ah_out[MACAU_5DF_BOOK_KEY]
         for _b, _blk in ah_out.items():
             if isinstance(_blk, dict):
                 finalize_ah_open(d, mpk, _blk.get("open"), _b, kick, row["competition_name"], eff_as_of, trunc_table,
@@ -2805,6 +2835,12 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                     for _ph in PHASES + REAL_PHASES:
                         avg_cells.apply_cell_status(_mk, _ph.replace("_real", ""), _blk.get(_ph), kick, sched,
                                                     eff_as_of)
+        # 升降 move 与预警 alert（约定第 4 节、第 2 节，分析师 2026-10-14 确认）：已有格子和新格子同一套规则。
+        for _mk, _blk_all in (("ah", ah_out), ("x1x2", x_out), ("ou", ou_out)):
+            for _b, _blk in _blk_all.items():
+                if isinstance(_blk, dict) and _b != "avg":
+                    avg_cells.apply_moves(_mk, _blk)
+                    _apply_alert(_blk)
         for _ph in PHASES:
             avg_cells.apply_cell_status("jc_1x2", _ph, jc.get(_ph), kick, sched, eff_as_of)
             avg_cells.apply_cell_status("jc_hhad", _ph, jc_hhad.get(_ph), kick, sched, eff_as_of)

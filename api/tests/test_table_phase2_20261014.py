@@ -74,7 +74,11 @@ def test_move_rules():
     assert ou["mid"]["move"] == {"compare_to": "open", "line": "flat", "left": "flat", "right": "flat"}
     assert ou["close"]["move"] == {"compare_to": "mid", "line": "flat", "left": "up", "right": "down"}
     ah = out["plain"]["ah"]["bet365"]
-    assert ah["mid"]["move"]["line"] == "up"  # 主让半球升到主让半一
+    # 盘口有变化（主让半球升到主让半一）：只判盘口，水位记为换盘不比较。
+    assert ah["mid"]["move"] == {"compare_to": "open", "line": "up", "left": "not_comparable",
+                                 "right": "not_comparable"}
+    # 盘口没变：水位按数值比较，不设阈值（0.90 和 0.90 为 flat）。
+    assert ah["close"]["move"] == {"compare_to": "mid", "line": "flat", "left": "flat", "right": "flat"}
     x = out["plain"]["x1x2"]["bet365"]["mid"]["move"]
     assert x == {"compare_to": "open", "line": None, "left": "down", "mid": "up", "right": "up"}
 
@@ -126,3 +130,78 @@ def test_apply_cell_status_existing_cells():
     acl.apply_cell_status("ah", "close", keep, KICK, SCHED, late)
     assert keep["cell_status"] == "insufficient"
     acl.apply_cell_status("ah", "close", None, KICK, SCHED, late)  # 空格子不报错
+
+
+def test_tiny_water_change_counts():
+    rows = _full_rows()
+    for r in rows:
+        if r["book"] == "pinnacle" and r["market"] == "ou" and r["point"] == "mid":
+            r["water_over"] = 0.9001
+    out = acl.build_tables(_data(rows), 1, KICK, SCHED, KICK + timedelta(hours=3), PLAIN)
+    assert out["plain"]["ou"]["pinnacle"]["mid"]["move"]["left"] == "up"
+
+
+def test_ou_line_change_not_comparable():
+    rows = _full_rows()
+    for r in rows:
+        if r["book"] == "crown" and r["market"] == "ou" and r["point"] == "close":
+            r["line"] = 2.25
+    out = acl.build_tables(_data(rows), 1, KICK, SCHED, KICK + timedelta(hours=3), PLAIN)
+    assert out["plain"]["ou"]["crown"]["close"]["move"] == {"compare_to": "mid", "line": "down",
+                                                           "left": "not_comparable", "right": "not_comparable"}
+
+
+# ---- 研究副本上的整表检查（本机没有副本时跳过） ----
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from app import table_matches as tm
+
+V2D3_DB = Path("/workspace/match-analysis-api/data/v2d3/app.db")
+
+
+@pytest.fixture(scope="module")
+def v2d3_table():
+    if not V2D3_DB.exists():
+        pytest.skip("本机没有研究副本 v2d3")
+    conn = sqlite3.connect(f"file:{V2D3_DB}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return tm.build_table(conn, date_from="2000-01-01", date_to="2099-12-31", scope="all", strategy="none",
+                          channel="rule", include_live="none", settlement_version=None, as_of=None,
+                          baseline_window_days=None, baseline_min_n=20, limit=100000, offset=0)
+
+
+def test_v2d3_macau_rename(v2d3_table):
+    for it in v2d3_table["items"]:
+        ah = it["ah"]
+        assert ah["macau"] is ah["macau_5df"]  # 别名指向同一列
+        assert "macau_manual" in ah
+        for ph in ("open", "mid", "close"):
+            c = ah["macau"][ph]
+            assert c.get("book_lane") in (None, "macau_5df")
+            if c.get("source"):
+                assert c["source"] == "5df"
+            m = ah["macau_manual"][ph]
+            assert m.get("book_lane") in (None, "macau_manual")
+
+
+def test_v2d3_moves_and_alert(v2d3_table):
+    seen_nc = 0
+    for it in v2d3_table["items"]:
+        for mk in ("ah", "ou", "x1x2"):
+            for b, blk in it[mk].items():
+                if b == "avg" or not isinstance(blk, dict):
+                    continue
+                assert blk["open"].get("move") is None
+                for ph in ("mid", "close"):
+                    c = blk[ph]
+                    mv = c.get("move")
+                    if c.get("cell_status") != "ok":
+                        assert mv is None
+                    if mv and mk != "x1x2" and mv["line"] != "flat":
+                        assert mv["left"] == mv["right"] == "not_comparable"
+                        seen_nc += 1
+                    assert c.get("alert") == c.get("fallback_hl_level")
+    assert seen_nc > 0

@@ -229,13 +229,26 @@ def ah_line_move(new: Any, old: Any) -> Optional[str]:
     return _cmp(new * sign, old * sign)
 
 
+NOT_COMPARABLE = "not_comparable"
+
+
 def apply_moves(market: str, cells: dict) -> None:
-    """按第 4 节给中盘、临盘写 move：中盘和初盘比，临盘和中盘比，中盘没有数据时临盘和初盘比。"""
+    """按约定第 4 节（分析师 2026-10-14 确认）给中盘、临盘写 move。
+
+    - 中盘和初盘比，临盘和中盘比；中盘没有数据时，临盘和初盘比。
+    - 亚盘、大小球：盘口有变化时只判断盘口升降，两边水位记为 not_comparable（换盘，不比较）；
+      盘口没有变化时，盘口记为 flat，水位按数值比较，任何变化都算，不设阈值。
+    - 欧赔没有盘口，三项赔率直接比较。
+    已有的格子和新格子都用这一个函数；格子状态不是 ok 的不参与比较，move 为空值。
+    """
     keys = PLAIN_KEYS[market]
 
     def has(c):
         return isinstance(c, dict) and c.get("cell_status") == "ok"
 
+    for ph in ("open", "mid", "close"):
+        if isinstance(cells.get(ph), dict):
+            cells[ph]["move"] = None
     for ph in ("mid", "close"):
         cur = cells.get(ph)
         if not has(cur):
@@ -247,10 +260,13 @@ def apply_moves(market: str, cells: dict) -> None:
         if market == "x1x2":
             cur["move"] = {"compare_to": ref_name, "line": None, "left": _cmp(cur["home"], ref["home"]),
                            "mid": _cmp(cur["draw"], ref["draw"]), "right": _cmp(cur["away"], ref["away"])}
+            continue
+        line_mv = ah_line_move(cur["line"], ref["line"]) if market == "ah" else _cmp(cur["line"], ref["line"])
+        if line_mv != "flat":
+            left = right = NOT_COMPARABLE
         else:
-            line_mv = ah_line_move(cur["line"], ref["line"]) if market == "ah" else _cmp(cur["line"], ref["line"])
-            cur["move"] = {"compare_to": ref_name, "line": line_mv, "left": _cmp(cur[keys[1]], ref[keys[1]]),
-                           "right": _cmp(cur[keys[2]], ref[keys[2]])}
+            left, right = _cmp(cur[keys[1]], ref[keys[1]]), _cmp(cur[keys[2]], ref[keys[2]])
+        cur["move"] = {"compare_to": ref_name, "line": line_mv, "left": left, "right": right}
 
 
 def build_tables(d: Any, mpk: int, kick: Optional[datetime], sched: dict, as_of: datetime,
