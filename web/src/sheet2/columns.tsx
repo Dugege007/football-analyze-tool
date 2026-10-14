@@ -53,7 +53,7 @@ export function baseCols(): Col[] {
     },
     { colId: 'jcNo', headerName: '编号', width: 82, pinned: 'left', valueGetter: (p) => p.data?.match.jc_id ?? '-', sort: 'asc', sortIndex: 1 },
     { colId: 'kickoff', headerName: '开赛时间', width: 104, pinned: 'left', valueGetter: (p) => kickoffText(p.data?.match.kickoff_at ?? null) },
-    { colId: 'league', headerName: '赛事', width: 84, valueGetter: (p) => p.data?.match.league ?? '-' },
+    { colId: 'league', headerName: '赛事', width: 84, pinned: 'left', valueGetter: (p) => p.data?.match.league ?? '-' },
     { colId: 'home', headerName: '主队', width: 96, pinned: 'left', valueGetter: (p) => p.data?.match.home_team ?? '-' },
     { colId: 'away', headerName: '客队', width: 96, valueGetter: (p) => p.data?.match.away_team ?? '-' },
     {
@@ -88,11 +88,8 @@ export function baseCols(): Col[] {
 // ───────────── 通用格子 ─────────────
 function StatusText({ st, reason }: { st: CellStatus; reason?: string | null }) {
   const t = STATUS_TEXT[st as Exclude<CellStatus, 'ok'>] ?? '无法获取'
-  return (
-    <span className="t-gray" title={reason ? (REASON_TEXT[reason] ?? reason) : undefined}>
-      {t}
-    </span>
-  )
+  const span = <span className="t-gray">{t}</span>
+  return reason ? <Tooltip title={REASON_TEXT[reason] ?? reason}>{span}</Tooltip> : span
 }
 
 function Mv({ text, dir, colored }: { text: string; dir: MoveDir | undefined; colored: boolean }) {
@@ -332,6 +329,8 @@ export function predCols(book: Book, blocks: PredBlock[]): ColGroupDef<Row> {
         if (!r.settlement_by_book) return <StatusText st="unavailable" />
         const s = r.settlement_by_book[book]?.ah
         if (!s) return <StatusText st="unavailable" />
+        // 是否标「按澳门结算」只看该玩法结算项的 fallback_book：亚盘、大小在多家平均下退回澳门时标注；
+        // 欧盘多家平均有平均值时按多家平均结算，后端返回 fallback_book=false，不标注。
         return (
           <>
             {SETTLE_TEXT[s.code]}
