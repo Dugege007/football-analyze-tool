@@ -176,7 +176,7 @@ def v2d3_table():
 def test_v2d3_macau_rename(v2d3_table):
     for it in v2d3_table["items"]:
         ah = it["ah"]
-        assert ah["macau"] is ah["macau_5df"]  # 别名指向同一列
+        assert "macau_5df" not in ah  # 别名已删除（2026-10-14）
         assert "macau_manual" in ah
         for ph in ("open", "mid", "close"):
             c = ah["macau"][ph]
@@ -205,3 +205,40 @@ def test_v2d3_moves_and_alert(v2d3_table):
                         seen_nc += 1
                     assert c.get("alert") == c.get("fallback_hl_level")
     assert seen_nc > 0
+
+
+def test_recorded_at_is_cn_for_utc_sources():
+    rows = _full_rows()
+    for r in rows:
+        if r["book"] == "crown" and r["point"] == "mid":
+            r["recorded_at"] = (KICK - timedelta(hours=8)).astimezone(timezone.utc).isoformat()
+            r["source"] = "5df_hist_asof_full"
+    out = acl.build_tables(_data(rows), 1, KICK, SCHED, KICK + timedelta(hours=3), PLAIN)
+    src = out["avg"]["ah"]["mid"]["avg_detail"]["sources"]["crown"]
+    assert src["recorded_at"].endswith("+08:00") and src["recorded_at"].startswith("2026-10-14T12:00")
+    assert out["plain"]["ou"]["crown"]["mid"]["recorded_at"].endswith("+08:00")
+
+
+def test_no_averaged_books_nulls_method_fields():
+    out = acl.build_tables(_data([]), 1, KICK, SCHED, KICK + timedelta(hours=3), PLAIN)
+    for mk in ("ah", "ou", "x1x2"):
+        det = out["avg"][mk]["open"]["avg_detail"]
+        assert det["devig_method"] is None and det["averaged_count"] == 0
+    det = out["avg"]["ah"]["open"]["avg_detail"]
+    assert det["goal_expectation"] is None and det["goal_expectation_source"] is None
+    # 有机构参与平均但不足 3 家：照常输出。
+    rows = [r for r in _full_rows() if r["book"] in ("macau", "crown")]
+    det = acl.build_tables(_data(rows), 1, KICK, SCHED, KICK + timedelta(hours=3), PLAIN)["avg"]["ah"]["open"]["avg_detail"]
+    assert det["averaged_count"] == 2 and det["devig_method"] == "power" and det["goal_expectation"] == 2.5
+
+
+def test_v2d3_alias_removed_and_alert_levels(v2d3_table):
+    import collections
+    lv = collections.Counter()
+    for it in v2d3_table["items"]:
+        assert "macau_5df" not in it["ah"]
+        for b, blk in it["ah"].items():
+            if isinstance(blk, dict) and b != "avg":
+                for ph in ("open", "mid", "close"):
+                    lv[blk[ph].get("alert")] += 1
+    assert lv["high"] + lv["medium"] + lv["light"] > 0

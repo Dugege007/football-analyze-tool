@@ -2464,10 +2464,11 @@ def _stable(item: dict) -> dict:
         for k in _OPEN_KEYS:
             mm.setdefault("open", {}).setdefault(k, None)
     # 0.3.22：flat 列固定 — macau_5df 三阶段 + 空 mid_real/close_real/last_prematch
-    m5 = it.get("ah", {}).get(MACAU_5DF_BOOK_KEY)
+    # 2026-10-14 起 ah.macau 就是 5DollarFootballAPI 列（别名 ah.macau_5df 已删除），固定列补在 ah.macau 上。
+    m5 = it.get("ah", {}).get("macau")
     if not isinstance(m5, dict):
         m5 = {}
-        it.setdefault("ah", {})[MACAU_5DF_BOOK_KEY] = m5
+        it.setdefault("ah", {})["macau"] = m5
     for ph in PHASES:
         if not isinstance(m5.get(ph), dict):
             m5[ph] = _blank(AhCell)
@@ -2730,15 +2731,14 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             if p != "open" and ts and open_ts_5:
                 c["minutes_since_open"] = round((ts - open_ts_5).total_seconds() / 60.0, 1)
         apply_water_move_flags(ah_macau_5df, d, mpk, "macau")  # tier 读 asian；异动只比 5df 格内 open→close
-        ah_out[MACAU_5DF_BOOK_KEY] = dict(ah_macau_5df)
-        ah_out[MACAU_5DF_BOOK_KEY]["mid_real"] = None
-        ah_out[MACAU_5DF_BOOK_KEY]["close_real"] = None
-        ah_out[MACAU_5DF_BOOK_KEY]["last_prematch"] = None
-        # 分析师 2026-10-14 确认：页面的澳门一律用 5DollarFootballAPI 来源。ah.macau 改为指向它，
-        # 旧手工列改名为 ah.macau_manual（只做存档，页面不读）；ah.macau_5df 暂时保留为同一个对象的别名，
-        # 方便还在读旧键的页面过渡，过渡结束后再删除。
+        _macau_5df_blk = dict(ah_macau_5df)
+        _macau_5df_blk["mid_real"] = None
+        _macau_5df_blk["close_real"] = None
+        _macau_5df_blk["last_prematch"] = None
+        # 分析师 2026-10-14 确认：页面的澳门一律用 5DollarFootballAPI 来源。ah.macau 指向它，
+        # 旧手工列改名为 ah.macau_manual（只做存档，页面不读）。原来的别名 ah.macau_5df 已删除（前端已只读 ah.macau）。
         ah_out[MACAU_MANUAL_BOOK_KEY] = ah_out["macau"]
-        ah_out["macau"] = ah_out[MACAU_5DF_BOOK_KEY]
+        ah_out["macau"] = _macau_5df_blk
         for _b, _blk in ah_out.items():
             if isinstance(_blk, dict):
                 finalize_ah_open(d, mpk, _blk.get("open"), _b, kick, row["competition_name"], eff_as_of, trunc_table,
@@ -2916,11 +2916,11 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 "injury_known_empty": "only when source explicitly empty; never for missing fetch",
             },
             "macau_5df": {  # 0.3.22
-                "path": "ah.macau_5df.{open|mid|close}",
-                "parallel_to": "ah.macau",
-                "book_lane": {"ah.macau": "macau_manual", "ah.macau_5df": "macau_5df"},
+                "path": "ah.macau.{open|mid|close}",
+                "renamed_2026_10_14": "ah.macau 改为 5DollarFootballAPI 来源；旧手工列为 ah.macau_manual；别名 ah.macau_5df 已删除",
+                "book_lane": {"ah.macau": "macau_5df", "ah.macau_manual": "macau_manual"},
                 "source_label": "5df",
-                "primary_rule": "ah.macau = manual only (rule_legacy / pure legacy_import); 5DF water never on primary",
+                "primary_rule": "ah.macau = 5DollarFootballAPI only; manual quotes only in ah.macau_manual (archive, page does not read it)",
                 "identify": "odds_snapshot|odds_asian|timeline with source in 5df_macauslot_history|5dollar_history "
                             "or extras from_channel/from_point fill markers; doubt → macau_5df",
                 "same_lane_only": "water_move/tier_cross/return_rate highlight never cross macau ↔ macau_5df",

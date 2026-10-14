@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import statistics
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from app import avg_conversion as ac
@@ -39,6 +39,14 @@ def _parse(v: Any) -> Optional[datetime]:
         from app import collection_schedule as cs
         dt = dt.replace(tzinfo=cs.TZ_CN)
     return dt
+
+
+CN = timezone(timedelta(hours=8))
+
+
+def _cn_iso(t: Optional[datetime]) -> Optional[str]:
+    """记录时间一律输出东八区、带 +08:00 的写法（前端 2026-10-14 核对：历史补数原来输出的是 UTC）。"""
+    return t.astimezone(CN).isoformat() if t is not None else None
 
 
 def _usable_source(src: Any) -> bool:
@@ -109,7 +117,7 @@ def select_quotes(d: Any, mpk: int, market: str, phase: str, kick: Optional[date
             rank = (0 if r["source"] == "5df_live_opening" else 1, t.timestamp() if t else 0.0)
         else:
             rank = (_MIDCLOSE_PRIORITY.get(r["source"], 9), -(t.timestamp() if t else 0.0))
-        q.update(source=r["source"], recorded_at=t.isoformat() if t else None)
+        q.update(source=r["source"], recorded_at=_cn_iso(t))
         cands.setdefault(r["book"], []).append((rank, q))
     out = {b: min(v, key=lambda x: x[0])[1] for b, v in cands.items()}
     if phase == "open" and kick is not None:
@@ -128,7 +136,7 @@ def select_quotes(d: Any, mpk: int, market: str, phase: str, kick: Optional[date
                 continue
             q = _quote(market, r)
             if q is not None:
-                q.update(source=r["source"], recorded_at=t.isoformat())
+                q.update(source=r["source"], recorded_at=_cn_iso(t))
                 out[b] = q
     return out
 
@@ -152,6 +160,13 @@ def build_avg_cell(market: str, phase: str, quotes: dict[str, dict], missing: di
     if market == "ah":
         detail["goal_expectation"] = mu
         detail["goal_expectation_source"] = mu_source
+    if not detail["averaged_books"]:
+        # 没有任何一家参与平均（包括一家都没有数据、或有数据的全部被剔除）时，去水方法和总进球期望都没有用到，
+        # 输出空值（前端 2026-10-14 核对）。有机构参与平均、只是不足 3 家时，这些字段照常输出，反映已有明细的算法。
+        detail["devig_method"] = None
+        if market == "ah":
+            detail["goal_expectation"] = None
+            detail["goal_expectation_source"] = None
     keys = {"ah": ("line", "home_water", "away_water"), "ou": ("line", "over", "under"),
             "x1x2": ("home", "draw", "away")}[market]
     cell: dict[str, Any] = {k: None for k in keys}

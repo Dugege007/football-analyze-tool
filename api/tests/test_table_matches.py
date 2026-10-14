@@ -219,7 +219,7 @@ def test_actual_or_095_falls_back_without_macau_water(db, client):
 def test_missing_data_is_null_with_markers(db, client):
     d = _get(client, date_from="2026-06-01", date_to="2026-06-01")
     row = _row(d, "2026-06-01|一001")
-    mac = row["ah"]["macau"]
+    mac = row["ah"]["macau_manual"]
     assert mac["close"]["line"] == 0.0 and mac["close"]["basis"] == "legacy_import"
     assert mac["close"]["home_water"] is None and mac["close"]["water_source"] is None
     assert mac["close"]["return_rate"] is None
@@ -234,7 +234,7 @@ def test_missing_data_is_null_with_markers(db, client):
     assert row["multi_avg_prob"] is None
     assert row["ah"]["pinnacle"]["close"]["hidden_reason"] == "no_data"
     assert row["live"] == []  # 默认 include_live=none
-    assert row["ah"]["macau"]["last_prematch"] is None  # 现网无即时快照
+    assert row["ah"]["macau_manual"]["last_prematch"] is None  # 现网无即时快照
 
 
 def test_william_missing_match_is_null(db, client):
@@ -433,8 +433,8 @@ def test_snapshot_line_sign_and_real_phases(db, client):
     c.close()
     row = _row(_get(client, date_from="2026-06-01", date_to="2026-06-01"), "2026-06-01|一001")
     assert row["phase_exception"] is True
-    m = row["ah"]["macau"]
-    m5 = row["ah"]["macau_5df"]
+    m = row["ah"]["macau_manual"]
+    m5 = row["ah"]["macau"]
     assert m5["close"]["line"] == 0.25 and m5["close"]["basis"] == "asof_rule"  # API 负=主让 → 正=主让
     assert m5["close"]["water_source"] == "actual" and m5["close"]["target_at"] == "2026-06-01T22:00:00+08:00"
     assert m5["close"]["source"] == "5df" and m5["close"]["book_lane"] == "macau_5df"

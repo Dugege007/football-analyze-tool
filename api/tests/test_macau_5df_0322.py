@@ -1,4 +1,5 @@
-"""0.3.22：ah.macau 手工主列 + ah.macau_5df 并列；同 lane 异动；现网 macau_5df 空。"""
+"""2026-10-14 改名后：ah.macau 为 5DollarFootballAPI 列，旧手工列为 ah.macau_manual，别名 ah.macau_5df 已删除。
+0.3.22：ah.macau 手工主列 + ah.macau_5df 并列；同 lane 异动；现网 macau_5df 空。"""
 from __future__ import annotations
 
 import sys
@@ -62,9 +63,9 @@ def test_v2d3_macau_5df_mid_available(v2d3):
     d = r.json()
     assert d["api_version"] == "0.3.26"
     assert "macau_5df" in d["config"]
-    assert d["config"]["macau_5df"]["book_lane"]["ah.macau"] == "macau_manual"
+    assert d["config"]["macau_5df"]["book_lane"]["ah.macau"] == "macau_5df"  # 2026-10-14 改名
     it = next(x for x in d["items"] if x["match_id"] == JUNE_UID)
-    m5 = it["ah"]["macau_5df"]["mid"]
+    m5 = it["ah"]["macau"]["mid"]
     assert m5["available"] is True
     assert m5["source"] == "5df"
     assert m5["water_source"] == "actual"
@@ -72,7 +73,7 @@ def test_v2d3_macau_5df_mid_available(v2d3):
     assert m5["book_lane"] == "macau_5df"
     assert m5["home_water"] is not None
     # primary mid: manual never had mid → no_data / unavailable, no 5DF water
-    prim = it["ah"]["macau"]["mid"]
+    prim = it["ah"]["macau_manual"]["mid"]
     assert prim["book_lane"] == "macau_manual"
     assert prim.get("home_water") is None
     assert prim.get("water_source") is None
@@ -86,13 +87,13 @@ def test_v2d3_primary_open_close_manual_no_5df_water(v2d3):
     })
     it = next(x for x in r.json()["items"] if x["match_id"] == JUNE_UID)
     for ph in ("open", "close"):
-        prim = it["ah"]["macau"][ph]
+        prim = it["ah"]["macau_manual"][ph]
         assert prim["book_lane"] == "macau_manual"
         assert prim["available"] is True
         assert prim["line"] is not None
         assert prim.get("home_water") is None  # 手工无水位
         assert prim.get("water_source") is None
-        m5 = it["ah"]["macau_5df"][ph]
+        m5 = it["ah"]["macau"][ph]
         assert m5["available"] is True
         assert m5["source"] == "5df"
         assert m5["water_source"] == "actual"
@@ -107,11 +108,11 @@ def test_same_lane_no_cross_compare(v2d3):
     })
     it = next(x for x in r.json()["items"] if x["match_id"] == JUNE_UID)
     # 主列无水 → close.water_move_eligible 不会是 true（两侧都非 actual）
-    assert it["ah"]["macau"]["close"].get("water_move_eligible") in (None, False)
+    assert it["ah"]["macau_manual"]["close"].get("water_move_eligible") in (None, False)
     # 5df 列两侧 actual 且同盘时可 eligible
-    m5c = it["ah"]["macau_5df"]["close"]
+    m5c = it["ah"]["macau"]["close"]
     assert m5c["book_lane"] == "macau_5df"
-    if m5c.get("line") == it["ah"]["macau_5df"]["open"].get("line"):
+    if m5c.get("line") == it["ah"]["macau"]["open"].get("line"):
         assert m5c.get("water_move_eligible") is True
 
 
@@ -124,12 +125,12 @@ def test_live_macau_mid_no_data_and_5df_unavailable(live):
     d = r.json()
     assert d["api_version"] == "0.3.26"
     it = next(x for x in d["items"] if x["match_id"] == JUNE_UID)
-    prim = it["ah"]["macau"]
+    prim = it["ah"]["macau_manual"]
     assert prim["mid"]["available"] is False
     assert prim["mid"].get("hidden_reason") == "no_data"
     assert prim["open"]["available"] is True
     assert prim["open"].get("home_water") is None
-    m5 = it["ah"]["macau_5df"]
+    m5 = it["ah"]["macau"]
     for ph in ("open", "mid", "close"):
         assert m5[ph]["available"] is False
         assert m5[ph].get("hidden_reason") in ("no_data", None) or m5[ph]["available"] is False
@@ -141,7 +142,7 @@ def test_primary_shape_unchanged_keys(v2d3):
     r = c.get("/table/matches", params={
         "date_from": "2026-06-01", "date_to": "2026-06-01", "scope": "jc", "limit": 1,
     })
-    ah = r.json()["items"][0]["ah"]["macau"]["open"]
+    ah = r.json()["items"][0]["ah"]["macau_manual"]["open"]
     for k in ("line", "home_water", "away_water", "water_source", "basis", "source",
               "available", "hidden_reason", "recorded_at", "target_at"):
         assert k in ah
