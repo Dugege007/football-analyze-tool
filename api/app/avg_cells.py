@@ -164,6 +164,7 @@ def build_avg_cell(market: str, phase: str, quotes: dict[str, dict], missing: di
         # 没有任何一家参与平均（包括一家都没有数据、或有数据的全部被剔除）时，去水方法和总进球期望都没有用到，
         # 输出空值（前端 2026-10-14 核对）。有机构参与平均、只是不足 3 家时，这些字段照常输出，反映已有明细的算法。
         detail["devig_method"] = None
+        detail["conversion_model"] = None  # 分析师 2026-10-14 决定：和另外三个字段一样为空值
         if market == "ah":
             detail["goal_expectation"] = None
             detail["goal_expectation_source"] = None

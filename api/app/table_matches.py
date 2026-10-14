@@ -783,7 +783,7 @@ def build_ah_cell(d: _Data, mpk: int, book: str, phase: str, sched: dict,
             "recorded_at": _iso(rec),
             "target_at": _iso(_to_cn(snap["target_at"])) if phase != "open" else None,
             "basis": basis, "source": f"odds_snapshot/{snap['channel']}/{snap['point']}",
-            "available": True,
+            "available": True, "_source_code": _row_source(snap),
             **CELL_POSTHOC_DEFAULTS, **phase_feature_flags(snap),  # 0.3.20：列或 extras；缺省 features_ok=true
         })
         _set_water_fields(cell, snap["water_src"])
@@ -864,7 +864,7 @@ def build_ah_macau_manual_cell(d: _Data, mpk: int, phase: str, sched: dict,
             "recorded_at": _iso(rec),
             "target_at": _iso(_to_cn(snap["target_at"])) if phase != "open" and quote_time else None,
             "basis": basis, "source": f"odds_snapshot/{snap['channel']}/{snap['point']}",
-            "available": True, "book_lane": "macau_manual",
+            "available": True, "book_lane": "macau_manual", "_source_code": _row_source(snap),
             **CELL_POSTHOC_DEFAULTS, **phase_feature_flags(snap),
         })
         # 手工主列：若行上意外带着 5DF actual 水，剥掉（防御）
@@ -933,6 +933,8 @@ def build_macau_5df_cell(d: _Data, mpk: int, phase: str, sched: dict,
             first = None
         if first is not None and first[1] == "seg":
             _fill_from_seg(cell, first[2], "asian")
+            cell["_source_path"] = cell.get("source")
+            cell["_source_code"] = _row_source(first[2])
             cell["source"] = MACAU_5DF_SOURCE_LABEL
             cell["book_lane"] = "macau_5df"
             _set_water_fields(cell, first[2]["water_src"] if "water_src" in first[2].keys() else "actual")
@@ -962,6 +964,7 @@ def build_macau_5df_cell(d: _Data, mpk: int, phase: str, sched: dict,
             "target_at": _iso(_to_cn(snap["target_at"])) if phase != "open" else None,
             "basis": basis,
             "source": MACAU_5DF_SOURCE_LABEL,
+            "_source_path": f"odds_snapshot/{snap['channel']}/{snap['point']}", "_source_code": _row_source(snap),
             "available": True,
             "book_lane": "macau_5df",
             **CELL_POSTHOC_DEFAULTS, **phase_feature_flags(snap),
@@ -984,6 +987,7 @@ def build_macau_5df_cell(d: _Data, mpk: int, phase: str, sched: dict,
                 "water_censored": (bool(r["water_censored"]) if r["water_censored"] is not None else None),
                 "recorded_at": None, "target_at": None,
                 "basis": "asof_rule", "source": MACAU_5DF_SOURCE_LABEL, "available": True,
+                "_source_path": "odds_asian", "_source_code": _loads(r["extras_json"]).get("source") or None,
                 "book_lane": "macau_5df",
             })
             _set_water_fields(cell, r["water_src"] or "actual")
@@ -1045,6 +1049,7 @@ def _fill_x_from_snap(cell: dict, r: sqlite3.Row, phase: str, as_of: datetime,
         "recorded_at": _iso(rec), "fetched_at": None if quote_time else _iso(rec_raw),
         "target_at": _iso(_to_cn(r["target_at"])) if (quote_time and phase != "open") else None,
         "basis": basis, "source": f"odds_snapshot/{r['channel']}/{r['point']}", "available": True,
+        "_source_code": _row_source(r),
         "water_source": _x1x2_water_source(r),
         **CELL_POSTHOC_DEFAULTS, **phase_feature_flags(r),  # 0.3.20
     })
@@ -1777,6 +1782,7 @@ class AhCell(_M_):
     target_at: Optional[str] = None
     basis: Optional[str] = None
     source: Optional[str] = None
+    source_path: Optional[str] = None  # 原来的取数路径，只供排查，页面不显示（2026-10-14）
     available: bool = False
     hidden_reason: Optional[str] = None
     minutes_since_open: Optional[float] = None
@@ -1837,6 +1843,7 @@ class LiveEntry(_M_):
     water_source: Optional[str] = None
     is_inplay: bool = False
     source: Optional[str] = None
+    source_path: Optional[str] = None  # 原来的取数路径，只供排查，页面不显示（2026-10-14）
     # 0.3.19：即时（11:10）合并时间线 + 自采 live 行（只在 label=rule_1110 的条目上有值）
     origin: Optional[str] = None  # timeline | own_capture
     odds_source: Optional[str] = None  # hist（时间线回补）| live（前向自采）
@@ -1871,6 +1878,7 @@ class X1x2Cell(_M_):
     target_at: Optional[str] = None
     basis: Optional[str] = None
     source: Optional[str] = None
+    source_path: Optional[str] = None  # 原来的取数路径，只供排查，页面不显示（2026-10-14）
     available: bool = False
     hidden_reason: Optional[str] = None
     minutes_since_open: Optional[float] = None
@@ -1927,6 +1935,7 @@ class ApiClosing(_M_):
     fetched_at: Optional[str] = None
     basis: str = "api_closing"
     source: Optional[str] = None
+    source_path: Optional[str] = None  # 原来的取数路径，只供排查，页面不显示（2026-10-14）
     reference_only: bool = True
 
 
@@ -1963,6 +1972,7 @@ class JcCell(_M_):
     target_at: Optional[str] = None
     basis: Optional[str] = None
     source: Optional[str] = None
+    source_path: Optional[str] = None  # 原来的取数路径，只供排查，页面不显示（2026-10-14）
     available: bool = False
     hidden_reason: Optional[str] = None
     missing_reason: Optional[str] = None  # 0.3.21：collector_empty | legacy_home_only | jc_1x2_incomplete | …
@@ -2009,6 +2019,7 @@ class JcHhadCell(_M_):
     available: bool = False
     missing_reason: Optional[str] = None
     source: Optional[str] = None
+    source_path: Optional[str] = None  # 原来的取数路径，只供排查，页面不显示（2026-10-14）
     captured_at: Optional[str] = None
     recorded_at: Optional[str] = None
     target_at: Optional[str] = None
@@ -2510,13 +2521,75 @@ def _stable(item: dict) -> dict:
     return it
 
 
-def _apply_alert(cells: dict) -> None:
+def _apply_alert(cells: dict, market: str = "ah") -> None:
     """alert 先取现有的 fallback_hl_level（分析师 2026-10-14 确认）；没有这个字段的格子为空值。
     放在本模块里，因为预警字段只允许在数据表接口里使用（见 test_highlight_fields_not_used_by_strategy_code）。"""
     for ph in PHASES:
         c = cells.get(ph)
         if isinstance(c, dict):
-            c["alert"] = c.get("fallback_hl_level")
+            # 欧赔不显示预警（分析师 2026-10-14 决定）：样本不够 100 前不放宽门槛，欧赔格子 alert 一律为空值。
+            c["alert"] = None if market == "x1x2" else c.get("fallback_hl_level")
+
+
+def _row_source(r: Any) -> Optional[str]:
+    try:
+        return r["source"] if "source" in r.keys() else None
+    except (AttributeError, TypeError):
+        return None
+
+
+_SEG_PREFIX = "odds_timeline_seg/"
+_SNAP_PREFIX = "odds_snapshot/"
+_JC_HIST_PREFIX = "5df_odds_history/"
+
+
+def source_code_of(path: Optional[str], known: Optional[str] = None) -> Optional[str]:
+    """把取数路径换成约定 7.8 节的来源代码；已经是来源代码的原样返回。"""
+    if known:
+        return known
+    if path is None:
+        return None
+    if path.startswith(_SEG_PREFIX):
+        return path[len(_SEG_PREFIX):]
+    if path.startswith(_SNAP_PREFIX):
+        parts = path.split("/")
+        return parts[3] if len(parts) >= 4 and parts[3] else path
+    if path.startswith(_JC_HIST_PREFIX) and path.endswith(")") and "(" in path:
+        return path[path.rindex("(") + 1:-1]
+    if path == "odds_asian":
+        return "legacy_import"
+    if path.endswith("(home_only)"):
+        return "legacy_home_only"
+    return path
+
+
+def _normalize_one(c: dict) -> None:
+    known = c.pop("_source_code", None)
+    given_path = c.pop("_source_path", None)
+    src = c.get("source")
+    if src is None:
+        c["source_path"] = None
+        return
+    path = given_path or src
+    if src == MACAU_5DF_SOURCE_LABEL:
+        # 澳门列：写这一格实际的 5DollarFootballAPI 来源代码；查不到具体来源时保留总标签 5df。
+        code = known or (source_code_of(given_path) if given_path and given_path != "odds_asian" else src)
+    else:
+        code = source_code_of(src, known)
+    c["source"] = code
+    c["source_path"] = path if path != code else None
+
+
+def _normalize_sources(blk: Any) -> None:
+    """对一列（各阶段格子）统一来源字段；格子里的 api_closing 等参考子对象同样处理。"""
+    if not isinstance(blk, dict):
+        return
+    for ph, c in blk.items():
+        if isinstance(c, dict) and "source" in c:
+            _normalize_one(c)
+            for sub in c.values():
+                if isinstance(sub, dict) and "source" in sub and sub is not c.get("avg_detail"):
+                    _normalize_one(sub)
 
 
 def _flat_row(item: dict) -> dict:
@@ -2840,10 +2913,16 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             for _b, _blk in _blk_all.items():
                 if isinstance(_blk, dict) and _b != "avg":
                     avg_cells.apply_moves(_mk, _blk)
-                    _apply_alert(_blk)
+                    _apply_alert(_blk, _mk)
         for _ph in PHASES:
             avg_cells.apply_cell_status("jc_1x2", _ph, jc.get(_ph), kick, sched, eff_as_of)
             avg_cells.apply_cell_status("jc_hhad", _ph, jc_hhad.get(_ph), kick, sched, eff_as_of)
+        # 来源字段统一（分析师 2026-10-14 决定，约定 7.8 节）：source 一律写来源代码，原来的取数路径放进 source_path。
+        for _blk_all in (ah_out, x_out, ou_out):
+            for _blk in _blk_all.values():
+                _normalize_sources(_blk)
+        _normalize_sources(jc)
+        _normalize_sources(jc_hhad)
         items.append({
             "match_id": row["match_uid"],
             "match": {

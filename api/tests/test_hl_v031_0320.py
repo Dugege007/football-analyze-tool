@@ -221,7 +221,7 @@ def test_phase_feature_defaults_and_extras(db):
     row2 = next(i for i in it2["items"] if i["match_id"] == UID)
     c2 = row2["ah"]["macau"]["close"]
     assert c2["phase_pending"] is True and c2["features_ok"] is False and c2["phase_assign_late"] is True
-    assert c2["book_lane"] == "macau_5df" and c2["source"] == "5df"
+    assert c2["book_lane"] == "macau_5df" and c2["source"].startswith("5d")
 
 
 def test_kickoff_rev_column_when_present(db):

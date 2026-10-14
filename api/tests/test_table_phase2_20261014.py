@@ -182,9 +182,60 @@ def test_v2d3_macau_rename(v2d3_table):
             c = ah["macau"][ph]
             assert c.get("book_lane") in (None, "macau_5df")
             if c.get("source"):
-                assert c["source"] == "5df"
+                assert c["source"] in MACAU_CODES
             m = ah["macau_manual"][ph]
             assert m.get("book_lane") in (None, "macau_manual")
+
+
+MACAU_CODES = {"5df", "5df_live", "5df_live_opening", "5df_hist_asof_full", "5df_hist_asof", "5df_macauslot_history",
+               "5dollar_history", "5df_odds_snap"}
+# 约定 7.8 节的来源代码（2026-10-14 起所有格子的 source 都写这些代码）。
+SOURCE_CODES = MACAU_CODES | {"legacy_import", "legacy_home_only", "avg"}
+
+
+def test_v2d3_sources_are_codes(v2d3_table):
+    """所有格子的 source 是来源代码；原来的取数路径放进 source_path（分析师 2026-10-14 决定）。"""
+    import collections
+    seen = collections.Counter()
+    for it in v2d3_table["items"]:
+        for mk in ("ah", "ou", "x1x2"):
+            for b, blk in it[mk].items():
+                if not isinstance(blk, dict):
+                    continue
+                for ph in ("open", "mid", "close"):
+                    c = blk.get(ph)
+                    if not isinstance(c, dict):
+                        continue
+                    assert "_source_code" not in c and "_source_path" not in c
+                    if c.get("source") is None:
+                        continue
+                    assert "/" not in c["source"], (mk, b, ph, c["source"])
+                    assert c["source"] in SOURCE_CODES, (mk, b, ph, c["source"])
+                    seen[c["source"]] += 1
+                    if c.get("source_path") is not None:
+                        assert c["source_path"] != c["source"]
+    assert seen
+
+
+def test_source_code_of_paths():
+    from app import table_matches as tm
+    assert tm.source_code_of("odds_timeline_seg/5df_hist_asof_full") == "5df_hist_asof_full"
+    assert tm.source_code_of("odds_snapshot/rule/close") == "odds_snapshot/rule/close"
+    assert tm.source_code_of("odds_snapshot/rule/close", "5df_live") == "5df_live"
+    assert tm.source_code_of("odds_snapshot/actual/t1/5df_live") == "5df_live"
+    assert tm.source_code_of("5df_odds_history/chinasportslottery/1x2 (5dollar_history)") == "5dollar_history"
+    assert tm.source_code_of("odds_asian") == "legacy_import"
+    assert tm.source_code_of("odds_jc_home(home_only)") == "legacy_home_only"
+    assert tm.source_code_of("avg") == "avg"
+    c = {"source": "odds_snapshot/rule/mid", "_source_code": "5df_live"}
+    tm._normalize_one(c)
+    assert c == {"source": "5df_live", "source_path": "odds_snapshot/rule/mid"}
+    c = {"source": "5df", "_source_path": "odds_snapshot/rule/mid", "_source_code": "5df_macauslot_history"}
+    tm._normalize_one(c)
+    assert c == {"source": "5df_macauslot_history", "source_path": "odds_snapshot/rule/mid"}
+    c = {"source": "5df_live"}
+    tm._normalize_one(c)
+    assert c == {"source": "5df_live", "source_path": None}
 
 
 def test_v2d3_moves_and_alert(v2d3_table):
@@ -203,7 +254,10 @@ def test_v2d3_moves_and_alert(v2d3_table):
                     if mv and mk != "x1x2" and mv["line"] != "flat":
                         assert mv["left"] == mv["right"] == "not_comparable"
                         seen_nc += 1
-                    assert c.get("alert") == c.get("fallback_hl_level")
+                    if mk == "x1x2":
+                        assert c.get("alert") is None  # 欧赔不显示预警（分析师 2026-10-14 决定）
+                    else:
+                        assert c.get("alert") == c.get("fallback_hl_level")
     assert seen_nc > 0
 
 
@@ -224,6 +278,7 @@ def test_no_averaged_books_nulls_method_fields():
     for mk in ("ah", "ou", "x1x2"):
         det = out["avg"][mk]["open"]["avg_detail"]
         assert det["devig_method"] is None and det["averaged_count"] == 0
+        assert det["conversion_model"] is None
     det = out["avg"]["ah"]["open"]["avg_detail"]
     assert det["goal_expectation"] is None and det["goal_expectation_source"] is None
     # 有机构参与平均但不足 3 家：照常输出。

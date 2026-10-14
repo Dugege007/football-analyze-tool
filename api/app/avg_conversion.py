@@ -258,8 +258,9 @@ def _detail(*, majority, tie_break, median, voting, conv, excl, missing_list, mo
         "converted": legacy_converted,
         "min_books": MIN_BOOKS,
         # 第 3 版字段
-        "devig_method": DEVIG_METHOD,
-        "conversion_model": model,
+        # 没有任何一家参与平均时，去水方法和换算模型都没有用到，输出空值（分析师 2026-10-14 决定）。
+        "devig_method": DEVIG_METHOD if averaged else None,
+        "conversion_model": model if averaged else None,
         "voting_books": list(voting),
         "averaged_books": averaged,
         "excluded_books": excl,
