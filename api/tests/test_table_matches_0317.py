@@ -42,11 +42,17 @@ def table(request, tmp_path, monkeypatch):
     return request.param, r.json()
 
 
+# 2026-10-14：bet365 与多家平均列是接口约定第 3 版新增的列，格子字段由多家平均模块单独定义，不带初盘依据字段，这里不检查。
+NEW_TABLE_COLUMNS = ("bet365", "avg")
+
+
 def _opens(it):
     for b, ph in it["ah"].items():
-        yield ("ah", b), ph["open"]
+        if b not in NEW_TABLE_COLUMNS:
+            yield ("ah", b), ph["open"]
     for b, ph in it["x1x2"].items():
-        yield ("x1x2", b), ph["open"]
+        if b not in NEW_TABLE_COLUMNS:
+            yield ("x1x2", b), ph["open"]
     yield ("jc", "jc"), it["jc_1x2"]["open"]
 
 
