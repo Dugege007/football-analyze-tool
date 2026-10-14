@@ -28,7 +28,7 @@ interface Spec {
   away: string
   status: Row['match']['status']
   score?: [number, number]
-  /** 草案写法（主让为负）的初、中、临盘 */
+  /** 初、中、临盘，主队让球为正 */
   ahLines: [number, number, number]
   ouLines: [number, number, number]
   dir: '主' | '客' | null
@@ -40,30 +40,30 @@ interface Spec {
 
 const SPECS: Spec[] = [
   // 主让加深：主让 0.25 → 0.5 → 0.75（升盘，红字）
-  { id: '周三001', ko: '2026-10-14T19:00:00+08:00', league: '日职联', home: '鹿岛鹿角', away: '浦和红钻', status: 'finished', score: [2, 0], ahLines: [-0.25, -0.5, -0.75], ouLines: [2.25, 2.5, 2.5], dir: '主', alert: 'light' },
+  { id: '周三001', ko: '2026-10-14T19:00:00+08:00', league: '日职联', home: '鹿岛鹿角', away: '浦和红钻', status: 'finished', score: [2, 0], ahLines: [0.25, 0.5, 0.75], ouLines: [2.25, 2.5, 2.5], dir: '主', alert: 'light' },
   // 受让方变化：主让 0.25 → 平手 → 客让 0.25（跨让方，按深度：降后再升）
-  { id: '周三002', ko: '2026-10-14T20:30:00+08:00', league: '韩K联', home: '蔚山现代', away: '全北现代', status: 'finished', score: [1, 1], ahLines: [-0.25, 0, 0.25], ouLines: [2.5, 2.5, 2.25], dir: '客', alert: 'medium' },
+  { id: '周三002', ko: '2026-10-14T20:30:00+08:00', league: '韩K联', home: '蔚山现代', away: '全北现代', status: 'finished', score: [1, 1], ahLines: [0.25, 0, -0.25], ouLines: [2.5, 2.5, 2.25], dir: '客', alert: 'medium' },
   // 受让方变化：客让 0.5 → 主让 0.25（深度变浅，降盘）
-  { id: '周三003', ko: '2026-10-14T22:00:00+08:00', league: '英冠', home: '利兹联', away: '谢菲联', status: 'finished', score: [0, 1], ahLines: [0.5, 0.25, -0.25], ouLines: [2.75, 2.5, 2.5], dir: '主', alert: 'high', noCloseFor: ['bet365'] },
-  { id: '周三004', ko: '2026-10-14T23:30:00+08:00', league: '德甲', home: '多特蒙德', away: '斯图加特', status: 'live', score: [1, 0], ahLines: [-0.75, -0.75, -1], ouLines: [3, 3, 3.25], dir: '主' },
-  { id: '周三005', ko: '2026-10-15T01:00:00+08:00', league: '西甲', home: '皇家社会', away: '比利亚雷', status: 'not_started', ahLines: [-0.25, -0.25, -0.25], ouLines: [2.5, 2.5, 2.5], dir: null, missing: { william: 'pending', bet365: 'pending' } },
-  { id: '周三006', ko: '2026-10-15T02:45:00+08:00', league: '意甲', home: '那不勒斯', away: '拉齐奥', status: 'not_started', ahLines: [-0.5, -0.5, -0.5], ouLines: [2.25, 2.25, 2.25], dir: '客', missing: { crown: 'unavailable', william: 'unavailable', bet365: 'pending' } },
-  { id: '周三007', ko: '2026-10-15T03:00:00+08:00', league: '法甲', home: '里尔', away: '朗斯', status: 'cancelled', ahLines: [-0.25, -0.5, -0.5], ouLines: [2.5, 2.5, 2.5], dir: null },
-  { id: '周三008', ko: '2026-10-14T21:00:00+08:00', league: '荷甲', home: '阿贾克斯', away: '特温特', status: 'postponed', ahLines: [-1, -1, -1], ouLines: [3, 3, 3], dir: null },
-  { id: '周三009', ko: '2026-10-14T18:00:00+08:00', league: '澳超', home: '悉尼FC', away: '墨尔本城', status: 'finished', score: [3, 1], ahLines: [-0.5, -0.75, -0.75], ouLines: [2.75, 3, 3], dir: '主', noCloseFor: ['pinnacle', 'bet365'] },
-  { id: '周二012', ko: '2026-10-13T20:00:00+08:00', league: '世预赛', home: '中国', away: '印尼', status: 'finished', score: [2, 1], ahLines: [-0.75, -0.5, -0.25], ouLines: [2.25, 2.25, 2], dir: '主' },
-  { id: '周日004', ko: '2026-10-11T20:00:00+08:00', league: '挪超', home: '博德闪耀', away: '莫尔德', status: 'finished', score: [2, 2], ahLines: [-0.5, -0.5, -0.25], ouLines: [3, 3, 3.25], dir: '主' },
-  { id: '周六010', ko: '2026-10-10T22:00:00+08:00', league: '瑞超', home: '马尔默', away: '哈马比', status: 'finished', score: [0, 0], ahLines: [-0.25, -0.25, -0.25], ouLines: [2.5, 2.5, 2.5], dir: '客' },
-  { id: '周五003', ko: '2026-10-09T19:30:00+08:00', league: '日职联', home: '川崎前锋', away: '横滨水手', status: 'finished', score: [1, 2], ahLines: [0, 0.25, 0.25], ouLines: [2.75, 2.75, 3], dir: '客' },
-  { id: '周四001', ko: '2026-10-08T19:00:00+08:00', league: '亚冠', home: '上海海港', away: '光州', status: 'finished', score: [3, 0], ahLines: [-0.5, -0.75, -1], ouLines: [2.5, 2.75, 2.75], dir: '主' },
-  { id: '周一006', ko: '2026-10-12T22:00:00+08:00', league: '葡超', home: '本菲卡', away: '布拉加', status: 'finished', score: [1, 1], ahLines: [-0.75, -0.75, -0.75], ouLines: [2.75, 2.75, 2.75], dir: '客' },
+  { id: '周三003', ko: '2026-10-14T22:00:00+08:00', league: '英冠', home: '利兹联', away: '谢菲联', status: 'finished', score: [0, 1], ahLines: [-0.5, -0.25, 0.25], ouLines: [2.75, 2.5, 2.5], dir: '主', alert: 'high', noCloseFor: ['bet365'] },
+  { id: '周三004', ko: '2026-10-14T23:30:00+08:00', league: '德甲', home: '多特蒙德', away: '斯图加特', status: 'live', score: [1, 0], ahLines: [0.75, 0.75, 1], ouLines: [3, 3, 3.25], dir: '主' },
+  { id: '周三005', ko: '2026-10-15T01:00:00+08:00', league: '西甲', home: '皇家社会', away: '比利亚雷', status: 'not_started', ahLines: [0.25, 0.25, 0.25], ouLines: [2.5, 2.5, 2.5], dir: null, missing: { william: 'pending', bet365: 'pending' } },
+  { id: '周三006', ko: '2026-10-15T02:45:00+08:00', league: '意甲', home: '那不勒斯', away: '拉齐奥', status: 'not_started', ahLines: [0.5, 0.5, 0.5], ouLines: [2.25, 2.25, 2.25], dir: '客', missing: { crown: 'unavailable', william: 'unavailable', bet365: 'pending' } },
+  { id: '周三007', ko: '2026-10-15T03:00:00+08:00', league: '法甲', home: '里尔', away: '朗斯', status: 'cancelled', ahLines: [0.25, 0.5, 0.5], ouLines: [2.5, 2.5, 2.5], dir: null },
+  { id: '周三008', ko: '2026-10-14T21:00:00+08:00', league: '荷甲', home: '阿贾克斯', away: '特温特', status: 'postponed', ahLines: [1, 1, 1], ouLines: [3, 3, 3], dir: null },
+  { id: '周三009', ko: '2026-10-14T18:00:00+08:00', league: '澳超', home: '悉尼FC', away: '墨尔本城', status: 'finished', score: [3, 1], ahLines: [0.5, 0.75, 0.75], ouLines: [2.75, 3, 3], dir: '主', noCloseFor: ['pinnacle', 'bet365'] },
+  { id: '周二012', ko: '2026-10-13T20:00:00+08:00', league: '世预赛', home: '中国', away: '印尼', status: 'finished', score: [2, 1], ahLines: [0.75, 0.5, 0.25], ouLines: [2.25, 2.25, 2], dir: '主' },
+  { id: '周日004', ko: '2026-10-11T20:00:00+08:00', league: '挪超', home: '博德闪耀', away: '莫尔德', status: 'finished', score: [2, 2], ahLines: [0.5, 0.5, 0.25], ouLines: [3, 3, 3.25], dir: '主' },
+  { id: '周六010', ko: '2026-10-10T22:00:00+08:00', league: '瑞超', home: '马尔默', away: '哈马比', status: 'finished', score: [0, 0], ahLines: [0.25, 0.25, 0.25], ouLines: [2.5, 2.5, 2.5], dir: '客' },
+  { id: '周五003', ko: '2026-10-09T19:30:00+08:00', league: '日职联', home: '川崎前锋', away: '横滨水手', status: 'finished', score: [1, 2], ahLines: [0, -0.25, -0.25], ouLines: [2.75, 2.75, 3], dir: '客' },
+  { id: '周四001', ko: '2026-10-08T19:00:00+08:00', league: '亚冠', home: '上海海港', away: '光州', status: 'finished', score: [3, 0], ahLines: [0.5, 0.75, 1], ouLines: [2.5, 2.75, 2.75], dir: '主' },
+  { id: '周一006', ko: '2026-10-12T22:00:00+08:00', league: '葡超', home: '本菲卡', away: '布拉加', status: 'finished', score: [1, 1], ahLines: [0.75, 0.75, 0.75], ouLines: [2.75, 2.75, 2.75], dir: '客' },
 ]
 
 const BOOK_SHIFT: Record<string, number> = { macau: 0, crown: 0.02, pinnacle: -0.01, william: 0.03, bet365: -0.02 }
 const PH: Phase[] = ['open', 'mid', 'close']
 
 function ahSettle(margin: number, side: 'home' | 'away'): 'win' | 'win_half' | 'push' | 'lose_half' | 'lose' {
-  // margin = 主队净胜 + 草案 line（主让为负）
+  // margin = 主队净胜 - line（主让为正）
   const m = side === 'home' ? margin : -margin
   if (m >= 0.5) return 'win'
   if (m === 0.25) return 'win_half'
@@ -76,7 +76,7 @@ function quarterSplit(x: number): number[] {
 }
 function ahResult(gd: number, line: number): ByBookResult['ah'] {
   let w = 0
-  for (const l of quarterSplit(line)) w += Math.sign(gd + l)
+  for (const l of quarterSplit(line)) w += Math.sign(gd - l)
   if (w === 0) return { line, side: null, push: true, cell_status: 'ok' }
   return { line, side: w > 0 ? 'home' : 'away', push: false, cell_status: 'ok' }
 }
@@ -111,7 +111,7 @@ function build(s: Spec): Row {
       }
       const hw = [0.92, 0.97, 0.88][i] + sh
       // 威廉的亚盘临盘与多数机构差一档，用来演示多家平均的换算明细
-      const line = b === 'crown' && p === 'close' && s.id === '周三001' ? -1 : s.ahLines[i]
+      const line = b === 'crown' && p === 'close' && s.id === '周三001' ? 1 : s.ahLines[i]
       a[p] = ah(line, hw, 1.86 - hw, { alert: p === 'close' && b === 'macau' ? (s.alert ?? null) : null })
       o[p] = ou(s.ouLines[i], [0.9, 0.95, 0.99][i] - sh, 1.84 - [0.9, 0.95, 0.99][i] + sh)
       e[p] = eu(+(2.1 - i * 0.12 + sh).toFixed(2), +(3.2 + sh).toFixed(2), +(3.4 + i * 0.2 - sh).toFixed(2))
@@ -171,11 +171,11 @@ function build(s: Spec): Row {
       if (side) {
         const useB: Book = b !== 'avg' && ca?.cell_status === 'ok' ? b : 'macau'
         const c = ahM[useB]!.close!
-        item = { code: ahSettle(gd + c.line!, side), line: c.line, water: side === 'home' ? c.home_water : c.away_water, settled_with: useB, fallback_book: useB !== b }
+        item = { code: ahSettle(gd - c.line!, side), line: c.line, water: side === 'home' ? c.home_water : c.away_water, settled_with: useB, fallback_book: useB !== b }
       } else item = { code: 'no_bet', line: null, water: null, settled_with: b, fallback_book: false }
       settle[b] = { ah: item, ou: null, x1x2: null, jc: null }
     }
-    const jcLine = s.ahLines[2] <= -0.5 ? -1 : 1
+    const jcLine = s.ahLines[2] >= 0.5 ? -1 : 1
     const jcOut = gd + jcLine > 0 ? 'home' : gd + jcLine < 0 ? 'away' : 'draw'
     result = {
       ...result,
@@ -185,7 +185,7 @@ function build(s: Spec): Row {
     }
   }
   const jcBase = (i: number) => eu(+(1.95 + i * 0.05).toFixed(2), 3.15, +(3.6 - i * 0.1).toFixed(2))
-  const jcLine = s.ahLines[2] <= -0.5 ? -1 : 1
+  const jcLine = s.ahLines[2] >= 0.5 ? -1 : 1
   const jc1: Phased<X1x2Cell> = { open: jcBase(0), mid: jcBase(1), close: s.status === 'not_started' ? nilEu(pend) : jcBase(2) }
   const jch: Row['jc_hhad'] = {
     open: { ...nilEu(unav('no_source')), goal_line: null },
