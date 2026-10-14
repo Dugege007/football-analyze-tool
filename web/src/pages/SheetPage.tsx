@@ -212,7 +212,7 @@ export default function SheetPage() {
 
       <div style={{ height: 'calc(100vh - 230px)', minHeight: 420 }}>
         <AgGridReact<Row>
-          theme={themeQuartz.withParams({ fontSize: 13, headerFontSize: 13, spacing: 5 })}
+          theme={themeQuartz.withParams({ fontSize: 13, headerFontSize: 13, spacing: 5, rowHeight: 32, headerHeight: 34 })}
           localeText={AG_GRID_LOCALE_CN}
           rowData={rows}
           columnDefs={columnDefs}

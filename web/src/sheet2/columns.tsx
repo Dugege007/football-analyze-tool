@@ -20,16 +20,21 @@ type Col = ColDef<Row> | ColGroupDef<Row>
 type P = ICellRendererParams<Row>
 
 const SEC = 'sec-start'
-const WEEK_CN = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-const WEEK_CLASS: Record<string, string> = { 周一: 'wd-1', 周二: 'wd-2', 周三: 'wd-3', 周四: 'wd-4', 周五: 'wd-5', 周六: 'wd-6', 周日: 'wd-7' }
+const WEEK_CHARS = ['日', '一', '二', '三', '四', '五', '六']
+const WEEK_CLASS: Record<string, string> = { 一: 'wd-1', 二: 'wd-2', 三: 'wd-3', 四: 'wd-4', 五: 'wd-5', 六: 'wd-6', 日: 'wd-7' }
 
+/**
+ * 竞彩日与编号两列的底色共用这一个来源：优先取竞彩编号首字（接口真实格式如「五002」），
+ * 没有编号时按竞彩日的星期推算；两列始终取同一个结果，保证同一竞彩日底色一致。
+ */
 function weekdayOf(r: Row | undefined): string | null {
   if (!r) return null
-  const pre = r.match.jc_id?.slice(0, 2)
+  const pre = r.match.jc_id?.slice(0, 1)
   if (pre && pre in WEEK_CLASS) return pre
   const d = new Date(`${r.match.jingcai_date}T12:00:00+08:00`)
-  return Number.isNaN(d.getTime()) ? null : WEEK_CN[d.getDay()]
+  return Number.isNaN(d.getTime()) ? null : WEEK_CHARS[d.getDay()]
 }
+const dayClass = (r: Row | undefined) => WEEK_CLASS[weekdayOf(r) ?? ''] ?? ''
 
 function kickoffText(iso: string | null): string {
   if (!iso) return '-'
@@ -44,14 +49,17 @@ const finished = (r?: Row) => r?.match.status === 'finished' && r.result?.home_g
 
 // ───────────── 基本数据列 ─────────────
 export function baseCols(): Col[] {
+  return [{ groupId: 'base', headerName: '基本', children: baseChildren() }]
+}
+function baseChildren(): Col[] {
   return [
     {
       colId: 'jcDay', headerName: '竞彩日', width: 104, pinned: 'left',
       valueGetter: (p) => p.data?.match.jingcai_date ?? null,
-      cellClass: (p) => WEEK_CLASS[weekdayOf(p.data) ?? ''] ?? '',
+      cellClass: (p) => dayClass(p.data),
       sort: 'asc', sortIndex: 0,
     },
-    { colId: 'jcNo', headerName: '编号', width: 82, pinned: 'left', valueGetter: (p) => p.data?.match.jc_id ?? '-', sort: 'asc', sortIndex: 1 },
+    { colId: 'jcNo', headerName: '编号', width: 72, pinned: 'left', valueGetter: (p) => p.data?.match.jc_id ?? '-', cellClass: (p) => dayClass(p.data), sort: 'asc', sortIndex: 1 },
     { colId: 'kickoff', headerName: '开赛时间', width: 104, pinned: 'left', valueGetter: (p) => kickoffText(p.data?.match.kickoff_at ?? null) },
     { colId: 'league', headerName: '赛事', width: 84, pinned: 'left', valueGetter: (p) => p.data?.match.league ?? '-' },
     { colId: 'home', headerName: '主队', width: 96, pinned: 'left', valueGetter: (p) => p.data?.match.home_team ?? '-' },
@@ -94,7 +102,7 @@ function StatusText({ st, reason }: { st: CellStatus; reason?: string | null }) 
 
 function Mv({ text, dir, colored }: { text: string; dir: MoveDir | undefined; colored: boolean }) {
   if (!colored || !dir || dir === 'flat') return <>{text}</>
-  return <span className={dir === 'up' ? 't-red' : 't-green'}>{text}{dir === 'up' ? '↑' : '↓'}</span>
+  return <span className={dir === 'up' ? 'mv-up' : 'mv-down'}>{text}{dir === 'up' ? '↑' : '↓'}</span>
 }
 
 function AvgTip({ d, market, children }: { d: AvgDetail | null | undefined; market: Market; children: ReactNode }) {

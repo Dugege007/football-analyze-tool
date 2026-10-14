@@ -4,6 +4,8 @@
 .sheet2 .t-gray { color: #999; }
 .sheet2 .t-yellow { color: #d4a106; font-weight: 600; }
 .sheet2 .t-red { color: #cf1322; }
+.sheet2 .mv-up { color: #cf1322; font-weight: 600; }
+.sheet2 .mv-down { color: #389e0d; font-weight: 600; }
 .sheet2 .t-green { color: #389e0d; }
 .sheet2 .t-orange { color: #d46b08; }
 .sheet2 .t-blue { color: #1d39c4; }
@@ -26,3 +28,5 @@
 .avg-tip { font-size: 12px; line-height: 1.6; }
 .sheet2-tabs .ant-tabs-nav { margin-bottom: 8px; }
 .sheet2-group-label { color: #888; font-size: 12px; margin-right: 6px; }
+.sheet2 .ag-header-group-cell { font-weight: 600; }
+.sheet2 .ag-header-group-cell[col-id^="book."], .sheet2 .ag-header-group-cell[col-id^="pred"] { background: #f5f8ff; }
