@@ -1,0 +1,32 @@
+﻿kind,source_name,league,appearances_in_8789,candidate_names,reason
+team,CS克拉约瓦大学,欧足联协会联赛,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,FC 萨尔斯堡,欧联杯,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,FC哥本哈根,欧足联协会联赛,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,LASK宁斯,欧洲冠军联赛,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,PAUN古比斯,芬超,1,古比斯|PAUN古比斯,KuPS merge waits for user approval (REVIEW.md section 3); source name shown
+team,上海海港,亚足联冠军精英联赛,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,凯尔特人,欧联杯,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,加拉塔萨雷,欧洲冠军联赛,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,北京国安,亚足联冠军精英联赛,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,古比斯,芬兰超级联赛,5,古比斯|PAUN古比斯,KuPS merge waits for user approval (REVIEW.md section 3); source name shown
+team,圣吉罗斯联,欧联杯,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,奥林匹亚科斯,欧联杯,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,布鲁日,欧洲冠军联赛,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,拉普拉塔大学生,南美解放者杯,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,杜连斯,欧联杯,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,格拉茨风暴,欧联杯,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,武里南联,亚足联冠军精英联赛,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,波兹南莱赫,欧联杯,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,泰港,亚足联冠军精英联赛,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,济州SK,韩国K1联赛,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,贝西克塔斯,欧联杯,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,费内巴切,欧洲冠军联赛,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,阿尔瓦斯尔SC,亚足联冠军精英联赛,1,,No entry in the teams or team_aliases tables or in the approved alias set
+team,阿赫利,沙特阿拉伯职业联赛,2,吉达国民,"Approved set drops 阿赫利 as a global alias (REVIEW.md section 7.1); the league-scoped mapping to 吉达国民 is not read by any code yet, so the source name is shown"
+league,中国杯,,0,,pending_user_confirmation in research/jingcai-competition-whitelist/unmapped_5df.csv; not present in current 8789 data
+league,优胜者杯,,0,,pending_user_confirmation in research/jingcai-competition-whitelist/unmapped_5df.csv; not present in current 8789 data
+league,墨冠杯,,0,,pending_user_confirmation in research/jingcai-competition-whitelist/unmapped_5df.csv; not present in current 8789 data
+league,非预赛,,0,,pending_user_confirmation in research/jingcai-competition-whitelist/unmapped_5df.csv; not present in current 8789 data
+league,波罗杯,,0,,pending_user_confirmation in research/jingcai-competition-whitelist/unmapped_5df.csv; not present in current 8789 data
+league,智利甲级联赛附加赛,,0,,pending_user_confirmation in research/jingcai-competition-whitelist/unmapped_5df.csv; not present in current 8789 data
+note,,,,,"Reconciliation with backfill/jc-match-rows-2026-10-08/unmatched_teams.csv (32 names): that file covers only rows of 2026-10-08 and 2026-10-09 and lists 5DollarFootballAPI names not yet in the database; all 32 are covered by the approved alias set or are already the standard name, so none is pending here. The team rows above come from the 8789 data range 2026-06 to 2026-10-15 (mostly European cup and AFC matches from 2026-10-10 onward) plus the KuPS group and 阿赫利. The earlier count of 46 used my own manual-record matching rule and is withdrawn."

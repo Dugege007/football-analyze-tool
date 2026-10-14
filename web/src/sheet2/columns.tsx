@@ -85,12 +85,12 @@ function baseChildren(): Col[] {
     { colId: 'league', headerName: '赛事', width: w('base.league'), pinned: 'left', valueGetter: (p) => leagueShort(p.data?.match.league_canonical ?? p.data?.match.league) ?? '-',
       // The cell shows the short name; hovering shows the full league name from the backend.
       cellRenderer: (p: P) => <span title={p.data?.match.league ?? undefined}>{p.value}</span> },
-    { colId: 'home', headerName: '主队', width: w('base.home'), pinned: 'left', valueGetter: (p) => teamCommon(p.data?.match.home_team, p.data?.match.home_team_canonical) ?? '-',
+    { colId: 'home', headerName: '主队', width: w('base.home'), pinned: 'left', valueGetter: (p) => teamCommon(p.data?.match.home_team, p.data?.match.home_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league)) ?? '-',
       // The cell shows the common name; hovering lists the other names of the same team.
-      cellRenderer: (p: P) => <span title={teamAliasTip(p.data?.match.home_team, p.data?.match.home_team_canonical)}>{p.value}</span> },
-    { colId: 'away', headerName: '客队', width: w('base.away'), pinned: 'left', valueGetter: (p) => teamCommon(p.data?.match.away_team, p.data?.match.away_team_canonical) ?? '-',
+      cellRenderer: (p: P) => <span title={teamAliasTip(p.data?.match.home_team, p.data?.match.home_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league))}>{p.value}</span> },
+    { colId: 'away', headerName: '客队', width: w('base.away'), pinned: 'left', valueGetter: (p) => teamCommon(p.data?.match.away_team, p.data?.match.away_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league)) ?? '-',
       // The cell shows the common name; hovering lists the other names of the same team.
-      cellRenderer: (p: P) => <span title={teamAliasTip(p.data?.match.away_team, p.data?.match.away_team_canonical)}>{p.value}</span> },
+      cellRenderer: (p: P) => <span title={teamAliasTip(p.data?.match.away_team, p.data?.match.away_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league))}>{p.value}</span> },
     {
       colId: 'score', headerName: '比分', width: w('base.score'), pinned: 'left',
       cellRenderer: (p: P) => {
@@ -224,6 +224,9 @@ interface TripleSpec {
   prefix?: (r: Row) => string | null
 }
 
+/** Chinese names of the alert levels for the hover text. */
+const ALERT_NAME: Record<string, string> = { high: '高', medium: '中', light: '轻' }
+
 /** 一个阶段一组三列（主水 / 盘口 / 客水 等）；格子没有数据时左列跨三列显示状态文字。 */
 function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
   const n = t.subs.length
@@ -255,7 +258,12 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
       const text = (sub.fmt ?? fmtNum)(v)
       const pre = sub.key === 'line' && t.prefix ? t.prefix(r) : null
       const body = <>{pre}<Mv text={text} dir={move?.[sub.key] as MoveDir | undefined} colored={t.phase !== 'open'} /></>
-      return t.avg ? <AvgTip d={cell.avg_detail as AvgDetail | null | undefined} market={t.avg} phase={t.phase}>{body}</AvgTip> : body
+      // On alert cells, hovering shows the alert level and the sample size when the backend provides them.
+      const sampleN = sub.alert ? ((cell as { alert_sample_n?: number | null }).alert_sample_n ?? null) : null
+      const alertLv = sub.alert ? ((cell as { alert?: string | null }).alert ?? null) : null
+      const tipParts = [alertLv && t.phase !== 'open' ? `预警：${ALERT_NAME[alertLv] ?? alertLv}` : null, sampleN != null ? `样本数：${sampleN}` : null].filter(Boolean)
+      const bodyTip = tipParts.length ? <span title={tipParts.join('；')}>{body}</span> : body
+      return t.avg ? <AvgTip d={cell.avg_detail as AvgDetail | null | undefined} market={t.avg} phase={t.phase}>{bodyTip}</AvgTip> : bodyTip
     },
   }))
   return { groupId: t.id, headerName: t.title, headerClass: t.first ? SEC : undefined, children }

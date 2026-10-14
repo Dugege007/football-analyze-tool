@@ -1,57 +1,112 @@
 /**
- * Common Chinese team names for the 主队 and 客队 columns.
+ * Team display names for the 主队 and 客队 columns, following the naming standard 分析师 set on 2026-10-14.
  *
- * The backend returns the source name in match.home_team and match.away_team, and a canonical name in
- * match.home_team_canonical and match.away_team_canonical only for some older matches. There is no alias
- * list in the API, so this table maps the source names seen in the data to the common name used by
- * China Sports Lottery (竞彩) and 500.com. Names that are not in the table are shown unchanged.
+ * Sources: odds-data/research/dc_train/team_aliases_proposed.csv, with
+ * odds-data/backfill/dc-aliases-review-2026-10-08/corrections.csv winning on conflicts (the approved set in REVIEW.md section 7),
+ * together with the teams and team_aliases tables (rules in docs/schema/data-conventions-v1.md section 2).
+ * The global alias 阿赫利 is dropped in the approved set, so it is shown unchanged.
+ * Teams in the KuPS group and teams with no record show the source name unchanged;
+ * they are listed in web/docs/team-names-pending.csv.
  */
-const TEAM_COMMON: Record<string, string> = {
-  'AC 米兰队': 'AC米兰',
-  'FC 萨尔斯堡': '萨尔茨堡',
-  'RB 莱比锡': '莱比锡',
-  勒万特队: '莱万特',
-  艾尔切队: '埃尔切',
-  阿拉维斯队: '阿拉维斯',
-  费耶诺德队: '费耶诺德',
-  '米亚尔比 AIF': '米亚尔比',
-  霍芬海姆TSG: '霍芬海姆',
-  门兴格拉德巴赫: '门兴',
-  托特纳姆热刺: '热刺',
-  拉科鲁尼亚体育: '拉科鲁尼亚',
-  金泉尚武FC: '金泉尚武',
-  帕特博恩: '帕德博恩',
-  沙尔克: '沙尔克04',
-  PSV埃因霍温: '埃因霍温',
-  荷华高斯: '前进之鹰',
-  RKC华域克: '瓦尔韦克',
-  柏雷索尔: '柏太阳神',
-  大阪飞脚: '大阪钢巴',
-  甘马雷斯: '吉马良斯',
-  伊普斯威奇: '伊普斯维奇',
-  女王公园巡游者: '女王公园',
-  '巴黎圣日耳曼': '巴黎圣曼',
-  LASK宁斯: '林茨',
-  依云斯堡: '埃尔夫斯堡',
+const TEAM_DISPLAY: Record<string, string> = {
+  "AC奥卢": "奥卢",
+  "FC安养": "安养FC",
+  "IFK哥德堡": "哥德堡",
+  "伊蒂哈德": "吉达联合",
+  "全北汽车": "全北现代",
+  "华沙比斯": "VPS瓦萨",
+  "卡马尔": "卡尔马",
+  "大田韩亚市民": "大田市民",
+  "柏雷索尔": "柏太阳神",
+  "浦项制铁": "浦项铁人",
+  "科里迪巴": "科里蒂巴",
+  "米亚尔比 AIF": "米亚尔比",
+  "英特杜古": "图尔库国际",
+  "迪加佛斯": "代格福什",
+  "金泉尚武FC": "金泉尚武",
+  "韦斯特罗斯": "瓦斯特拉斯",
+  "首尔": "FC首尔",
 }
 
-/** Reverse index from a common name to every source name that maps to it. */
-const ALIASES: Record<string, string[]> = {}
-for (const [src, common] of Object.entries(TEAM_COMMON)) (ALIASES[common] ??= []).push(src)
+/** Other recorded names of a team, keyed by its display name, for the hover tooltip. */
+const TEAM_OTHER_NAMES: Record<string, string[]> = {
+  "AC 米兰队": ["AC米兰"],
+  "FC首尔": ["首尔"],
+  "KFUM": ["奥斯陆KFUM"],
+  "PEC兹沃勒": ["兹沃勒"],
+  "RKC华域克": ["瓦尔韦克"],
+  "TPS图尔库": ["特普寺"],
+  "VPS瓦萨": ["华沙比斯"],
+  "乌特勒支": ["乌德勒支"],
+  "云达不莱梅": ["云达不来梅"],
+  "代格福什": ["迪加佛斯"],
+  "伊普斯威奇": ["伊普斯维奇"],
+  "全北现代": ["全北汽车"],
+  "冈山绿雉": ["冈山雉鸡"],
+  "利兹": ["利兹联"],
+  "利雅得希拉尔": ["利雅得新月"],
+  "南安普顿": ["南安普敦"],
+  "卡尔马": ["卡马尔"],
+  "古比斯": ["PAUN古比斯"],
+  "吉达联合": ["伊蒂哈德"],
+  "哈姆斯塔德": ["哈尔姆斯塔德", "哈尔姆斯达斯"],
+  "哥德堡": ["IFK哥德堡"],
+  "图尔库国际": ["英特杜古"],
+  "埃尔维斯": ["FC爱尔维斯"],
+  "塞尔塔": ["维戈塞尔塔"],
+  "塞纳乔其": ["SJK塞伊奈约基", "塞伊奈约基"],
+  "墨尔本胜仗": ["墨尔本胜利"],
+  "大田市民": ["大田韩亚市民"],
+  "天狼星": ["斯瑞斯"],
+  "奥卢": ["AC奥卢"],
+  "奥尔格里特": ["奧基迪"],
+  "安养FC": ["FC安养"],
+  "富川FC": ["富川FC 1995"],
+  "巴黎圣日耳曼": ["巴黎圣日尔曼"],
+  "帕特博恩": ["帕德博恩"],
+  "拉科鲁尼亚体育": ["拉科鲁尼亚"],
+  "曼城": ["曼彻斯特城"],
+  "曼联": ["曼彻斯特联"],
+  "朴茨茅斯": ["朴次茅斯"],
+  "柏太阳神": ["柏雷索尔"],
+  "柏林联": ["柏林联合"],
+  "格尼斯坦": ["IF 吉尼斯坦"],
+  "江原FC": ["江原 FC"],
+  "沙尔克": ["沙尔克04"],
+  "济州SK FC": ["济州联"],
+  "浦项铁人": ["浦项制铁"],
+  "瓦斯特拉斯": ["韦斯特罗斯"],
+  "磐城FC": ["Iwaki SC"],
+  "科里蒂巴": ["科里迪巴"],
+  "米亚尔比": ["米亚尔比 AIF"],
+  "索尔纳": ["AIK俱乐部"],
+  "纽卡斯尔": ["纽卡斯尔联"],
+  "纽卡斯尔喷射机": ["纽卡斯尔喷气机"],
+  "维京FK": ["维京"],
+  "蔚山HD": ["蔚山现代"],
+  "西汉姆": ["西汉姆联"],
+  "赫尔": ["赫尔城"],
+  "金堡尔": ["坎布尔"],
+  "金泉尚武": ["金泉尚武FC"],
+  "阿尔华卡": ["阿尔维卡"],
+  "雅罗": ["查路"],
+  "霍芬海姆TSG": ["霍芬海姆"],
+}
 
-/** Returns the common name for a team, preferring the backend canonical name when one exists. */
-export function teamCommon(name: string | null | undefined, canonical?: string | null): string | null {
+/** Returns the display name for a team, preferring the backend canonical name when one exists. */
+export function teamCommon(name: string | null | undefined, canonical?: string | null, _leagueDisplay?: string | null): string | null {
   const base = (canonical || name)?.trim()
   if (!base) return null
-  return TEAM_COMMON[base] ?? base
+  return TEAM_DISPLAY[base] ?? base
 }
 
-/** Returns the hover text listing the other names of the team, or undefined when it has none. */
-export function teamAliasTip(name: string | null | undefined, canonical?: string | null): string | undefined {
+/** Returns the hover text with the source name and the other recorded names, or undefined when there are none. */
+export function teamAliasTip(name: string | null | undefined, canonical?: string | null, _leagueDisplay?: string | null): string | undefined {
   const shown = teamCommon(name, canonical)
   if (!shown) return undefined
-  const others = new Set<string>(ALIASES[shown] ?? [])
-  if (name && name !== shown) others.add(name)
-  if (canonical && canonical !== shown) others.add(canonical)
+  const others = new Set<string>(TEAM_OTHER_NAMES[shown] ?? [])
+  if (name) others.add(name)
+  if (canonical) others.add(canonical)
+  others.delete(shown)
   return others.size ? `其他名称：${[...others].join('、')}` : undefined
 }

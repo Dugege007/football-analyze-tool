@@ -83,6 +83,8 @@ interface CellCommon {
   cell_status_reason?: CellStatusReason | null
   move?: Move | null
   alert?: AlertLevel
+  /** Sample size behind the alert, when the backend provides it. */
+  alert_sample_n?: number | null
   avg_detail?: AvgDetail | null
 }
 

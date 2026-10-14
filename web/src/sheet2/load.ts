@@ -29,7 +29,10 @@ function alertOf(c: Raw | null | undefined) {
 }
 /** 每格都带上来源、记录时间和多家平均明细（接口没给时为空） */
 function extra(c: Raw | null | undefined) {
-  return { source: c?.source ?? null, recorded_at: c?.recorded_at ?? null, avg_detail: c?.avg_detail ?? null, alert: alertOf(c), move: c?.move ?? null }
+  return { source: c?.source ?? null, recorded_at: c?.recorded_at ?? null, avg_detail: c?.avg_detail ?? null, alert: alertOf(c),
+    // Sample size behind the alert; a new backend field that may be absent, and it can be present when alert is null.
+    alert_sample_n: typeof c?.alert_sample_n === 'number' ? (c.alert_sample_n as number) : null,
+    move: c?.move ?? null }
 }
 
 function mapAh(src: Raw | null | undefined): Phased<AhCell> | undefined {
