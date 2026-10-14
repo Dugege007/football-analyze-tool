@@ -43,3 +43,6 @@
 .sheet2 .sub-hdr.al-right .ag-header-cell-label { justify-content: flex-end; }
 .sheet2 .sub-hdr.al-center .ag-header-cell-label { justify-content: center; }
 .sheet2 .sub-hdr.al-left .ag-header-cell-label { justify-content: flex-start; }
+/* 赛果列与预测结果列居中，表头也居中 */
+.sheet2 .ag-cell.res-center { justify-content: center; }
+.sheet2 .res-center .ag-header-cell-label { justify-content: center; }

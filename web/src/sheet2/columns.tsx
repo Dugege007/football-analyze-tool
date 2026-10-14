@@ -226,8 +226,8 @@ function resultCol(book: Book, market: Market, first: boolean): ColDef<Row> {
     colId: `${book}.res.${market}`,
     headerName: label,
     width: w(`res.${market}`),
-    headerClass: first ? SEC : undefined,
-    cellClass: first ? SEC : undefined,
+    headerClass: ['res-center', first ? SEC : ''].join(' '),
+    cellClass: ['res-center', first ? SEC : ''].join(' '),
     cellRenderer: (p: P) => {
       const r = p.data
       if (!r || !finished(r)) return '-'
@@ -279,7 +279,7 @@ function signedJc(n: number | null): string {
 export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
   const children: Col[] = [
     {
-      colId: 'jc.res.had', headerName: '胜平负赛果', width: w('jc.res.had'), headerClass: SEC, cellClass: SEC,
+      colId: 'jc.res.had', headerName: '胜平负赛果', width: w('jc.res.had'), headerClass: `res-center ${SEC}`, cellClass: `res-center ${SEC}`,
       cellRenderer: (p: P) => {
         const r = p.data
         if (!r || !finished(r)) return '-'
@@ -291,7 +291,7 @@ export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
   ]
   if (!onlyHad)
     children.push({
-      colId: 'jc.res.hhad', headerName: '让球胜平负赛果', width: w('jc.res.hhad'),
+      colId: 'jc.res.hhad', headerName: '让球胜平负赛果', width: w('jc.res.hhad'), headerClass: 'res-center', cellClass: 'res-center',
       cellRenderer: (p: P) => {
         const r = p.data
         if (!r || !finished(r)) return '-'
@@ -325,17 +325,18 @@ export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
             colId: `jc.hhad.${ph}.goal`,
             headerName: '让球',
             width: w('jc.hhad.goal'),
-            headerClass: ['sub-hdr', i === 0 ? SEC : ''].join(' '),
-            cellClass: ['num-cell', i === 0 ? SEC : ''].join(' '),
+            headerClass: ['sub-hdr', 'al-right', i === 0 ? SEC : ''].join(' '),
+            // 让球数按盘口规则加粗
+            cellClass: ['num-cell', 'line-cell', 'al-right', i === 0 ? SEC : ''].join(' '),
             valueGetter: (p) => {
               const c = p.data?.jc_hhad?.[ph]
               return c && statusOf(c) === 'ok' ? `(${signedJc(c.goal_line)})` : ''
             },
           })
-          ;(g.children[1] as ColDef<Row>).headerClass = 'sub-hdr'
+          ;(g.children[1] as ColDef<Row>).headerClass = 'sub-hdr al-right'
           ;(g.children[1] as ColDef<Row>).cellClass = (p) => {
             const c = p.data?.jc_hhad?.[ph]
-            return ['num-cell', c && statusOf(c) !== 'ok' ? 'span-status' : ''].join(' ')
+            return ['num-cell', 'al-right', c && statusOf(c) !== 'ok' ? 'span-status' : ''].join(' ')
           }
         }
       })
@@ -365,11 +366,11 @@ export function predCols(book: Book, blocks: PredBlock[]): ColGroupDef<Row> {
       },
     })
     children.push({
-      colId: `pred.${b}.res`, headerName: '结果', width: w(`pred.${b}.res`),
+      colId: `pred.${b}.res`, headerName: '结果', width: w(`pred.${b}.res`), headerClass: 'res-center',
       cellClass: (p) => {
-        if (b !== 'ah') return ''
+        if (b !== 'ah') return 'res-center'
         const code = p.data?.settlement_by_book?.[book]?.ah?.code
-        return finished(p.data) && code ? SETTLE_CLASS[code] : ''
+        return ['res-center', finished(p.data) && code ? SETTLE_CLASS[code] : ''].join(' ')
       },
       cellRenderer: (p: P) => {
         const r = p.data
