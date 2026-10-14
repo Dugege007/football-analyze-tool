@@ -15,7 +15,6 @@ function PendingMark() {
 import { formatPick } from '../api/pickFormat'
 import { alignClass, w, type WidthKey } from './columnWidths'
 import {
-  REASON_TEXT,
   SETTLE_TEXT,
   STATUS_TEXT,
   ahLineText,
@@ -23,11 +22,14 @@ import {
   bjTime,
   sourceText,
   fmtNum,
+  oddsCellReason,
   ouMove,
+  reasonHoverText,
+  resultCellReason,
   statusOf,
   x1x2Move,
 } from './format'
-import { BOOK_NAME, PHASES, PHASE_NAME, type Phased, type X1x2Cell, type AvgDetail, type Book, type CellStatus, type Move, type MoveDir, type Phase, type Row } from './types'
+import { BOOK_NAME, PHASES, PHASE_NAME, type Phased, type X1x2Cell, type AvgDetail, type Book, type CellStatus, type Move, type MoveDir, type Phase, type ResultReason, type Row } from './types'
 
 export type Market = 'ah' | 'ou' | 'x1x2'
 type Col = ColDef<Row> | ColGroupDef<Row>
@@ -155,10 +157,10 @@ function baseChildren(): Col[] {
 }
 
 // ───────────── 通用格子 ─────────────
-function StatusText({ st, reason, extra }: { st: CellStatus; reason?: string | null; extra?: string | null }) {
+function StatusText({ st, reason, reasonZh, extra }: { st: CellStatus; reason?: string | null; reasonZh?: string | null; extra?: string | null }) {
   const t = STATUS_TEXT[st as Exclude<CellStatus, 'ok'>] ?? '无法获取'
-  // The reason and any extra line, such as the sample size, share one hover so tooltips do not stack.
-  const lines = [reason ? (REASON_TEXT[reason] ?? reason) : null, extra ?? null].filter(Boolean) as string[]
+  // 原因和样本数等补充说明放在同一个悬停里，避免两层提示叠在一起。中文优先用接口返回的 reasonZh。
+  const lines = [reasonHoverText(reason, reasonZh), extra ?? null].filter(Boolean) as string[]
   const span = <span className={extra ? 't-gray alert-sample-tip' : 't-gray'}>{t}</span>
   return lines.length ? <Tooltip title={lines.map((l, k) => <div key={k}>{l}</div>)}>{span}</Tooltip> : span
 }
@@ -182,7 +184,7 @@ function AvgTip({ d, market, phase, children }: { d: AvgDetail | null | undefine
   const names = (xs: string[] | undefined) => (xs && xs.length ? xs.map(name).join('、') : '无')
   const lineText = (v: number | null | undefined) => (v == null ? '-' : market === 'ah' ? ahLineText(v) : fmtNum(v))
   const averaged = d.averaged_books ?? d.books_used
-  const missing = d.missing_books ?? Object.entries(d.books_missing ?? {}).map(([book, reason]) => ({ book, reason }))
+  const missing = d.missing_books ?? Object.entries(d.books_missing ?? {}).map(([book, reason]) => ({ book, reason, reason_zh: null, missing_reason_zh: null }))
   const tie = d.tie_break && d.tie_break !== 'none' ? (TIE_TEXT[d.tie_break] ?? d.tie_break) : null
   const srcs = d.sources ?? {}
   const srcBooks = Object.keys(srcs).sort((a, b) => BOOK_ORDER.indexOf(a) - BOOK_ORDER.indexOf(b))
@@ -196,7 +198,7 @@ function AvgTip({ d, market, phase, children }: { d: AvgDetail | null | undefine
       {(d.excluded_books ?? []).length > 0 && (
         <div>剔除：{d.excluded_books!.map((e) => `${name(e.book)}（${EXCLUDE_TEXT[e.reason] ?? e.reason}，相差 ${e.steps} 档${e.original_line != null ? `，原盘口 ${lineText(e.original_line)}` : ''}${e.original_water?.length ? `，原水位 ${e.original_water.map(fmtNum).join(' / ')}` : ''}）`).join('、')}</div>
       )}
-      {missing.length > 0 && <div>没有数据：{missing.map((m) => `${name(m.book)}（${REASON_TEXT[m.reason] ?? m.reason}）`).join('、')}</div>}
+      {missing.length > 0 && <div>没有数据：{missing.map((m) => `${name(m.book)}（${reasonHoverText(m.reason, m.reason_zh || m.missing_reason_zh) ?? m.reason}）`).join('、')}</div>}
       {market === 'ah' && d.goal_expectation != null && (
         <div>总进球期望：{fmtNum(d.goal_expectation)}{d.goal_expectation_source ? `（${GE_SOURCE_TEXT[d.goal_expectation_source] ?? d.goal_expectation_source}）` : ''}</div>
       )}
@@ -297,7 +299,8 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
         if (i !== 0) return null
         // A cell without data still shows its sample size, for example 0 when there is no capture time.
         const emptyN = t.subs.some((x) => x.alert) ? ((cell as { alert_sample_n?: number | null } | undefined)?.alert_sample_n ?? null) : null
-        const stxTip = <StatusText st={st} reason={(cell?.cell_status_reason as string) ?? null} extra={t.subs.some((x) => x.alert) ? (emptyN ? sampleText(emptyN) : NO_ALERT_TEXT) : null} />
+        const oddsReason = oddsCellReason(cell)
+        const stxTip = <StatusText st={st} reason={oddsReason.reason} reasonZh={oddsReason.reasonZh} extra={t.subs.some((x) => x.alert) ? (emptyN ? sampleText(emptyN) : NO_ALERT_TEXT) : null} />
         return t.avg && cell?.avg_detail ? <AvgTip d={cell.avg_detail as AvgDetail} market={t.avg} phase={t.phase}>{stxTip}</AvgTip> : stxTip
       }
       const v = cell[sub.field] as number | null
@@ -370,21 +373,27 @@ function resultCol(book: Book, market: Market, first: boolean): ColDef<Row> {
       if (market === 'ah') {
         const a = x as { line: number | null; side: 'home' | 'away' | null; push: boolean; cell_status?: CellStatus }
         if (a.push) return '走水'
-        if (!a.side) return <StatusText st={a.cell_status ?? 'unavailable'} />
+        if (!a.side) return <ResultStatus cell={a} />
         const side = a.side === 'home' ? '主' : '客'
         return <span className={a.side === 'home' ? 't-orange' : 't-blue'}>{formatPick({ market: 'ah', side, line: a.line })}</span>
       }
       if (market === 'ou') {
         const o = x as { line: number | null; side: 'over' | 'under' | null; push: boolean; cell_status?: CellStatus }
         if (o.push) return '走水'
-        if (!o.side) return <StatusText st={o.cell_status ?? 'unavailable'} />
+        if (!o.side) return <ResultStatus cell={o} />
         return <span className={o.side === 'over' ? 't-orange' : 't-blue'}>{formatPick({ market: 'ou', side: o.side === 'over' ? '大' : '小', line: o.line })}</span>
       }
       const e = x as { side: 'home' | 'draw' | 'away' | null; odds: number | null; cell_status?: CellStatus }
-      if (!e.side) return <StatusText st={e.cell_status ?? 'unavailable'} />
+      if (!e.side) return <ResultStatus cell={e} />
       return wdlSpan(e.side, e.odds)
     },
   }
+}
+
+/** 赛果为空时显示「无法获取」或「未填写」，悬停读取该格接口返回的中文原因。 */
+function ResultStatus({ cell }: { cell?: ({ cell_status?: CellStatus | null } & ResultReason) | null }) {
+  const reason = resultCellReason(cell)
+  return <StatusText st={cell?.cell_status ?? 'unavailable'} reason={reason.reason} reasonZh={reason.reasonZh} />
 }
 
 function wdlSpan(side: 'home' | 'draw' | 'away', odds: number | null, prefix = ''): ReactNode {
@@ -417,7 +426,7 @@ export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
         if (voidOf(r)) return <VoidText r={r} />
         if (!r || !finished(r)) return '-'
         const h = r.result?.jc?.had
-        if (!h?.side) return <StatusText st={h?.cell_status ?? 'unavailable'} />
+        if (!h?.side) return <ResultStatus cell={h} />
         return wdlSpan(h.side, h.odds)
       },
     },
@@ -430,7 +439,7 @@ export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
         if (voidOf(r)) return <VoidText r={r} />
         if (!r || !finished(r)) return '-'
         const h = r.result?.jc?.hhad
-        if (!h?.side) return <StatusText st={h?.cell_status ?? 'unavailable'} />
+        if (!h?.side) return <ResultStatus cell={h} />
         return wdlSpan(h.side, h.odds, signedJc(h.goal_line))
       },
     })

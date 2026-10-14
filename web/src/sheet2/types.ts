@@ -65,7 +65,7 @@ export interface AvgDetail {
   voting_books?: string[]
   averaged_books?: string[]
   excluded_books?: { book: string; reason: string; steps: number; original_line?: number | null; original_water?: number[] | null; margin?: number | null }[]
-  missing_books?: { book: string; reason: string }[]
+  missing_books?: { book: string; reason: string; reason_zh?: string | null; missing_reason_zh?: string | null }[]
   tie_break?: TieBreak | string | null
   median_line?: number | null
   conversions?: AvgConversion[]
@@ -81,6 +81,12 @@ interface CellCommon {
   recorded_at?: string | null
   cell_status?: CellStatus | null
   cell_status_reason?: CellStatusReason | null
+  /** 接口返回的格子状态中文原因，与 cell_status_reason 同名加 _zh。旧响应没有这个字段。 */
+  cell_status_reason_zh?: string | null
+  /** 接口返回的缺失原因码。页面不另做翻译，只在没有中文时才退回现有对照表。 */
+  missing_reason?: string | null
+  /** 接口返回的缺失原因中文，与 missing_reason 同名加 _zh。旧响应没有这个字段。 */
+  missing_reason_zh?: string | null
   move?: Move | null
   alert?: AlertLevel
   /** Sample size behind the alert, when the backend provides it. */
@@ -112,10 +118,20 @@ export type Phased<T> = Partial<Record<Phase, T | null>>
 
 export type MatchStatus = 'not_started' | 'live' | 'finished' | 'cancelled' | 'postponed'
 
+/** 赛果格上接口给出的原因码和同名中文。旧响应可以只有原因码，也可以两项都没有。 */
+export interface ResultReason {
+  null_reason?: string | null
+  null_reason_zh?: string | null
+  cell_status_reason?: string | null
+  cell_status_reason_zh?: string | null
+  missing_reason?: string | null
+  missing_reason_zh?: string | null
+}
+
 export interface ByBookResult {
-  ah?: { line: number | null; side: 'home' | 'away' | null; push: boolean; cell_status?: CellStatus } | null
-  ou?: { line: number | null; side: 'over' | 'under' | null; push: boolean; cell_status?: CellStatus } | null
-  x1x2?: { side: 'home' | 'draw' | 'away' | null; odds: number | null; cell_status?: CellStatus } | null
+  ah?: ({ line: number | null; side: 'home' | 'away' | null; push: boolean; cell_status?: CellStatus } & ResultReason) | null
+  ou?: ({ line: number | null; side: 'over' | 'under' | null; push: boolean; cell_status?: CellStatus } & ResultReason) | null
+  x1x2?: ({ side: 'home' | 'draw' | 'away' | null; odds: number | null; cell_status?: CellStatus } & ResultReason) | null
 }
 
 export type SettleCode = 'win' | 'win_half' | 'push' | 'lose_half' | 'lose' | 'no_bet'
@@ -161,8 +177,8 @@ export interface Row {
     outcome_1x2: 'home' | 'draw' | 'away' | null
     by_book: Partial<Record<Book, ByBookResult>> | null
     jc: {
-      had: { side: 'home' | 'draw' | 'away' | null; odds: number | null; cell_status?: CellStatus } | null
-      hhad: { goal_line: number | null; side: 'home' | 'draw' | 'away' | null; odds: number | null; cell_status?: CellStatus } | null
+      had: ({ side: 'home' | 'draw' | 'away' | null; odds: number | null; cell_status?: CellStatus } & ResultReason) | null
+      hhad: ({ goal_line: number | null; side: 'home' | 'draw' | 'away' | null; odds: number | null; cell_status?: CellStatus } & ResultReason) | null
     } | null
   } | null
   settlement_by_book: Partial<Record<Book, { ah: SettleItem | null; ou: SettleItem | null; x1x2: SettleItem | null; jc: SettleItem | null } | null>> | null

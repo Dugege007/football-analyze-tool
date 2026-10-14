@@ -12,13 +12,32 @@ type Raw = Record<string, unknown> & { [k: string]: any } // eslint-disable-line
 
 const PH: Phase[] = ['open', 'mid', 'close']
 
-function stOf(c: Raw | null | undefined, has: boolean): { cell_status: CellStatus; cell_status_reason: string | null } {
+function textOrNull(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const text = v.trim()
+  return text ? text : null
+}
+
+function stOf(c: Raw | null | undefined, has: boolean): {
+  cell_status: CellStatus
+  cell_status_reason: string | null
+  cell_status_reason_zh: string | null
+  missing_reason: string | null
+  missing_reason_zh: string | null
+} {
+  // 中文原因原样保留。页面优先显示它们；这里不把原因码翻译成中文。
+  const zh = {
+    cell_status_reason_zh: textOrNull(c?.cell_status_reason_zh),
+    missing_reason: textOrNull(c?.missing_reason),
+    missing_reason_zh: textOrNull(c?.missing_reason_zh),
+  }
+  const pack = (cell_status: CellStatus, cell_status_reason: string | null) => ({ cell_status, cell_status_reason, ...zh })
   // 欧赔半格等字段不全的格子一律按「无法获取」，不显示单独的主胜（分析师 2026-10-14 定）
-  if (c?.cell_status === 'ok' && !has) return { cell_status: 'unavailable', cell_status_reason: 'not_captured' }
-  if (c?.cell_status) return { cell_status: c.cell_status, cell_status_reason: c.cell_status_reason ?? null }
-  if (has) return { cell_status: 'ok', cell_status_reason: null }
-  if (c?.hidden_reason === 'after_as_of') return { cell_status: 'pending', cell_status_reason: 'not_due' }
-  return { cell_status: 'unavailable', cell_status_reason: c?.status === 'suspect_truncated' ? 'suspect_truncated' : 'not_captured' }
+  if (c?.cell_status === 'ok' && !has) return pack('unavailable', 'not_captured')
+  if (c?.cell_status) return pack(c.cell_status, textOrNull(c.cell_status_reason))
+  if (has) return pack('ok', null)
+  if (c?.hidden_reason === 'after_as_of') return pack('pending', 'not_due')
+  return pack('unavailable', c?.status === 'suspect_truncated' ? 'suspect_truncated' : 'not_captured')
 }
 
 const ALERTS = ['light', 'medium', 'high']
@@ -146,12 +165,40 @@ export function mapApiRow(it: Raw): Row {
   }
 }
 
-/** 接口的 result.jc.had / hhad 用 outcome 字段，页面用 side；outcome 为空时，collector_empty 记为无法获取。没有该项时返回 null，页面显示「无法获取」，不在页面上自行计算。 */
-function mapJcItem(x: any): { side: 'home' | 'draw' | 'away' | null; odds: number | null; goal_line: number | null; cell_status?: CellStatus } | null {
+/** 接口的 result.jc.had 和 result.jc.hhad 用 outcome 表示胜平负方向，页面用 side。outcome 为空时保留 null_reason 与 null_reason_zh，悬停显示接口给的中文。没有这一项时返回 null，页面显示「无法获取」，不在页面上自行计算。 */
+function mapJcItem(x: any): {
+  side: 'home' | 'draw' | 'away' | null
+  odds: number | null
+  goal_line: number | null
+  cell_status?: CellStatus
+  null_reason: string | null
+  null_reason_zh: string | null
+  cell_status_reason: string | null
+  cell_status_reason_zh: string | null
+  missing_reason: string | null
+  missing_reason_zh: string | null
+} | null {
   if (!x || typeof x !== 'object') return null
   const side = x.side ?? x.outcome ?? null
-  if (side == null && !x.null_reason && !x.cell_status) return null
-  return { side, odds: x.odds ?? null, goal_line: x.goal_line ?? null, cell_status: side ? undefined : (x.cell_status ?? 'unavailable') }
+  const null_reason = textOrNull(x.null_reason)
+  const null_reason_zh = textOrNull(x.null_reason_zh)
+  const cell_status_reason = textOrNull(x.cell_status_reason)
+  const cell_status_reason_zh = textOrNull(x.cell_status_reason_zh)
+  const missing_reason = textOrNull(x.missing_reason)
+  const missing_reason_zh = textOrNull(x.missing_reason_zh)
+  if (side == null && !null_reason && !null_reason_zh && !cell_status_reason && !cell_status_reason_zh && !missing_reason && !missing_reason_zh && !x.cell_status) return null
+  return {
+    side,
+    odds: x.odds ?? null,
+    goal_line: x.goal_line ?? null,
+    cell_status: side ? undefined : (x.cell_status ?? 'unavailable'),
+    null_reason,
+    null_reason_zh,
+    cell_status_reason,
+    cell_status_reason_zh,
+    missing_reason,
+    missing_reason_zh,
+  }
 }
 function mapJcResult(jc: any): NonNullable<Row['result']>['jc'] {
   if (!jc || typeof jc !== 'object') return null
