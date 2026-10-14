@@ -1,0 +1,62 @@
+.sheet2 .ag-cell { display: flex; align-items: center; }
+.sheet2 .t-gray { color: #999; }
+.sheet2 .t-yellow { color: #d4a106; font-weight: 600; }
+.sheet2 .t-red { color: #cf1322; }
+.sheet2 .mv-up { color: #cf1322; }
+.sheet2 .mv-down { color: #389e0d; }
+.sheet2 .t-green { color: #389e0d; }
+.sheet2 .t-orange { color: #d46b08; }
+.sheet2 .t-blue { color: #1d39c4; }
+.sheet2 .wd-1 { background: #fff1f0; }
+.sheet2 .wd-2 { background: #fff7e6; }
+.sheet2 .wd-3 { background: #feffe6; }
+.sheet2 .wd-4 { background: #f6ffed; }
+.sheet2 .wd-5 { background: #e6fffb; }
+.sheet2 .wd-6 { background: #e6f4ff; }
+.sheet2 .wd-7 { background: #f9f0ff; }
+.sheet2 .al-light { background: #fff1b8; } /* 与 hl_v0 一致：gold-2 */
+.sheet2 .al-medium { background: #ffd591; } /* orange-3 */
+.sheet2 .al-high { background: #ffa39e; } /* red-3 */
+.sheet2 .f-win { background: #ff7875; color: #fff; }
+.sheet2 .f-winhalf { background: #ffccc7; }
+.sheet2 .f-losehalf { background: #d9f7be; }
+.sheet2 .f-lose { background: #73d13d; color: #fff; }
+.sheet2 .fallback-tag { margin-left: 6px; font-size: 11px; line-height: 16px; padding: 0 4px; }
+.sheet2 .avg-hover { cursor: help; border-bottom: 1px dashed #bbb; }
+.avg-tip { font-size: 12px; line-height: 1.6; }
+.sheet2-tabs .ant-tabs-nav { margin-bottom: 8px; }
+.sheet2-group-label { color: #888; font-size: 12px; margin-right: 6px; }
+.sheet2 .ag-header-group-cell { font-weight: 600; }
+.sheet2 .ag-header-group-cell[col-id^="book."], .sheet2 .ag-header-group-cell[col-id^="pred"] { background: #f5f8ff; }
+.sheet2 .num-cell { justify-content: flex-end; font-variant-numeric: tabular-nums; padding-left: 4px; padding-right: 6px; }
+.sheet2 .line-cell { font-weight: 600; }
+.sheet2 .num-cell:not(.line-cell) { font-weight: 400; }
+.sheet2 .span-status { justify-content: center; }
+.sheet2 .sub-hdr .ag-header-cell-label { justify-content: center; }
+.sheet2 .sub-hdr { padding-left: 4px; padding-right: 4px; font-weight: 400; color: #595959; }
+.sheet2 .ag-header-group-cell-label { justify-content: center; }
+/* 每阶段三列的对齐（放在最后，覆盖 num-cell 的默认右对齐） */
+.sheet2 .ag-cell.span-status { justify-content: center; }
+/* 赛果列与预测结果列居中，表头也居中 */
+.avg-tip-table { margin-top: 4px; border-collapse: collapse; font-size: 12px; }
+.avg-tip-table th, .avg-tip-table td { padding: 1px 8px 1px 0; text-align: left; font-weight: 400; white-space: nowrap; }
+.avg-tip-table th { color: rgba(255,255,255,0.65); }
+/* 对齐（读 columnWidths.ts 的 COLUMN_ALIGN；放最后以覆盖默认） */
+.sheet2 .ag-cell.al-right { justify-content: flex-end; }
+.sheet2 .ag-cell.al-center { justify-content: center; }
+.sheet2 .ag-cell.al-left { justify-content: flex-start; }
+.sheet2 .ag-header-cell.al-right .ag-header-cell-label { justify-content: flex-end; }
+.sheet2 .ag-header-cell.al-center .ag-header-cell-label { justify-content: center; }
+.sheet2 .ag-header-cell.al-left .ag-header-cell-label { justify-content: flex-start; }
+.sheet2 .ag-cell.span-status { justify-content: center; }
+
+/* 表头不撑列宽：排序标记缩小、间距收紧，排序序号用小号字；放不下的表头省略，悬停显示全名（用户 2026-10-14 定） */
+.sheet2 .ag-header-cell { padding-left: 4px; padding-right: 4px; }
+.sheet2 .ag-header-cell-label { min-width: 0; overflow: hidden; }
+.sheet2 .ag-header-cell-text { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.sheet2 .ag-sort-indicator-container { flex: none; padding-left: 1px; }
+.sheet2 .ag-sort-indicator-icon { padding-left: 0; margin-left: 1px; }
+.sheet2 .ag-sort-indicator-icon .ag-icon { font-size: 11px; width: 11px; height: 11px; }
+.sheet2 .ag-sort-order { font-size: 9px; padding-left: 1px; margin-left: 0; opacity: .75; }
+/* 表头分隔竖线：AG Grid 默认画在拖拽区内 2–4px，比单元格右边框（列边界前 1px）偏左；右移 1px，使竖线右缘与列边界对齐 */
+.sheet2 .ag-header-cell-resize::after { left: 3px; }

@@ -4,7 +4,7 @@ import { DB_SOURCE_LABEL, REPLICA_BANNER, isUnpromotedReplica, type DbMeta, type
 /** 数据源切换（现网 / 副本） */
 export function DataSourceSwitch({ value, onChange }: { value: DbSource; onChange: (s: DbSource) => void }) {
   return (
-    <Tooltip title="现网 = 8787；副本 = 8788 只读实例（v2d3，未晋升）。是否为副本以后端返回的标识为准">
+    <Tooltip title="现网 = 8787；副本 = 只读副本实例（默认 8788，可用 VITE_API_REPLICA_BASE 改）（v2d3，未晋升）。是否为副本以后端返回的标识为准">
       <Space size={4}>
         <Typography.Text>数据源</Typography.Text>
         <Segmented
