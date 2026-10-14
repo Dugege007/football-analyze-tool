@@ -121,10 +121,12 @@ function baseChildren(): Col[] {
 }
 
 // ───────────── 通用格子 ─────────────
-function StatusText({ st, reason }: { st: CellStatus; reason?: string | null }) {
+function StatusText({ st, reason, extra }: { st: CellStatus; reason?: string | null; extra?: string | null }) {
   const t = STATUS_TEXT[st as Exclude<CellStatus, 'ok'>] ?? '无法获取'
-  const span = <span className="t-gray">{t}</span>
-  return reason ? <Tooltip title={REASON_TEXT[reason] ?? reason}>{span}</Tooltip> : span
+  // The reason and any extra line, such as the sample size, share one hover so tooltips do not stack.
+  const lines = [reason ? (REASON_TEXT[reason] ?? reason) : null, extra ?? null].filter(Boolean) as string[]
+  const span = <span className={extra ? 't-gray alert-sample-tip' : 't-gray'}>{t}</span>
+  return lines.length ? <Tooltip title={lines.map((l, k) => <div key={k}>{l}</div>)}>{span}</Tooltip> : span
 }
 
 function Mv({ text, dir, colored }: { text: string; dir: MoveDir | undefined; colored: boolean }) {
@@ -227,6 +229,11 @@ interface TripleSpec {
 /** Chinese names of the alert levels for the hover text. */
 const ALERT_NAME: Record<string, string> = { high: '高', medium: '中', light: '轻' }
 
+/** Hover text for the sample size behind an alert, written as a complete sentence. */
+function sampleText(n: number): string {
+  return n === 0 ? '样本数：0，这一格没有抓取时刻，所以没有可用的历史样本。' : `样本数：${n}。`
+}
+
 /** 一个阶段一组三列（主水 / 盘口 / 客水 等）；格子没有数据时左列跨三列显示状态文字。 */
 function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
   const n = t.subs.length
@@ -251,8 +258,10 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
       const st = statusOf(cell as { cell_status?: CellStatus })
       if (!cell || st !== 'ok') {
         if (i !== 0) return null
-        const stx = <StatusText st={st} reason={st === 'insufficient' ? null : ((cell?.cell_status_reason as string) ?? null)} />
-        return t.avg && cell?.avg_detail ? <AvgTip d={cell.avg_detail as AvgDetail} market={t.avg} phase={t.phase}>{stx}</AvgTip> : stx
+        // A cell without data still shows its sample size, for example 0 when there is no capture time.
+        const emptyN = t.subs.some((x) => x.alert) ? ((cell as { alert_sample_n?: number | null } | undefined)?.alert_sample_n ?? null) : null
+        const stxTip = <StatusText st={st} reason={st === 'insufficient' ? null : ((cell?.cell_status_reason as string) ?? null)} extra={emptyN != null ? sampleText(emptyN) : null} />
+        return t.avg && cell?.avg_detail ? <AvgTip d={cell.avg_detail as AvgDetail} market={t.avg} phase={t.phase}>{stxTip}</AvgTip> : stxTip
       }
       const v = cell[sub.field] as number | null
       const text = (sub.fmt ?? fmtNum)(v)
@@ -261,8 +270,8 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
       // On alert cells, hovering shows the alert level and the sample size when the backend provides them.
       const sampleN = sub.alert ? ((cell as { alert_sample_n?: number | null }).alert_sample_n ?? null) : null
       const alertLv = sub.alert ? ((cell as { alert?: string | null }).alert ?? null) : null
-      const tipParts = [alertLv && t.phase !== 'open' ? `预警：${ALERT_NAME[alertLv] ?? alertLv}` : null, sampleN != null ? `样本数：${sampleN}` : null].filter(Boolean)
-      const bodyTip = tipParts.length ? <span title={tipParts.join('；')}>{body}</span> : body
+      const tipParts = [alertLv && t.phase !== 'open' ? `预警等级：${ALERT_NAME[alertLv] ?? alertLv}。` : null, sampleN == null ? null : sampleText(sampleN)].filter(Boolean)
+      const bodyTip = tipParts.length ? <Tooltip title={tipParts.join('')}><span className="alert-sample-tip">{body}</span></Tooltip> : body
       return t.avg ? <AvgTip d={cell.avg_detail as AvgDetail | null | undefined} market={t.avg} phase={t.phase}>{bodyTip}</AvgTip> : bodyTip
     },
   }))

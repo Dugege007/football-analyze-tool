@@ -24,7 +24,9 @@ function stOf(c: Raw | null | undefined, has: boolean): { cell_status: CellStatu
 const ALERTS = ['light', 'medium', 'high']
 /** 预警：接口给 alert 就用；没给时取现有 fallback_hl_level（分析师 2026-10-14 定） */
 function alertOf(c: Raw | null | undefined) {
-  const a = c?.alert ?? c?.fallback_hl_level ?? null
+  // Since backend a837e4a the alert field is authoritative: when the key is present, a null value means no warning.
+  // The old fallback_hl_level is used only for responses that do not carry the alert key at all.
+  const a = c && 'alert' in c ? c.alert : (c?.fallback_hl_level ?? null)
   return typeof a === 'string' && ALERTS.includes(a) ? (a as 'light' | 'medium' | 'high') : null
 }
 /** 每格都带上来源、记录时间和多家平均明细（接口没给时为空） */
