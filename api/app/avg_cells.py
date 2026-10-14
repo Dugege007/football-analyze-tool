@@ -1,0 +1,191 @@
+"""数据表接口里「多家平均」三格（亚盘 ah.avg、大小球 ou.avg、欧赔 x1x2.avg）的取数与组装。
+
+计算规则见接口约定第 3 版第 7 节（/workspace/odds-data/ui-feedback/20261014/api-contract-phase1.md），
+纯数学部分在 app/avg_conversion.py。本模块只读已加载到内存的快照，不写数据库。
+
+取数口径（本模块的实现选择，已写进验收说明请分析师确认）：
+- 只用 odds_snapshot 的规则通道（channel=rule）在 open、mid、close 三个点位的记录；
+  不用 legacy_import 和带 manual 字样的来源（用户已定不再使用手工数据）。
+- 初盘优先取 5df_live_opening（接口给出的开盘盘口，没有开盘时间）；没有时取这家机构最早的一条带时间的规则记录；
+  再没有时取这家机构时间线上最早的一段，但只在它距开赛超过 8 小时时才算初盘。
+  距开赛超过 8 小时、但不是第一条的记录（early 记录）一律不用。
+- 中盘、临盘取规则通道的 mid、close 点位；同一点位有多个来源时，依次优先 5df_live、5df_hist_asof、其他来源。
+- 截止时刻（as_of）之后才记录的数据不用。
+"""
+from __future__ import annotations
+
+import json
+import statistics
+from datetime import datetime, timedelta
+from typing import Any, Optional
+
+from app import avg_conversion as ac
+
+PHASES = ("open", "mid", "close")
+MARKETS = {"ah": "asian", "ou": "ou", "x1x2": "euro_1x2"}
+_EXCLUDED_SOURCES = {"legacy_import"}
+_MIDCLOSE_PRIORITY = {"5df_live": 0, "5df_hist_asof": 1}
+OPEN_MIN_LEAD = timedelta(hours=8)
+
+
+def _parse(v: Any) -> Optional[datetime]:
+    if not v:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(v).replace("Z", "+00:00").replace(" ", "T"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        from app import collection_schedule as cs
+        dt = dt.replace(tzinfo=cs.TZ_CN)
+    return dt
+
+
+def _usable_source(src: Any) -> bool:
+    s = src or ""
+    return s not in _EXCLUDED_SOURCES and "manual" not in s
+
+
+def _fetched_at(r: Any) -> Optional[datetime]:
+    try:
+        ex = json.loads(r["extras_json"] or "{}")
+    except (TypeError, ValueError):
+        return None
+    return _parse(ex.get("fetched_at")) if isinstance(ex, dict) else None
+
+
+def _hk(water: Any, price: Any) -> Optional[float]:
+    """香港盘水位：有水位直接用；只有含本金的赔率时减 1。"""
+    if water is not None:
+        return float(water)
+    if price is not None:
+        return float(price) - 1.0
+    return None
+
+
+def _quote(market: str, r: Any) -> Optional[dict]:
+    """把一条记录整理成计算用的报价；字段不全时返回 None。亚盘盘口换成接口写法（主队让球为正）。"""
+    if market == "x1x2":
+        o = [r["price_home"], r["price_draw"], r["price_away"]]
+        if any(x is None for x in o):
+            return None
+        return {"water": [float(x) for x in o]}
+    if r["line"] is None:
+        return None
+    if market == "ah":
+        w = [_hk(r["water_home"], r["price_home"]), _hk(r["water_away"], r["price_away"])]
+        line = -float(r["line"]) + 0.0
+    else:
+        w = [_hk(r["water_over"], r["price_over"]), _hk(r["water_under"], r["price_under"])]
+        line = float(r["line"])
+    if any(x is None for x in w):
+        return None
+    return {"line": line, "water": w}
+
+
+def _record_time(r: Any, key: str) -> Optional[datetime]:
+    return _parse(r[key])
+
+
+def select_quotes(d: Any, mpk: int, market: str, phase: str, kick: Optional[datetime],
+                  as_of: datetime) -> dict[str, dict]:
+    """返回 {机构: 报价}，报价另带 source 与 recorded_at 便于排查。"""
+    db_market = MARKETS[market]
+    cands: dict[str, list[tuple]] = {}
+    for r in d.snap_by_match.get(mpk, []):
+        if (r["market"] != db_market or r["book"] not in ac.BOOKS or r["channel"] != "rule"
+                or r["point"] != phase or not _usable_source(r["source"])):
+            continue
+        t = _record_time(r, "recorded_at")
+        if t is None and r["source"] != "5df_live_opening":
+            continue
+        seen = t or _fetched_at(r)
+        if seen is not None and seen > as_of:
+            continue
+        q = _quote(market, r)
+        if q is None:
+            continue
+        if phase == "open":
+            rank = (0 if r["source"] == "5df_live_opening" else 1, t.timestamp() if t else 0.0)
+        else:
+            rank = (_MIDCLOSE_PRIORITY.get(r["source"], 9), -(t.timestamp() if t else 0.0))
+        q.update(source=r["source"], recorded_at=t.isoformat() if t else None)
+        cands.setdefault(r["book"], []).append((rank, q))
+    out = {b: min(v, key=lambda x: x[0])[1] for b, v in cands.items()}
+    if phase == "open" and kick is not None:
+        # 规则通道没有初盘时，退回这家机构时间线上最早的一段（距开赛超过 8 小时才算初盘）。
+        first: dict[str, tuple] = {}
+        for r in d.timeline.get(mpk, []):
+            if r["market"] != db_market or r["book"] not in ac.BOOKS or r["is_inplay"] or not _usable_source(r["source"]):
+                continue
+            t = _record_time(r, "seg_start_at")
+            if t is None or t > as_of:
+                continue
+            if r["book"] not in first or t < first[r["book"]][0]:
+                first[r["book"]] = (t, r)
+        for b, (t, r) in first.items():
+            if b in out or kick - t <= OPEN_MIN_LEAD:
+                continue
+            q = _quote(market, r)
+            if q is not None:
+                q.update(source=r["source"], recorded_at=t.isoformat())
+                out[b] = q
+    return out
+
+
+def missing_reason(phase: str, kick: Optional[datetime], sched: dict, as_of: datetime) -> str:
+    """没有数据的机构的原因（第 2 节判定顺序的简化版，见模块说明）。"""
+    if kick is None:
+        return "not_captured"
+    if phase == "open":
+        return "book_not_open" if as_of < kick else "not_captured"
+    target = _parse(sched.get(f"{phase}_target_time"))
+    if target is None:
+        target = kick - (timedelta(hours=8) if phase == "mid" else timedelta(hours=1))
+    return "not_due" if as_of < target and as_of < kick else "not_captured"
+
+
+def build_avg_cell(market: str, phase: str, quotes: dict[str, dict], missing: dict[str, str],
+                   mu: Optional[float], mu_source: Optional[str]) -> dict:
+    res = ac.compute_avg(market, quotes, missing, mu)
+    detail = res["avg_detail"]
+    if market == "ah":
+        detail["goal_expectation"] = mu
+        detail["goal_expectation_source"] = mu_source
+    keys = {"ah": ("line", "home_water", "away_water"), "ou": ("line", "over", "under"),
+            "x1x2": ("home", "draw", "away")}[market]
+    cell: dict[str, Any] = {k: None for k in keys}
+    if res["values"]:
+        cell.update(res["values"])
+    if res["status"] == "ok":
+        status, reason = "ok", None
+    elif not quotes:
+        reasons = [missing[b] for b in ac.BOOKS if b in missing]
+        if any(r in ("not_due", "book_not_open") for r in reasons):
+            status = "pending"
+            reason = "not_due" if "not_due" in reasons else "book_not_open"
+        else:
+            status = "unavailable"
+            reason = reasons[0] if reasons and len(set(reasons)) == 1 else "not_captured"
+    else:
+        status, reason = "insufficient", "too_few_books"
+    cell.update({"cell_status": status, "cell_status_reason": reason, "source": "avg", "recorded_at": None,
+                 "move": None, "alert": None, "avg_detail": detail})
+    return cell
+
+
+def build_avg_block(d: Any, mpk: int, kick: Optional[datetime], sched: dict, as_of: datetime) -> dict:
+    """返回 {"ah": {phase: 格子}, "ou": {...}, "x1x2": {...}}。"""
+    out: dict[str, dict] = {m: {} for m in MARKETS}
+    for phase in PHASES:
+        sel = {m: select_quotes(d, mpk, m, phase, kick, as_of) for m in MARKETS}
+        ou_lines = [q["line"] for b, q in sel["ou"].items() if b != "william"]
+        mu, mu_src = ac.goal_expectation(ou_lines)
+        for m in MARKETS:
+            quotes = {b: {k: v for k, v in q.items() if k in ("line", "water")} for b, q in sel[m].items()}
+            miss = {b: missing_reason(phase, kick, sched, as_of) for b in ac.BOOKS if b not in quotes}
+            cell = build_avg_cell(m, phase, quotes, miss, mu if m == "ah" else None, mu_src if m == "ah" else None)
+            cell["avg_detail"]["sources"] = {b: {"source": q.get("source"), "recorded_at": q.get("recorded_at")}
+                                             for b, q in sel[m].items()}
+            out[m][phase] = cell
+    return out

@@ -39,6 +39,7 @@ from app import kickoff_drift as kd
 from app import leak_suspect as leak
 from app import fundamentals as fund  # 0.3.21
 from app import open_status as osx  # opening status and source fields (user rule 2026-10-10)
+from app import avg_cells  # 多家平均三格（接口约定第 3 版第 7 节）
 
 router = APIRouter(tags=["table"])
 
@@ -2500,7 +2501,16 @@ def _flat_row(item: dict) -> dict:
         pred = dict(pred)
         rationale = pred.pop("rationale", None)
         src["prediction"] = pred
+    # 多家平均的明细 avg_detail 含长度可变的数组，平铺后每行列集合会不一致，所以整块作为一列原样保留。
+    avg_details = {}
+    for mk in ("ah", "ou", "x1x2"):
+        blk = (src.get(mk) or {}).get("avg")
+        if isinstance(blk, dict):
+            for ph, cell in blk.items():
+                if isinstance(cell, dict) and "avg_detail" in cell:
+                    avg_details[f"{mk}_avg_{ph}_avg_detail"] = cell.pop("avg_detail")
     flat = {**{k: v for k, v in match.items()}, **flatten({k: v for k, v in src.items() if k != "match_id"})}
+    flat.update(avg_details)
     flat["match_id"] = item["match_id"]
     flat["prediction_rationale"] = rationale
     flat["live"] = live
@@ -2773,6 +2783,12 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
         # 0.1.9：自采超窗不再进日核对
         # 0.3.20：kickoff_drift_min（只作信息展示；不碰推迟字段 / 目标时刻 / 日核对）
         _mf_row.update(kd.drift_fields(row["match_uid"], kick, eff_as_of))
+        # 多家平均（接口约定第 3 版第 7 节）：亚盘、大小球按多数盘口换算后平均，欧赔直接平均。
+        # 放在初盘收尾之后加入，避免普通机构的初盘处理流程作用到伪机构 avg 上。
+        _avg = avg_cells.build_avg_block(d, mpk, kick, sched, eff_as_of)
+        ah_out["avg"] = _avg["ah"]
+        x_out["avg"] = _avg["x1x2"]
+        ou_out = {"avg": _avg["ou"]}
         items.append({
             "match_id": row["match_uid"],
             "match": {
@@ -2794,6 +2810,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             "schedule": {k: v for k, v in sched.items() if k != "live_rule_1110_target_time"},
             "ah": ah_out,
             "x1x2": x_out,
+            "ou": ou_out,
             "x1x2_base": x_base,
             "multi_avg_prob": x_base["close"]["multi_avg"],
             "jc_1x2": jc,
