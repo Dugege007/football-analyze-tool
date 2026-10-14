@@ -206,7 +206,18 @@ def test_exclusion_still_votes_and_insufficient():
     assert d["voting_books"] == ["macau", "crown", "william"]
     assert d["excluded_books"] == [{"book": "william", "reason": "deviation_too_large", "steps": 3,
                                     "original_line": 1.25, "original_water": [0.9, 0.9], "margin": ac._r(ac.margin(.9, .9))}]
-    assert out["status"] == "insufficient" and out["values"] is None and d["averaged_count"] == 2
+    # 2026-10-14 门槛改为至少两家：剔除一家后剩两家，照常输出平均值。
+    assert out["status"] == "ok" and out["values"] is not None and d["averaged_count"] == 2
+
+
+def test_one_book_or_none_is_insufficient():
+    assert ac.MIN_BOOKS == 2
+    out = ac.compute_avg("ah", {"macau": Q(0.5, .9, .9)}, {})
+    assert out["status"] == "insufficient" and out["values"] is None
+    out = ac.compute_avg("x1x2", {"macau": {"water": [2.0, 3.2, 3.6]}}, {})
+    assert out["status"] == "insufficient" and out["values"] is None
+    out = ac.compute_avg("ou", {}, {b: "not_captured" for b in ac.BOOKS})
+    assert out["status"] == "insufficient" and out["values"] is None
 
 
 def test_x1x2_simple_mean():
@@ -251,6 +262,12 @@ def run_case(case: dict) -> list[str]:
             continue
         if d[k] != exp[k]:
             bad.append(f"{k}: 实现 {d[k]} 期望 {exp[k]}")
+    if exp["cell_status"] == "insufficient" and d["averaged_count"] >= ac.MIN_BOOKS:
+        # 用例文件按旧门槛（至少三家）写；2026-10-14 门槛改为至少两家后，这类用例改为应输出平均值，数值不在用例里，只查状态。
+        if out["status"] != "ok" or out["values"] is None:
+            bad.append("门槛两家：应输出平均值")
+        exp = {**exp, "cell_status": out["status"], "avg_water": None}
+        out = {**out, "values": None}
     if out["status"] != exp["cell_status"]:
         bad.append(f"cell_status: 实现 {out['status']} 期望 {exp['cell_status']}")
 

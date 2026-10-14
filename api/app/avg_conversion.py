@@ -26,8 +26,9 @@ from scipy.stats import poisson
 BOOKS: tuple[str, ...] = ("macau", "crown", "pinnacle", "william", "bet365")
 # 平票且中位数也分不开时，依次取这几家机构的盘口（分析师 2026-10-14 确定）。
 TIE_ORDER: tuple[str, ...] = ("macau", "pinnacle", "crown", "bet365")
-# 参与平均的机构少于这个家数时，这一格为数据不足。
-MIN_BOOKS = 3
+# 参与平均的机构少于这个家数时，这一格为数据不足（数值为空值，cell_status=insufficient，原因 too_few_books）。
+# 2026-10-14 用户把门槛从至少三家改为至少两家；亚盘、大小球、欧赔的平均列共用这个常量。人气差值不用这个常量，暂不改。
+MIN_BOOKS = 2
 # 盘口与多数盘口相差这么多档或以上时，这家机构被剔除。
 EXCLUDE_STEPS = 3
 # 没有大小球盘口可用时，亚盘换算使用的总进球期望。
