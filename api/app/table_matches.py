@@ -2131,6 +2131,28 @@ class Result(_M_):
     total_goals: Optional[int] = None
     score: Optional[str] = None
     wdl: Optional[str] = None
+    jc: Optional["JcResult"] = None  # 2026-10-14：竞彩胜平负（had）与让球胜平负（hhad）的赛果和临盘赔率
+
+
+class JcResultCell(_M_):
+    """2026-10-14：竞彩胜平负（had）或让球胜平负（hhad）的赛果和对应临盘赔率。
+    outcome 为 home / draw / away，outcome_zh 为 胜 / 平 / 负；让球按临盘让球数调整主队进球后再判定。
+    null_reason 只在 outcome 为空时有值：no_result（没有比分或赛果还不可见）、special_status（退款、推迟、取消、腰斩）、
+    no_close_odds（没有完整的临盘赔率）、no_goal_line（让球胜平负没有让球数）。"""
+    outcome: Optional[str] = None
+    outcome_zh: Optional[str] = None
+    odds: Optional[float] = None
+    goal_line: Optional[float] = None
+    adjusted_score: Optional[str] = None
+    null_reason: Optional[str] = None
+
+
+class JcResult(_M_):
+    had: JcResultCell
+    hhad: JcResultCell
+
+
+Result.model_rebuild()
 
 
 class Settlement(_M_):
@@ -2523,6 +2545,8 @@ def _stable(item: dict) -> dict:
         it["prediction"] = _blank(Prediction)
     if it.get("result") is None:
         it["result"] = _blank(Result)
+    if isinstance(it.get("result"), dict) and it["result"].get("jc") is None:
+        it["result"]["jc"] = build_jc_result(None, "no_result", None, None)
     if it.get("settlement") is None:
         it["settlement"] = _blank(Settlement)
     _fill_posthoc_flags(it)
@@ -2609,6 +2633,43 @@ def _normalize_sources(blk: Any) -> None:
             for sub in c.values():
                 if isinstance(sub, dict) and "source" in sub and sub is not c.get("avg_detail"):
                     _normalize_one(sub)
+
+
+_JC_ZH = {"home": "胜", "draw": "平", "away": "负"}
+
+
+def _jc_result_cell(result: Optional[dict], res_hidden: Optional[str], close: Optional[dict],
+                    handicap: bool) -> dict:
+    out = {"outcome": None, "outcome_zh": None, "odds": None, "goal_line": None,
+           "adjusted_score": None, "null_reason": None}
+    line = (close or {}).get("goal_line") if handicap else None
+    if handicap and line is not None:
+        out["goal_line"] = float(line)
+    if result is None or result.get("home_goals") is None:
+        out["null_reason"] = "special_status" if res_hidden in RESULT_SPECIAL_STATUSES else "no_result"
+        return out
+    c = close or {}
+    if any(c.get(k) is None for k in ("home", "draw", "away")):
+        # 采集端没有数据时沿用临盘格子的缺失原因（例如 collector_empty），否则写 no_close_odds
+        out["null_reason"] = c.get("missing_reason") if (handicap and c.get("missing_reason")) else "no_close_odds"
+        return out
+    if handicap and line is None:
+        out["null_reason"] = "no_goal_line"
+        return out
+    hg = result["home_goals"] + (float(line) if handicap else 0)
+    ag = result["away_goals"]
+    o = "home" if hg > ag else ("draw" if hg == ag else "away")
+    if handicap:
+        out["adjusted_score"] = f"{hg:g}-{ag}"
+    out.update(outcome=o, outcome_zh=_JC_ZH[o], odds=c[o])
+    return out
+
+
+def build_jc_result(result, res_hidden, jc_1x2: Optional[dict], jc_hhad: Optional[dict]) -> dict:
+    """临盘取 jc_1x2.close 和 jc_hhad.close（与页面显示的临盘一致）。让球数取 jc_hhad.close.goal_line，
+    负数表示主队让球：主队进球加上让球数后再和客队进球比较。"""
+    return {"had": _jc_result_cell(result, res_hidden, (jc_1x2 or {}).get("close"), False),
+            "hhad": _jc_result_cell(result, res_hidden, (jc_hhad or {}).get("close"), True)}
 
 
 RESULT_SPECIAL_STATUSES = ("refund", "postponed", "cancelled", "abandoned")
@@ -3022,8 +3083,8 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 "competition_type": row["competition_type"],
                 "home_team": row["home_team"], "away_team": row["away_team"],
                 "home_team_canonical": row["home_canonical"], "away_team_canonical": row["away_canonical"],
-                "home_team_pending_confirm": tp.is_pending(row["home_team_id"], row["home_canonical"], _pending),
-                "away_team_pending_confirm": tp.is_pending(row["away_team_id"], row["away_canonical"], _pending),
+                "home_team_pending_confirm": tp.is_pending(row["home_team_id"], row["home_canonical"], _pending, row["home_team"]),
+                "away_team_pending_confirm": tp.is_pending(row["away_team_id"], row["away_canonical"], _pending, row["away_team"]),
             },
             "phase_exception": exc,
             "schedule": {k: v for k, v in sched.items() if k != "live_rule_1110_target_time"},
@@ -3039,7 +3100,9 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             "prediction_hidden_reason": pred_hidden,
             "produced_at": prediction["produced_at"] if prediction else None,
             "as_of": eff_as_of.isoformat(),
-            "result": result,
+            # 2026-10-14：竞彩赛果放在 result.jc 里（结算之后再加，不影响结算）
+            "result": ({**result, "jc": build_jc_result(result, res_hidden, jc, jc_hhad)}
+                       if result is not None else None),
             "result_hidden_reason": res_hidden,
             "hidden_reason": res_hidden,  # 前端名：赛果/结算为空的原因（= result_hidden_reason）
             "settlement": settlement,
