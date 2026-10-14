@@ -38,6 +38,7 @@ from app import db as app_db
 from app import kickoff_drift as kd
 from app import leak_suspect as leak
 from app import fundamentals as fund  # 0.3.21
+from app import team_pending as tp  # 2026-10-14 待确认球队
 from app import open_status as osx  # opening status and source fields (user rule 2026-10-10)
 
 router = APIRouter(tags=["table"])
@@ -2064,6 +2065,8 @@ class MatchInfo(_M_):
     away_team: Optional[str] = None
     home_team_canonical: Optional[str] = None
     away_team_canonical: Optional[str] = None
+    home_team_pending_confirm: bool = False  # 2026-10-14：认不出的球队（按来源原名写），前端悬停「待确认」
+    away_team_pending_confirm: bool = False
 
 
 class Schedule(_M_):
@@ -2560,6 +2563,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             ORDER BY m.jingcai_date, COALESCE(m.kickoff_hour, 99), COALESCE(m.jc_no, 999999), m.id
             LIMIT ? OFFSET ?""", args + [limit, offset]).fetchall()
     page_ids = [r["id"] for r in rows]
+    _pending = tp.load_pending(conn)
     d = _Data(conn, page_ids)
 
     # 基准样本：库内全部场（不受本次日期/scope/分页影响），按同一取数口径算 open/mid/close 返还率
@@ -2789,6 +2793,8 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 "competition_type": row["competition_type"],
                 "home_team": row["home_team"], "away_team": row["away_team"],
                 "home_team_canonical": row["home_canonical"], "away_team_canonical": row["away_canonical"],
+                "home_team_pending_confirm": tp.is_pending(row["home_team_id"], row["home_canonical"], _pending),
+                "away_team_pending_confirm": tp.is_pending(row["away_team_id"], row["away_canonical"], _pending),
             },
             "phase_exception": exc,
             "schedule": {k: v for k, v in sched.items() if k != "live_rule_1110_target_time"},

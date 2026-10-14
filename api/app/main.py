@@ -20,6 +20,7 @@ from app import shadow_evaluable as shadow_ev  # N5/N5-PIN 不可评估记账
 from app import collection_schedule
 from app import leak_suspect as _leak  # 0.3.20
 from app import odds_timeline_chart as otc  # 0.3.23
+from app import team_pending as tp  # 2026-10-14 待确认球队
 
 DEFAULT_STRATEGY = "CFFXDJ_5_V3"
 TZ_CN = timezone(timedelta(hours=8))
@@ -103,7 +104,7 @@ def row_get(row: sqlite3.Row, key: str, default: Any = None) -> Any:
     return row[key] if key in row.keys() else default
 
 
-def build_match_obj(row: sqlite3.Row, meta_extras: dict | None = None) -> dict:
+def build_match_obj(row: sqlite3.Row, meta_extras: dict | None = None, pending: tuple | None = None) -> dict:
     extras = meta_extras or {}
     kickoff_at = row_get(row, "kickoff_at") or extras.get("kickoff_at")
     minute_known = row_get(row, "kickoff_minute_known")
@@ -132,6 +133,11 @@ def build_match_obj(row: sqlite3.Row, meta_extras: dict | None = None) -> dict:
         "kickoff_at": kickoff_at,
         "kickoff_minute_known": bool(minute_known) if minute_known is not None else False,
         "teams": {"home": row["home_team"], "away": row["away_team"]},
+        # 2026-10-14：认不出的球队按来源原名写，true 时前端在队名旁加标记、悬停显示「待确认」
+        "teams_pending_confirm": {
+            "home": tp.is_pending(row_get(row, "home_team_id"), None, pending) if pending else False,
+            "away": tp.is_pending(row_get(row, "away_team_id"), None, pending) if pending else False,
+        },
         "home_team_id": row_get(row, "home_team_id"),
         "away_team_id": row_get(row, "away_team_id"),
         "league_id": row_get(row, "league_id"),
@@ -652,7 +658,7 @@ def list_matches(
             items.append(
                 {
                     "id": row["match_uid"],
-                    "match": build_match_obj(row, extras),
+                    "match": build_match_obj(row, extras, tp.load_pending(conn)),
                     "has_prediction": bool(row["pred_count"]),
                     "direction": row["direction"],
                     "result": build_result(conn, row["id"]),
@@ -672,7 +678,7 @@ def get_match(match_id: str) -> dict:
         row = resolve_match_row(conn, match_id)
         extras = meta_extras(conn, row["id"])
         return {
-            "match": build_match_obj(row, extras),
+            "match": build_match_obj(row, extras, tp.load_pending(conn)),
             "result": build_result(conn, row["id"]),
             "stats": build_stats(conn, row["id"]),
             "odds": build_odds(conn, row["id"]),
@@ -871,7 +877,7 @@ def dispatch_pending(
             items.append(
                 {
                     "id": row["match_uid"],
-                    "match": build_match_obj(row, extras),
+                    "match": build_match_obj(row, extras, tp.load_pending(conn)),
                     "kickoff_at_resolved": kick.isoformat(),
                     "mid_collect_at": mid_at.isoformat(),
                     "close_collect_at": close_at.isoformat(),

@@ -1,5 +1,12 @@
 # CHANGELOG · match-analysis-api
 
+## 未发布 — 2026-10-14（分支 backend/team-pending-confirm-20261014，待分析师审核；接口版本号保持 0.3.26）
+
+- 用户规则 2026-10-14：认不出的球队按来源原名写，前端在队名旁加标记，悬停显示「待确认」。新增 `app/team_pending.py`，只读判断球队是否待确认，顺序为：teams 表将来若有 pending_confirm 列以它为准；否则看 team_aliases.source 是否以 `_pending_confirm` 结尾（名称定稿导入包给待确认球队打的来源标记）；否则看环境变量 `APP_TEAM_PENDING_FILE` 指向的 import_rows.csv 或 teams.csv 里 pending_confirm=true 的常用名；都没有时为 false。不改正式库结构，不写库。
+- `GET /table/matches`：嵌套格式在 `match` 下新增 `home_team_pending_confirm`、`away_team_pending_confirm`（布尔，默认 false）；扁平格式同名同列。
+- `GET /matches/{match_id}` 等使用 `build_match_obj` 的接口：`match` 下新增 `teams_pending_confirm: {home, away}`（布尔）。
+- 新增测试 `tests/test_team_pending_confirm_1014.py`。
+
 ## v0.1.11 — 2026-10-13（仓库版本 v0.1.11，经分析师验收后合并到 main；接口版本号保持 0.3.26）
 
 - R-F 真实通道事后补写（`scripts/live/asof_backfill_mid_rule.py`、`scripts/live/rescue_worker.py`）：真实临盘写 `actual/t1`，真实中盘写 `actual/t8`，`source = 5df_hist_asof`、`rescue_rule = R-F`、`asof_backfill = true`、`phase_assign_late = true`；开赛后超过 3 小时另写 `recommend_live_ok = false`。记录时刻晚于目标时刻的变化不入选。口径见 `docs/schema/v2_0-live-miss-rescue-rules.md` 第 2.6 节。
