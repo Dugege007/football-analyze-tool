@@ -2,6 +2,7 @@ import type { ColDef, ColGroupDef, ICellRendererParams } from 'ag-grid-community
 import { Tag, Tooltip } from 'antd'
 import type { ReactNode } from 'react'
 import { formatPick } from '../api/pickFormat'
+import { w, type WidthKey } from './columnWidths'
 import {
   REASON_TEXT,
   SETTLE_TEXT,
@@ -55,18 +56,18 @@ export function baseCols(): Col[] {
 function baseChildren(): Col[] {
   return [
     {
-      colId: 'jcDay', headerName: '竞彩日', width: 104, pinned: 'left',
+      colId: 'jcDay', headerName: '竞彩日', width: w('base.jcDay'), pinned: 'left',
       valueGetter: (p) => p.data?.match.jingcai_date ?? null,
       cellClass: (p) => dayClass(p.data),
       sort: 'asc', sortIndex: 0,
     },
-    { colId: 'jcNo', headerName: '编号', width: 88, pinned: 'left', valueGetter: (p) => p.data?.match.jc_id ?? '-', cellClass: (p) => dayClass(p.data), sort: 'asc', sortIndex: 1 },
-    { colId: 'kickoff', headerName: '开赛时间', width: 96, pinned: 'left', valueGetter: (p) => kickoffText(p.data?.match.kickoff_at ?? null) },
-    { colId: 'league', headerName: '赛事', width: 96, pinned: 'left', valueGetter: (p) => p.data?.match.league ?? '-' },
-    { colId: 'home', headerName: '主队', width: 88, pinned: 'left', valueGetter: (p) => p.data?.match.home_team ?? '-' },
-    { colId: 'away', headerName: '客队', width: 88, pinned: 'left', valueGetter: (p) => p.data?.match.away_team ?? '-' },
+    { colId: 'jcNo', headerName: '编号', width: w('base.jcNo'), pinned: 'left', valueGetter: (p) => p.data?.match.jc_id ?? '-', cellClass: (p) => dayClass(p.data), sort: 'asc', sortIndex: 1 },
+    { colId: 'kickoff', headerName: '开赛时间', width: w('base.kickoff'), pinned: 'left', valueGetter: (p) => kickoffText(p.data?.match.kickoff_at ?? null) },
+    { colId: 'league', headerName: '赛事', width: w('base.league'), pinned: 'left', valueGetter: (p) => p.data?.match.league ?? '-' },
+    { colId: 'home', headerName: '主队', width: w('base.home'), pinned: 'left', valueGetter: (p) => p.data?.match.home_team ?? '-' },
+    { colId: 'away', headerName: '客队', width: w('base.away'), pinned: 'left', valueGetter: (p) => p.data?.match.away_team ?? '-' },
     {
-      colId: 'score', headerName: '比分', width: 58, pinned: 'left',
+      colId: 'score', headerName: '比分', width: w('base.score'), pinned: 'left',
       cellRenderer: (p: P) => {
         const r = p.data
         if (!r) return null
@@ -78,9 +79,9 @@ function baseChildren(): Col[] {
         return '-'
       },
     },
-    { colId: 'goals', headerName: '总进球', width: 66, pinned: 'left', valueGetter: (p) => (finished(p.data) ? (p.data!.result!.total_goals ?? '-') : '-') },
+    { colId: 'goals', headerName: '总进球', width: w('base.goals'), pinned: 'left', valueGetter: (p) => (finished(p.data) ? (p.data!.result!.total_goals ?? '-') : '-') },
     {
-      colId: 'outcome', headerName: '赛果', width: 56, pinned: 'left',
+      colId: 'outcome', headerName: '赛果', width: w('base.outcome'), pinned: 'left',
       cellRenderer: (p: P) => {
         const r = p.data
         if (!r) return null
@@ -103,7 +104,7 @@ function StatusText({ st, reason }: { st: CellStatus; reason?: string | null }) 
 
 function Mv({ text, dir, colored }: { text: string; dir: MoveDir | undefined; colored: boolean }) {
   if (!colored || !dir || dir === 'flat') return <>{text}</>
-  return <span className={dir === 'up' ? 'mv-up' : 'mv-down'}>{text}{dir === 'up' ? '↑' : '↓'}</span>
+  return <span className={dir === 'up' ? 'mv-up' : 'mv-down'}>{text}</span>
 }
 
 function AvgTip({ d, market, children }: { d: AvgDetail | null | undefined; market: Market; children: ReactNode }) {
@@ -142,7 +143,7 @@ interface TripleSpec {
   phase: Phase
   /** 取这一阶段的格子与升降 */
   get: (r: Row) => { cell: Record<string, unknown> | null | undefined; move: Move | null }
-  subs: { key: Sub; field: string; header: string; fmt?: (v: number | null) => string; alert?: boolean }[]
+  subs: { key: Sub; field: string; header: string; wkey: WidthKey; fmt?: (v: number | null) => string; alert?: boolean }[]
   avg?: Market | null
   prefix?: (r: Row) => string | null
 }
@@ -153,7 +154,7 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
   const children: ColDef<Row>[] = t.subs.map((sub, i) => ({
     colId: `${t.id}.${sub.key}`,
     headerName: sub.header,
-    width: sub.key === 'line' ? 58 : 52,
+    width: w(sub.wkey),
     headerClass: ['sub-hdr', i === 0 && t.first ? SEC : ''].join(' '),
     colSpan: i === 0 ? (p) => (p.data && statusOf(t.get(p.data).cell as { cell_status?: CellStatus }) !== 'ok' ? n : 1) : undefined,
     cellClass: (p) => {
@@ -182,19 +183,19 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
 
 const SUBS: Record<Market, TripleSpec['subs']> = {
   ah: [
-    { key: 'left', field: 'home_water', header: '主水' },
-    { key: 'line', field: 'line', header: '盘口', fmt: (v) => (v == null ? '-' : ahLineText(v)), alert: true },
-    { key: 'right', field: 'away_water', header: '客水' },
+    { key: 'left', field: 'home_water', header: '主水', wkey: 'ah.water' },
+    { key: 'line', field: 'line', header: '盘口', wkey: 'ah.line', fmt: (v) => (v == null ? '-' : ahLineText(v)), alert: true },
+    { key: 'right', field: 'away_water', header: '客水', wkey: 'ah.water' },
   ],
   ou: [
-    { key: 'left', field: 'over', header: '大球' },
-    { key: 'line', field: 'line', header: '盘口', alert: true },
-    { key: 'right', field: 'under', header: '小球' },
+    { key: 'left', field: 'over', header: '大球', wkey: 'ou.water' },
+    { key: 'line', field: 'line', header: '盘口', wkey: 'ou.line', alert: true },
+    { key: 'right', field: 'under', header: '小球', wkey: 'ou.water' },
   ],
   x1x2: [
-    { key: 'left', field: 'home', header: '胜' },
-    { key: 'mid', field: 'draw', header: '平' },
-    { key: 'right', field: 'away', header: '负' },
+    { key: 'left', field: 'home', header: '胜', wkey: 'x1x2.odds' },
+    { key: 'mid', field: 'draw', header: '平', wkey: 'x1x2.odds' },
+    { key: 'right', field: 'away', header: '负', wkey: 'x1x2.odds' },
   ],
 }
 const MOVE_FN = { ah: ahMove, ou: ouMove, x1x2: x1x2Move } as const
@@ -221,7 +222,7 @@ function resultCol(book: Book, market: Market, first: boolean): ColDef<Row> {
   return {
     colId: `${book}.res.${market}`,
     headerName: label,
-    width: 92,
+    width: w(`res.${market}`),
     headerClass: first ? SEC : undefined,
     cellClass: first ? SEC : undefined,
     cellRenderer: (p: P) => {
@@ -275,7 +276,7 @@ function signedJc(n: number | null): string {
 export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
   const children: Col[] = [
     {
-      colId: 'jc.res.had', headerName: '胜平负赛果', width: 100, headerClass: SEC, cellClass: SEC,
+      colId: 'jc.res.had', headerName: '胜平负赛果', width: w('jc.res.had'), headerClass: SEC, cellClass: SEC,
       cellRenderer: (p: P) => {
         const r = p.data
         if (!r || !finished(r)) return '-'
@@ -287,7 +288,7 @@ export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
   ]
   if (!onlyHad)
     children.push({
-      colId: 'jc.res.hhad', headerName: '让球胜平负赛果', width: 118,
+      colId: 'jc.res.hhad', headerName: '让球胜平负赛果', width: w('jc.res.hhad'),
       cellRenderer: (p: P) => {
         const r = p.data
         if (!r || !finished(r)) return '-'
@@ -299,7 +300,7 @@ export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
   if (!resultOnly) {
     for (const kind of ['had', 'hhad'] as const) {
       PHASES.forEach((ph, i) => {
-        const subs: TripleSpec['subs'] = SUBS.x1x2.map((x) => ({ ...x }))
+        const subs: TripleSpec['subs'] = SUBS.x1x2.map((x) => ({ ...x, wkey: kind === 'had' ? 'jc.had.odds' : 'jc.hhad.odds' }))
         children.push(
           tripleGroup({
             id: `jc.${kind}.${ph}`,
@@ -320,7 +321,7 @@ export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
           g.children.unshift({
             colId: `jc.hhad.${ph}.goal`,
             headerName: '让球',
-            width: 50,
+            width: w('jc.hhad.goal'),
             headerClass: ['sub-hdr', i === 0 ? SEC : ''].join(' '),
             cellClass: ['num-cell', i === 0 ? SEC : ''].join(' '),
             valueGetter: (p) => {
@@ -349,7 +350,7 @@ export function predCols(book: Book, blocks: PredBlock[]): ColGroupDef<Row> {
   for (const b of blocks) {
     const name = b === 'ah' ? '亚盘预测' : b === 'ou' ? '大小预测' : b === 'x1x2' ? '欧盘预测' : '竞彩预测'
     children.push({
-      colId: `pred.${b}`, headerName: name, width: b === 'ah' ? 96 : 86, headerClass: SEC, cellClass: SEC,
+      colId: `pred.${b}`, headerName: name, width: w(`pred.${b}`), headerClass: SEC, cellClass: SEC,
       cellRenderer: (p: P) => {
         const r = p.data
         if (!r || b !== 'ah') return '-'
@@ -361,7 +362,7 @@ export function predCols(book: Book, blocks: PredBlock[]): ColGroupDef<Row> {
       },
     })
     children.push({
-      colId: `pred.${b}.res`, headerName: '结果', width: b === 'ah' ? 120 : 64,
+      colId: `pred.${b}.res`, headerName: '结果', width: w(`pred.${b}.res`),
       cellClass: (p) => {
         if (b !== 'ah') return ''
         const code = p.data?.settlement_by_book?.[book]?.ah?.code
@@ -381,9 +382,11 @@ export function predCols(book: Book, blocks: PredBlock[]): ColGroupDef<Row> {
           <>
             {SETTLE_TEXT[s.code]}
             {s.fallback_book && (
-              <Tag className="fallback-tag" bordered={false}>
-                按澳门结算
-              </Tag>
+              <Tooltip title={`所选机构没有临盘，按${BOOK_NAME[s.settled_with as Book] ?? s.settled_with}临盘结算`}>
+                <Tag className="fallback-tag" bordered={false}>
+                  {BOOK_NAME[s.settled_with as Book] ?? s.settled_with}
+                </Tag>
+              </Tooltip>
             )}
           </>
         )
