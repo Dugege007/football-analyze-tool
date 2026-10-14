@@ -29,9 +29,17 @@
 .sheet2 .ag-header-group-cell { font-weight: 600; }
 .sheet2 .ag-header-group-cell[col-id^="book."], .sheet2 .ag-header-group-cell[col-id^="pred"] { background: #f5f8ff; }
 .sheet2 .num-cell { justify-content: flex-end; font-variant-numeric: tabular-nums; padding-left: 4px; padding-right: 6px; }
-.sheet2 .line-cell { justify-content: center; font-weight: 600; }
+.sheet2 .line-cell { font-weight: 600; }
 .sheet2 .num-cell:not(.line-cell) { font-weight: 400; }
 .sheet2 .span-status { justify-content: center; }
 .sheet2 .sub-hdr .ag-header-cell-label { justify-content: center; }
 .sheet2 .sub-hdr { padding-left: 4px; padding-right: 4px; font-weight: 400; color: #595959; }
 .sheet2 .ag-header-group-cell-label { justify-content: center; }
+/* 每阶段三列的对齐（放在最后，覆盖 num-cell 的默认右对齐） */
+.sheet2 .ag-cell.al-right { justify-content: flex-end; }
+.sheet2 .ag-cell.al-center { justify-content: center; }
+.sheet2 .ag-cell.al-left { justify-content: flex-start; }
+.sheet2 .ag-cell.span-status { justify-content: center; }
+.sheet2 .sub-hdr.al-right .ag-header-cell-label { justify-content: flex-end; }
+.sheet2 .sub-hdr.al-center .ag-header-cell-label { justify-content: center; }
+.sheet2 .sub-hdr.al-left .ag-header-cell-label { justify-content: flex-start; }

@@ -148,6 +148,9 @@ interface TripleSpec {
   prefix?: (r: Row) => string | null
 }
 
+/** 三列对齐：左列右对齐、中列居中、右列左对齐（用户 10-14 15:04） */
+const alignOf = (i: number, n: number) => (i === 0 ? 'al-right' : i === n - 1 ? 'al-left' : 'al-center')
+
 /** 一个阶段一组三列（主水 / 盘口 / 客水 等）；格子没有数据时左列跨三列显示状态文字。 */
 function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
   const n = t.subs.length
@@ -155,10 +158,10 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
     colId: `${t.id}.${sub.key}`,
     headerName: sub.header,
     width: w(sub.wkey),
-    headerClass: ['sub-hdr', i === 0 && t.first ? SEC : ''].join(' '),
+    headerClass: ['sub-hdr', alignOf(i, n), i === 0 && t.first ? SEC : ''].join(' '),
     colSpan: i === 0 ? (p) => (p.data && statusOf(t.get(p.data).cell as { cell_status?: CellStatus }) !== 'ok' ? n : 1) : undefined,
     cellClass: (p) => {
-      const cls = ['num-cell', i === 0 && t.first ? SEC : '']
+      const cls = ['num-cell', alignOf(i, n), i === 0 && t.first ? SEC : '']
       if (sub.key === 'line') cls.push('line-cell')
       const c = p.data ? (t.get(p.data).cell as { alert?: keyof typeof ALERT_CLASS | null; cell_status?: CellStatus } | null) : null
       if (sub.alert && t.phase !== 'open' && c?.alert && statusOf(c) === 'ok') cls.push(ALERT_CLASS[c.alert])
