@@ -297,7 +297,7 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
         if (i !== 0) return null
         // A cell without data still shows its sample size, for example 0 when there is no capture time.
         const emptyN = t.subs.some((x) => x.alert) ? ((cell as { alert_sample_n?: number | null } | undefined)?.alert_sample_n ?? null) : null
-        const stxTip = <StatusText st={st} reason={st === 'insufficient' ? null : ((cell?.cell_status_reason as string) ?? null)} extra={t.subs.some((x) => x.alert) ? (emptyN ? sampleText(emptyN) : NO_ALERT_TEXT) : null} />
+        const stxTip = <StatusText st={st} reason={(cell?.cell_status_reason as string) ?? null} extra={t.subs.some((x) => x.alert) ? (emptyN ? sampleText(emptyN) : NO_ALERT_TEXT) : null} />
         return t.avg && cell?.avg_detail ? <AvgTip d={cell.avg_detail as AvgDetail} market={t.avg} phase={t.phase}>{stxTip}</AvgTip> : stxTip
       }
       const v = cell[sub.field] as number | null

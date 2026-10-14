@@ -7,7 +7,7 @@ export const ahLineText = (line: number | null | undefined): string => formatHan
 export const STATUS_TEXT: Record<Exclude<CellStatus, 'ok'>, string> = {
   pending: '未填写',
   unavailable: '无法获取',
-  insufficient: '数据不足',
+  insufficient: '无法获取',
 }
 export const REASON_TEXT: Record<string, string> = {
   not_due: '采集时刻未到',
@@ -17,7 +17,7 @@ export const REASON_TEXT: Record<string, string> = {
   suspect_truncated: '初盘疑似截断',
   deviation_too_large: '偏离多数盘口 3 档或以上',
   conversion_failed: '模型算不出换算结果',
-  too_few_books: '有数据的机构少于 3 家',
+  too_few_books: '参与平均的机构少于 2 家',
 }
 
 export const fmtNum = (v: number | null | undefined): string => (v == null ? '-' : String(Number(v.toFixed(2))))
@@ -25,9 +25,7 @@ export const fmtNum = (v: number | null | undefined): string => (v == null ? '-'
 /** 格子状态：接口没给 cell_status 时一律按「无法获取」（草案第 8 节）。 */
 export function statusOf(c: { cell_status?: CellStatus | null; avg_detail?: { averaged_count?: number | null } | null } | null | undefined): CellStatus {
   if (!c || !c.cell_status) return 'unavailable'
-  // 多家平均：参与平均的家数少于 3 时一律显示「数据不足」（约定 7.4）
-  const n = c.avg_detail?.averaged_count
-  if (c.cell_status === 'ok' && n != null && n < 3) return 'insufficient'
+  // 多家平均的门槛（至少 2 家）由接口判断：不足时接口返回 insufficient 和 too_few_books，页面显示「无法获取」，不在页面上按家数自行改状态。
   return c.cell_status
 }
 

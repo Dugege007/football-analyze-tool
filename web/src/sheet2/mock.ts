@@ -141,7 +141,7 @@ function avgLine<C extends { line: number | null; cell_status?: string | null; c
     min_books: 3, devig_method: 'power', conversion_model: 'poisson', voting_books: voting, averaged_books: averaged,
     excluded_books: excluded, missing_books: missing, tie_break: tie, median_line: tie === 'none' ? null : med, conversions, averaged_count: averaged.length,
   }
-  if (averaged.length < 3) return { ok: false, line: null, w: [0, 0], detail, st: { cell_status: 'insufficient', cell_status_reason: 'too_few_books', avg_detail: detail } }
+  if (averaged.length < 2) return { ok: false, line: null, w: [0, 0], detail, st: { cell_status: 'insufficient', cell_status_reason: 'too_few_books', avg_detail: detail } }
   const mean = (i: 0 | 1) => +(conversions.reduce((t, c) => t + c.converted_water[i], 0) / conversions.length).toFixed(2)
   return { ok: true, line: major, w: [mean(0), mean(1)], detail, st: {} }
 }
@@ -197,7 +197,7 @@ function build(s: Spec): Row {
       tie_break: 'none', median_line: null, averaged_count: used.length,
       conversions: used.map((b) => { const c = euM[b]![p]!; return { book: b, original_line: null, steps: 0, original_water: [c.home!, c.draw!, c.away!], converted_water: [c.home!, c.draw!, c.away!], margin: 0.05 } }),
     }
-    if (used.length < 3) avgE[p] = nilEu({ cell_status: 'insufficient', cell_status_reason: 'too_few_books', avg_detail: det })
+    if (used.length < 2) avgE[p] = nilEu({ cell_status: 'insufficient', cell_status_reason: 'too_few_books', avg_detail: det })
     else {
       const mean = (f: (c: X1x2Cell) => number) => +(used.reduce((t, b) => t + f(euM[b]![p]!), 0) / used.length).toFixed(2)
       avgE[p] = { ...eu(mean((c) => c.home!), mean((c) => c.draw!), mean((c) => c.away!)), avg_detail: det }
