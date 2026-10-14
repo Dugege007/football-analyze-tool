@@ -176,16 +176,136 @@ def build_avg_cell(market: str, phase: str, quotes: dict[str, dict], missing: di
 
 def build_avg_block(d: Any, mpk: int, kick: Optional[datetime], sched: dict, as_of: datetime) -> dict:
     """返回 {"ah": {phase: 格子}, "ou": {...}, "x1x2": {...}}。"""
-    out: dict[str, dict] = {m: {} for m in MARKETS}
+    return build_tables(d, mpk, kick, sched, as_of, {})["avg"]
+
+
+# ---------------------------------------------------------------------------
+# 第二期剩余部分：普通机构的大小球格子、Bet365 列、通用的格子状态 cell_status（接口约定第 2、3、4 节）。
+# 普通机构的大小球格子和 Bet365 的亚盘、欧赔格子，与多家平均用同一套取数（select_quotes），
+# 这样页面上每家的格子和多家平均的输入完全一致。
+# ---------------------------------------------------------------------------
+
+PLAIN_KEYS = {"ah": ("line", "home_water", "away_water"), "ou": ("line", "over", "under"),
+              "x1x2": ("home", "draw", "away")}
+# 判断「有数据」时必须齐全的字段。
+DATA_KEYS = {"ah": ("line", "home_water", "away_water"), "ou": ("line", "over", "under"),
+             "x1x2": ("home", "draw", "away"), "jc_1x2": ("home", "draw", "away"),
+             "jc_hhad": ("goal_line", "home", "draw", "away")}
+
+
+def plain_cell(market: str, q: Optional[dict], reason: str) -> dict:
+    """由一条报价组装普通机构的格子；没有报价时各值为空，并写明缺席原因。"""
+    keys = PLAIN_KEYS[market]
+    cell: dict[str, Any] = {k: None for k in keys}
+    if q is not None:
+        vals = ([q["line"]] if market != "x1x2" else []) + list(q["water"])
+        cell.update({k: (round(float(v), 4) if v is not None else None) for k, v in zip(keys, vals)})
+        cell.update(source=q.get("source"), recorded_at=q.get("recorded_at"),
+                    cell_status="ok", cell_status_reason=None)
+    else:
+        cell.update(source=None, recorded_at=None,
+                    cell_status="pending" if reason in ("not_due", "book_not_open") else "unavailable",
+                    cell_status_reason=reason)
+    cell.update(move=None, alert=None)
+    return cell
+
+
+def _cmp(new: Any, old: Any) -> Optional[str]:
+    if new is None or old is None:
+        return None
+    new, old = float(new), float(old)
+    return "up" if new > old + 1e-9 else "down" if new < old - 1e-9 else "flat"
+
+
+def ah_line_move(new: Any, old: Any) -> Optional[str]:
+    """亚盘盘口的升降（接口写法，主队让球为正）：让球方让得更多为升，让得更少为降。
+    让球方换边时按新的让球方判断：新的让球方让的球数比它原来让的（原来受让记为负数）多，就是升。"""
+    if new is None or old is None:
+        return None
+    new, old = float(new), float(old)
+    if abs(new) < 1e-9:
+        return "flat" if abs(old) < 1e-9 else "down"
+    sign = 1.0 if new > 0 else -1.0
+    return _cmp(new * sign, old * sign)
+
+
+def apply_moves(market: str, cells: dict) -> None:
+    """按第 4 节给中盘、临盘写 move：中盘和初盘比，临盘和中盘比，中盘没有数据时临盘和初盘比。"""
+    keys = PLAIN_KEYS[market]
+
+    def has(c):
+        return isinstance(c, dict) and c.get("cell_status") == "ok"
+
+    for ph in ("mid", "close"):
+        cur = cells.get(ph)
+        if not has(cur):
+            continue
+        ref_name = "open" if ph == "mid" else ("mid" if has(cells.get("mid")) else "open")
+        ref = cells.get(ref_name)
+        if not has(ref):
+            continue
+        if market == "x1x2":
+            cur["move"] = {"compare_to": ref_name, "line": None, "left": _cmp(cur["home"], ref["home"]),
+                           "mid": _cmp(cur["draw"], ref["draw"]), "right": _cmp(cur["away"], ref["away"])}
+        else:
+            line_mv = ah_line_move(cur["line"], ref["line"]) if market == "ah" else _cmp(cur["line"], ref["line"])
+            cur["move"] = {"compare_to": ref_name, "line": line_mv, "left": _cmp(cur[keys[1]], ref[keys[1]]),
+                           "right": _cmp(cur[keys[2]], ref[keys[2]])}
+
+
+def build_tables(d: Any, mpk: int, kick: Optional[datetime], sched: dict, as_of: datetime,
+                 plain: dict[str, tuple[str, ...]]) -> dict:
+    """一次取数同时组装多家平均和普通机构的格子。
+
+    plain：{盘种: 需要组装普通格子的机构}，例如 {"ou": 五家, "ah": ("bet365",), "x1x2": ("bet365",)}。
+    返回 {"avg": {盘种: {阶段: 格子}}, "plain": {盘种: {机构: {阶段: 格子}}}}。
+    """
+    avg: dict[str, dict] = {m: {} for m in MARKETS}
+    pl: dict[str, dict] = {m: {b: {} for b in plain.get(m, ())} for m in MARKETS}
     for phase in PHASES:
         sel = {m: select_quotes(d, mpk, m, phase, kick, as_of) for m in MARKETS}
+        reason = missing_reason(phase, kick, sched, as_of)
         ou_lines = [q["line"] for b, q in sel["ou"].items() if b != "william"]
         mu, mu_src = ac.goal_expectation(ou_lines)
         for m in MARKETS:
             quotes = {b: {k: v for k, v in q.items() if k in ("line", "water")} for b, q in sel[m].items()}
-            miss = {b: missing_reason(phase, kick, sched, as_of) for b in ac.BOOKS if b not in quotes}
+            miss = {b: reason for b in ac.BOOKS if b not in quotes}
             cell = build_avg_cell(m, phase, quotes, miss, mu if m == "ah" else None, mu_src if m == "ah" else None)
             cell["avg_detail"]["sources"] = {b: {"source": q.get("source"), "recorded_at": q.get("recorded_at")}
                                              for b, q in sel[m].items()}
-            out[m][phase] = cell
-    return out
+            avg[m][phase] = cell
+            for b in plain.get(m, ()):
+                pl[m][b][phase] = plain_cell(m, sel[m].get(b), reason)
+    for m, blk in pl.items():
+        for cells in blk.values():
+            apply_moves(m, cells)
+    return {"avg": avg, "plain": pl}
+
+
+def _has_data(market: str, cell: dict) -> bool:
+    return all(cell.get(k) is not None for k in DATA_KEYS[market])
+
+
+def apply_cell_status(market: str, phase: str, cell: Any, kick: Optional[datetime], sched: dict,
+                      as_of: datetime) -> None:
+    """给已有的普通格子（亚盘、欧赔、竞彩）补上通用的 cell_status 和 cell_status_reason（第 2 节）。
+
+    已经带 cell_status 的格子（多家平均、新组装的格子）不改。
+    - 字段齐全：ok；但初盘被截断判定为不可信时为 unavailable，原因 suspect_truncated。
+    - 只有部分字段（例如欧赔只有主胜）：unavailable，原因 not_captured，不当作有数据。
+    - 完全没有：按目标时刻判 pending（not_due、book_not_open）或 unavailable（not_captured）。
+    """
+    if not isinstance(cell, dict) or "cell_status" in cell:
+        return
+    if _has_data(market, cell):
+        if phase == "open" and cell.get("status") == "suspect_truncated":
+            cell["cell_status"], cell["cell_status_reason"] = "unavailable", "suspect_truncated"
+        else:
+            cell["cell_status"], cell["cell_status_reason"] = "ok", None
+        return
+    if any(cell.get(k) is not None for k in DATA_KEYS[market] if k not in ("line", "goal_line")):
+        cell["cell_status"], cell["cell_status_reason"] = "unavailable", "not_captured"
+        return
+    reason = missing_reason(phase, kick, sched, as_of)
+    cell["cell_status"] = "pending" if reason in ("not_due", "book_not_open") else "unavailable"
+    cell["cell_status_reason"] = reason

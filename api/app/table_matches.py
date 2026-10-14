@@ -66,6 +66,9 @@ RETURN_HL_WATER = "real_only"
 BOOKS: tuple[str, ...] = ("macau", "crown", "william", "pinnacle")
 PHASES: tuple[str, ...] = ("open", "mid", "close")
 REAL_PHASES: tuple[str, ...] = ("mid_real", "close_real")
+# 接口约定第 1 节：页面按这个顺序画列（五家普通机构加多家平均）。竞彩不在此列。
+TABLE_BOOKS: tuple[str, ...] = ("macau", "crown", "pinnacle", "william", "bet365")
+TABLE_COLUMNS: tuple[str, ...] = TABLE_BOOKS + ("avg",)
 CALC_PHASES = PHASES  # 返还率 / 凯利只按规则值（open/mid/close）计算；*_real 仅原始值（术语文档未写）
 RESULT_VISIBLE_AFTER_KICKOFF = timedelta(hours=3)  # 对齐 v2_0-result-ingest-schedule.md「开赛+3h 主拉」
 LAST_PREMATCH_FRESH_MINUTES = 15  # 2026-10-08 定：minutes_before_kickoff ∈ [0,15] → stale=false
@@ -2785,10 +2788,26 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
         _mf_row.update(kd.drift_fields(row["match_uid"], kick, eff_as_of))
         # 多家平均（接口约定第 3 版第 7 节）：亚盘、大小球按多数盘口换算后平均，欧赔直接平均。
         # 放在初盘收尾之后加入，避免普通机构的初盘处理流程作用到伪机构 avg 上。
-        _avg = avg_cells.build_avg_block(d, mpk, kick, sched, eff_as_of)
+        # 第二期剩余部分：五家机构的大小球格子、Bet365 的亚盘和欧赔格子，与多家平均同一次取数。
+        _tbl = avg_cells.build_tables(d, mpk, kick, sched, eff_as_of,
+                                      {"ou": TABLE_BOOKS, "ah": ("bet365",), "x1x2": ("bet365",)})
+        _avg = _tbl["avg"]
+        ah_out["bet365"] = _tbl["plain"]["ah"]["bet365"]
+        x_out["bet365"] = _tbl["plain"]["x1x2"]["bet365"]
         ah_out["avg"] = _avg["ah"]
         x_out["avg"] = _avg["x1x2"]
-        ou_out = {"avg": _avg["ou"]}
+        ou_out = {b: _tbl["plain"]["ou"][b] for b in TABLE_BOOKS}
+        ou_out["avg"] = _avg["ou"]
+        # 通用的格子状态 cell_status（接口约定第 2 节）：已有的亚盘、欧赔、竞彩格子补上状态和原因。
+        for _mk, _blk_all in (("ah", ah_out), ("x1x2", x_out)):
+            for _b, _blk in _blk_all.items():
+                if isinstance(_blk, dict):
+                    for _ph in PHASES + REAL_PHASES:
+                        avg_cells.apply_cell_status(_mk, _ph.replace("_real", ""), _blk.get(_ph), kick, sched,
+                                                    eff_as_of)
+        for _ph in PHASES:
+            avg_cells.apply_cell_status("jc_1x2", _ph, jc.get(_ph), kick, sched, eff_as_of)
+            avg_cells.apply_cell_status("jc_hhad", _ph, jc_hhad.get(_ph), kick, sched, eff_as_of)
         items.append({
             "match_id": row["match_uid"],
             "match": {
@@ -2839,7 +2858,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
         "scope": scope, "strategy": strategy, "channel": channel,
         "include_live": include_live,
         "settlement_version": s_ver,
-        "books": list(BOOKS),
+        "books": list(TABLE_COLUMNS),  # 接口约定第 1 节：五家机构加多家平均，前端按此顺序画列
         "config": {
             "result_visible_after_kickoff_hours": RESULT_VISIBLE_AFTER_KICKOFF.total_seconds() / 3600,
             "last_prematch_fresh_minutes": LAST_PREMATCH_FRESH_MINUTES,
