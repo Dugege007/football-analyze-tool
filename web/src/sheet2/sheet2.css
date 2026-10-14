@@ -46,3 +46,6 @@
 /* 赛果列与预测结果列居中，表头也居中 */
 .sheet2 .ag-cell.res-center { justify-content: center; }
 .sheet2 .res-center .ag-header-cell-label { justify-content: center; }
+.avg-tip-table { margin-top: 4px; border-collapse: collapse; font-size: 12px; }
+.avg-tip-table th, .avg-tip-table td { padding: 1px 8px 1px 0; text-align: left; font-weight: 400; white-space: nowrap; }
+.avg-tip-table th { color: rgba(255,255,255,0.65); }

@@ -2,7 +2,7 @@
  * 第 1 期模拟数据：字段名照后端草案。覆盖各种 cell_status、升降（含主让加深、受让方变化）、预警三档、
  * 比赛中、未开始、取消、推迟，以及无临盘退回澳门结算的情况。
  */
-import { REAL_BOOKS, type AhCell, type Book, type ByBookResult, type OuCell, type Phase, type Phased, type Row, type SettleItem, type X1x2Cell } from './types'
+import { REAL_BOOKS, type AvgDetail, type AhCell, type Book, type ByBookResult, type OuCell, type Phase, type Phased, type Row, type SettleItem, type X1x2Cell } from './types'
 
 const pend = { cell_status: 'pending' as const, cell_status_reason: 'not_due' }
 const unav = (r = 'not_captured') => ({ cell_status: 'unavailable' as const, cell_status_reason: r })
@@ -87,6 +87,65 @@ function ouResult(tg: number, line: number): ByBookResult['ou'] {
   return { line, side: w > 0 ? 'over' : 'under', push: false, cell_status: 'ok' }
 }
 
+/** 个别场次个别机构的亚盘盘口（初、中、临），用来演示平票与剔除 */
+const AH_OVERRIDE: Record<string, Partial<Record<Book, [number, number, number]>>> = {
+  // 临盘 2 家 0.25、2 家 0、1 家 0.5：平票，按中位数取 0.25
+  三002: { macau: [0.25, 0, 0.25], crown: [0.25, 0, 0.25], pinnacle: [0.25, 0, 0], william: [0.25, 0, 0], bet365: [0.25, 0, 0.5] },
+  // Bet365 临盘 1.75，比多数盘口 1 深 3 档：剔除
+  四001: { bet365: [0.5, 0.75, 1.75] },
+}
+
+function median(xs: number[]): number {
+  const a = [...xs].sort((x, y) => x - y)
+  const m = a.length >> 1
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2
+}
+
+function avgLine<C extends { line: number | null; cell_status?: string | null; cell_status_reason?: string | null }>(
+  market: 'ah' | 'ou', p: Phase, get: (b: Book) => C | null | undefined, water: (c: C) => [number, number],
+): { ok: boolean; line: number | null; w: [number, number]; detail: AvgDetail; st: object } {
+  void p
+  const have = REAL_BOOKS.filter((b) => get(b)?.cell_status === 'ok') as Book[]
+  const missing = REAL_BOOKS.filter((b) => !have.includes(b as Book)).map((b) => ({ book: b as string, reason: get(b)?.cell_status_reason ?? 'not_captured' }))
+  const voting = market === 'ou' ? have.filter((b) => b !== 'william') : have
+  const lineOf = (b: Book) => get(b)!.line as number
+  const cnt = new Map<number, number>()
+  voting.forEach((b) => cnt.set(lineOf(b), (cnt.get(lineOf(b)) ?? 0) + 1))
+  const top = Math.max(0, ...cnt.values())
+  const cands = [...cnt.entries()].filter(([, n]) => n === top).map(([l]) => l)
+  let tie: AvgDetail['tie_break'] = 'none'
+  let major: number | null = cands[0] ?? null
+  let med: number | null = null
+  if (cands.length > 1) {
+    med = median(voting.map(lineOf))
+    const dist = cands.map((l) => Math.abs(l - med!))
+    const best = cands.filter((_, i) => dist[i] === Math.min(...dist))
+    if (best.length === 1) { tie = 'median'; major = best[0] }
+    else if (have.includes('macau')) { tie = 'macau'; major = lineOf('macau') }
+    else if (have.includes('pinnacle')) { tie = 'pinnacle'; major = lineOf('pinnacle') }
+    else if (have.includes('crown')) { tie = 'crown'; major = lineOf('crown') }
+    else if (have.includes('bet365')) { tie = 'bet365'; major = lineOf('bet365') }
+    else { tie = 'smaller_line'; major = Math.min(...best) }
+  }
+  const steps = (b: Book) => (major == null ? 0 : Math.round(Math.abs(lineOf(b) - major) * 4))
+  const excluded = have.filter((b) => steps(b) >= 3).map((b) => ({ book: b as string, reason: 'deviation_too_large', steps: steps(b) }))
+  const averaged = have.filter((b) => steps(b) < 3)
+  const conversions = averaged.map((b) => {
+    const ow = water(get(b)!)
+    const k = steps(b) * 0.11 * Math.sign(lineOf(b) - (major ?? 0)) * (market === 'ah' ? 1 : -1)
+    return { book: b as string, original_line: lineOf(b), steps: steps(b), original_water: ow, converted_water: [+(ow[0] - k).toFixed(2), +(ow[1] + k).toFixed(2)], margin: b === 'william' ? 0.1 : b === 'pinnacle' || b === 'crown' ? 0.03 : 0.05 }
+  })
+  const detail: AvgDetail = {
+    books_used: averaged, books_missing: Object.fromEntries(missing.map((m) => [m.book, m.reason])), majority_line: major,
+    converted: conversions.filter((c) => c.steps > 0).map((c) => ({ book: c.book, raw_line: c.original_line, raw: c.original_water, converted: c.converted_water, method: 'power_poisson' })),
+    min_books: 3, devig_method: 'power', conversion_model: 'poisson', voting_books: voting, averaged_books: averaged,
+    excluded_books: excluded, missing_books: missing, tie_break: tie, median_line: tie === 'none' ? null : med, conversions, averaged_count: averaged.length,
+  }
+  if (averaged.length < 3) return { ok: false, line: null, w: [0, 0], detail, st: { cell_status: 'insufficient', cell_status_reason: 'too_few_books', avg_detail: detail } }
+  const mean = (i: 0 | 1) => +(conversions.reduce((t, c) => t + c.converted_water[i], 0) / conversions.length).toFixed(2)
+  return { ok: true, line: major, w: [mean(0), mean(1)], detail, st: {} }
+}
+
 function build(s: Spec): Row {
   const ahM: Row['ah'] = {}
   const ouM: Row['ou'] = {}
@@ -110,41 +169,39 @@ function build(s: Spec): Row {
         return
       }
       const hw = [0.92, 0.97, 0.88][i] + sh
-      // 威廉的亚盘临盘与多数机构差一档，用来演示多家平均的换算明细
-      const line = b === 'crown' && p === 'close' && s.id === '三001' ? 1 : s.ahLines[i]
+      const line = AH_OVERRIDE[s.id]?.[b]?.[i] ?? s.ahLines[i]
       a[p] = ah(line, hw, 1.86 - hw, { alert: p === 'close' && b === 'macau' ? (s.alert ?? null) : null })
-      o[p] = ou(s.ouLines[i], [0.9, 0.95, 0.99][i] - sh, 1.84 - [0.9, 0.95, 0.99][i] + sh)
+      // 威廉希尔大小球只开半球盘：四分之一盘时往上取到半球盘
+      const ouLine = b === 'william' && Math.abs((s.ouLines[i] * 4) % 2) === 1 ? s.ouLines[i] + 0.25 : s.ouLines[i]
+      o[p] = ou(ouLine, [0.9, 0.95, 0.99][i] - sh, 1.84 - [0.9, 0.95, 0.99][i] + sh)
       e[p] = eu(+(2.1 - i * 0.12 + sh).toFixed(2), +(3.2 + sh).toFixed(2), +(3.4 + i * 0.2 - sh).toFixed(2))
     })
     if (b === 'bet365' && s.id === '三009') a.open = nilAh(unav('suspect_truncated'))
     ahM[b] = a; ouM[b] = o; euM[b] = e
   }
-  // 多家平均
+  // 多家平均（字段照约定第 3 版第 7 节）
   const avgA: Phased<AhCell> = {}
   const avgO: Phased<OuCell> = {}
   const avgE: Phased<X1x2Cell> = {}
   PH.forEach((p) => {
-    const used = REAL_BOOKS.filter((b) => ahM[b]?.[p]?.cell_status === 'ok')
-    const missing: Record<string, string> = {}
-    REAL_BOOKS.filter((b) => !used.includes(b)).forEach((b) => (missing[b] = ahM[b]?.[p]?.cell_status_reason ?? 'not_captured'))
-    if (used.length < 3) {
-      const st = { cell_status: 'insufficient' as const, cell_status_reason: 'too_few_books', avg_detail: { books_used: used.slice(), books_missing: missing, majority_line: null, converted: null, min_books: 3 } }
-      avgA[p] = nilAh(st); avgO[p] = nilOu(st); avgE[p] = nilEu(st)
-      return
+    const ahRes = avgLine('ah', p, (b) => ahM[b]?.[p], (c) => [c.home_water!, c.away_water!])
+    avgA[p] = ahRes.ok ? ah(ahRes.line!, ahRes.w[0], ahRes.w[1], { avg_detail: ahRes.detail }) : nilAh(ahRes.st)
+    const ouRes = avgLine('ou', p, (b) => ouM[b]?.[p], (c) => [c.over!, c.under!])
+    avgO[p] = ouRes.ok ? ou(ouRes.line!, ouRes.w[0], ouRes.w[1], { avg_detail: ouRes.detail }) : nilOu(ouRes.st)
+    // 欧赔：直接平均，不换算（约定 7.6）
+    const used = REAL_BOOKS.filter((b) => euM[b]?.[p]?.cell_status === 'ok') as Book[]
+    const missing = REAL_BOOKS.filter((b) => !used.includes(b as Book)).map((b) => ({ book: b, reason: euM[b]?.[p]?.cell_status_reason ?? 'not_captured' }))
+    const det: AvgDetail = {
+      books_used: used, books_missing: Object.fromEntries(missing.map((m) => [m.book, m.reason])), majority_line: null, converted: null, min_books: 3,
+      devig_method: 'power', conversion_model: null, voting_books: [], averaged_books: used, excluded_books: [], missing_books: missing,
+      tie_break: 'none', median_line: null, averaged_count: used.length,
+      conversions: used.map((b) => { const c = euM[b]![p]!; return { book: b, original_line: null, steps: 0, original_water: [c.home!, c.draw!, c.away!], converted_water: [c.home!, c.draw!, c.away!], margin: 0.05 } }),
     }
-    const mean = (f: (b: string) => number) => +(used.reduce((t, b) => t + f(b), 0) / used.length).toFixed(2)
-    const lines = used.map((b) => ahM[b as Book]![p]!.line as number)
-    const cnt = new Map<number, number>()
-    lines.forEach((l) => cnt.set(l, (cnt.get(l) ?? 0) + 1))
-    const major = [...cnt.entries()].sort((x, y) => y[1] - x[1])[0][0]
-    const conv = used.filter((b) => ahM[b as Book]![p]!.line !== major).map((b) => {
-      const c = ahM[b as Book]![p]!
-      return { book: b, raw_line: c.line, raw: [c.home_water!, c.away_water!], converted: [+(c.home_water! - 0.22).toFixed(2), +(c.away_water! + 0.22).toFixed(2)], method: '待第 3 期方案定' }
-    })
-    const detail = { books_used: used.slice(), books_missing: missing, majority_line: major, converted: conv, min_books: 3 }
-    avgA[p] = ah(major, mean((b) => ahM[b as Book]![p]!.home_water!), mean((b) => ahM[b as Book]![p]!.away_water!), { avg_detail: detail })
-    avgO[p] = ou(ouM.macau![p]!.line!, mean((b) => ouM[b as Book]![p]!.over!), mean((b) => ouM[b as Book]![p]!.under!), { avg_detail: { ...detail, majority_line: ouM.macau![p]!.line, converted: [] } })
-    avgE[p] = { ...eu(mean((b) => euM[b as Book]![p]!.home!), mean((b) => euM[b as Book]![p]!.draw!), mean((b) => euM[b as Book]![p]!.away!)), avg_detail: { ...detail, majority_line: null, converted: null } }
+    if (used.length < 3) avgE[p] = nilEu({ cell_status: 'insufficient', cell_status_reason: 'too_few_books', avg_detail: det })
+    else {
+      const mean = (f: (c: X1x2Cell) => number) => +(used.reduce((t, b) => t + f(euM[b]![p]!), 0) / used.length).toFixed(2)
+      avgE[p] = { ...eu(mean((c) => c.home!), mean((c) => c.draw!), mean((c) => c.away!)), avg_detail: det }
+    }
   })
   ahM.avg = avgA; ouM.avg = avgO; euM.avg = avgE
 

@@ -40,12 +40,35 @@ export interface Move {
 }
 export type AlertLevel = 'light' | 'medium' | 'high' | null
 
+/** 后端可能新增取值（例如 crown、bet365、smaller_line），类型里允许其他字符串 */
+export type TieBreak = 'none' | 'median' | 'macau' | 'pinnacle' | 'crown' | 'bet365' | 'smaller_line'
+export interface AvgConversion {
+  book: string
+  original_line: number | null
+  steps: number
+  /** 亚盘 [主水, 客水]；大小球 [大球水位, 小球水位]；欧赔为胜、平、负三项 */
+  original_water: number[]
+  converted_water: number[]
+  margin: number | null
+}
 export interface AvgDetail {
+  // 第 2 版字段（保留）
   books_used: string[]
   books_missing: Record<string, string>
   majority_line: number | null
   converted: { book: string; raw_line: number | null; raw: number[]; converted: number[]; method: string }[] | null
   min_books: number
+  // 第 3 版新增（约定 7.2）
+  devig_method?: string | null
+  conversion_model?: string | null
+  voting_books?: string[]
+  averaged_books?: string[]
+  excluded_books?: { book: string; reason: string; steps: number }[]
+  missing_books?: { book: string; reason: string }[]
+  tie_break?: TieBreak | string | null
+  median_line?: number | null
+  conversions?: AvgConversion[]
+  averaged_count?: number | null
 }
 
 interface CellCommon {

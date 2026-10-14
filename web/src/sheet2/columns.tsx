@@ -107,27 +107,58 @@ function Mv({ text, dir, colored }: { text: string; dir: MoveDir | undefined; co
   return <span className={dir === 'up' ? 'mv-up' : 'mv-down'}>{text}</span>
 }
 
+// 没有映射的取值原样显示在「平票处理：」后面
+const TIE_TEXT: Record<string, string> = { median: '按中位数', macau: '取澳门', pinnacle: '取平博', crown: '取皇冠', bet365: '取 Bet365', smaller_line: '取较小盘口' }
+const DEVIG_TEXT: Record<string, string> = { power: '幂次法' }
+const MODEL_TEXT: Record<string, string> = { poisson: '泊松模型' }
+const EXCLUDE_TEXT: Record<string, string> = { deviation_too_large: '偏离多数盘口过大' }
+
+/** 多家平均格悬停：按约定第 7.2 节字段显示（第 3 版字段缺失时退回第 2 版字段）。 */
 function AvgTip({ d, market, children }: { d: AvgDetail | null | undefined; market: Market; children: ReactNode }) {
   if (!d) return <>{children}</>
   const name = (b: string) => BOOK_NAME[b as Book] ?? b
+  const names = (xs: string[] | undefined) => (xs && xs.length ? xs.map(name).join('、') : '无')
+  const lineText = (v: number | null | undefined) => (v == null ? '-' : market === 'ah' ? ahLineText(v) : fmtNum(v))
+  const averaged = d.averaged_books ?? d.books_used
+  const missing = d.missing_books ?? Object.entries(d.books_missing ?? {}).map(([book, reason]) => ({ book, reason }))
+  const tie = d.tie_break && d.tie_break !== 'none' ? (TIE_TEXT[d.tie_break] ?? d.tie_break) : null
   const tip = (
     <div className="avg-tip">
-      <div>参与：{d.books_used.length ? d.books_used.map(name).join('、') : '无'}</div>
-      {Object.keys(d.books_missing).length > 0 && (
-        <div>
-          缺席：{Object.entries(d.books_missing).map(([b, r]) => `${name(b)}（${REASON_TEXT[r] ?? r}）`).join('、')}
-        </div>
+      {market !== 'x1x2' && <div>多数盘口：{lineText(d.majority_line)}</div>}
+      {tie && <div>平票处理：{tie}{d.median_line != null ? `（中位数 ${lineText(d.median_line)}）` : ''}</div>}
+      <div>参与平均：{names(averaged)}{d.averaged_count != null ? `（${d.averaged_count} 家）` : ''}</div>
+      {market !== 'x1x2' && d.voting_books && <div>参与投票：{names(d.voting_books)}</div>}
+      {(d.excluded_books ?? []).length > 0 && (
+        <div>剔除：{d.excluded_books!.map((e) => `${name(e.book)}（${EXCLUDE_TEXT[e.reason] ?? e.reason}，相差 ${e.steps} 档）`).join('、')}</div>
       )}
-      {d.majority_line != null && <div>多数盘口：{market === 'ah' ? ahLineText(d.majority_line) : fmtNum(d.majority_line)}</div>}
-      {(d.converted ?? []).map((c) => (
-        <div key={c.book}>
-          换算：{name(c.book)} {market === 'ah' ? ahLineText(c.raw_line) : fmtNum(c.raw_line)} {c.raw.map(fmtNum).join(' / ')} → {c.converted.map(fmtNum).join(' / ')}
-        </div>
-      ))}
+      {missing.length > 0 && <div>没有数据：{missing.map((m) => `${name(m.book)}（${REASON_TEXT[m.reason] ?? m.reason}）`).join('、')}</div>}
+      {d.devig_method && <div>去水方法：{DEVIG_TEXT[d.devig_method] ?? d.devig_method}</div>}
+      {d.conversion_model && <div>换算模型：{MODEL_TEXT[d.conversion_model] ?? d.conversion_model}</div>}
+      {(d.conversions ?? []).length > 0 ? (
+        <table className="avg-tip-table">
+          <thead>
+            <tr><th>机构</th>{market !== 'x1x2' && <th>原盘口</th>}<th>原{market === 'x1x2' ? '赔率' : '水位'}</th>{market !== 'x1x2' && <th>换算后水位</th>}</tr>
+          </thead>
+          <tbody>
+            {d.conversions!.map((c) => (
+              <tr key={c.book}>
+                <td>{name(c.book)}</td>
+                {market !== 'x1x2' && <td>{lineText(c.original_line)}{c.steps > 0 ? `（差 ${c.steps} 档）` : ''}</td>}
+                <td>{c.original_water.map(fmtNum).join(' / ')}</td>
+                {market !== 'x1x2' && <td>{c.converted_water.map(fmtNum).join(' / ')}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        (d.converted ?? []).map((c) => (
+          <div key={c.book}>换算：{name(c.book)} {lineText(c.raw_line)} {c.raw.map(fmtNum).join(' / ')} → {c.converted.map(fmtNum).join(' / ')}</div>
+        ))
+      )}
     </div>
   )
   return (
-    <Tooltip title={tip} placement="right">
+    <Tooltip title={tip} placement="right" styles={{ root: { maxWidth: 460 } }}>
       <span className="avg-hover">{children}</span>
     </Tooltip>
   )
@@ -173,7 +204,11 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
       if (!r) return null
       const { cell, move } = t.get(r)
       const st = statusOf(cell as { cell_status?: CellStatus })
-      if (!cell || st !== 'ok') return i === 0 ? <StatusText st={st} reason={(cell?.cell_status_reason as string) ?? null} /> : null
+      if (!cell || st !== 'ok') {
+        if (i !== 0) return null
+        const stx = <StatusText st={st} reason={st === 'insufficient' ? null : ((cell?.cell_status_reason as string) ?? null)} />
+        return t.avg && cell?.avg_detail ? <AvgTip d={cell.avg_detail as AvgDetail} market={t.avg}>{stx}</AvgTip> : stx
+      }
       const v = cell[sub.field] as number | null
       const text = (sub.fmt ?? fmtNum)(v)
       const pre = sub.key === 'line' && t.prefix ? t.prefix(r) : null

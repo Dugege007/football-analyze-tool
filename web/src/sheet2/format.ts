@@ -21,8 +21,11 @@ export const REASON_TEXT: Record<string, string> = {
 export const fmtNum = (v: number | null | undefined): string => (v == null ? '-' : String(Number(v.toFixed(2))))
 
 /** 格子状态：接口没给 cell_status 时一律按「无法获取」（草案第 8 节）。 */
-export function statusOf(c: { cell_status?: CellStatus | null } | null | undefined): CellStatus {
+export function statusOf(c: { cell_status?: CellStatus | null; avg_detail?: { averaged_count?: number | null } | null } | null | undefined): CellStatus {
   if (!c || !c.cell_status) return 'unavailable'
+  // 多家平均：参与平均的家数少于 3 时一律显示「数据不足」（约定 7.4）
+  const n = c.avg_detail?.averaged_count
+  if (c.cell_status === 'ok' && n != null && n < 3) return 'insufficient'
   return c.cell_status
 }
 
