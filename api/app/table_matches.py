@@ -1033,7 +1033,7 @@ def build_api_closing(d: _Data, mpk: int, book: str) -> dict | None:
                "away": _r(r["price_away"], 4), "complete": False,
                "quote_time_known": False, "fetched_at": _iso(_to_cn(r["recorded_at"])),
                "basis": "api_closing", "source": f"odds_snapshot/{r['channel']}/{r['point']}",
-               "reference_only": True}
+               "_source_code": _row_source(r), "reference_only": True}
         out["complete"] = all(out[k] is not None for k in ("home", "draw", "away"))
         return out
     return None
@@ -1609,6 +1609,7 @@ def build_last_prematch(d: _Data, mpk: int, book: str, market: str,
                 "over_water": _r(r["water_over"]), "under_water": _r(r["water_under"]),
                 "water_source": WATER_SRC_MAP.get(r["water_src"]) if r["water_src"] else None,
                 "is_inplay": False, "source": f"odds_snapshot/{r['channel']}/{r['point']}",
+                "_source_code": _row_source(r),
                 **_LIVE_MERGE_BLANK,
             })
     if best is None:

@@ -215,6 +215,15 @@ def test_v2d3_sources_are_codes(v2d3_table):
                     if c.get("source_path") is not None:
                         assert c["source_path"] != c["source"]
     assert seen
+    import json
+    assert "_source_code" not in json.dumps(v2d3_table) and "_source_path" not in json.dumps(v2d3_table)
+    for it in v2d3_table["items"]:
+        for mk in ("ah", "x1x2"):
+            for b, blk in it[mk].items():
+                for ph in ("last_prematch", "api_closing"):
+                    c = blk.get(ph) if isinstance(blk, dict) else None
+                    if isinstance(c, dict) and c.get("source"):
+                        assert "/" not in c["source"], (mk, b, ph, c["source"])
 
 
 def test_source_code_of_paths():
