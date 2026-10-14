@@ -140,6 +140,8 @@ def test_x1x2_water_source_live(live_copy):
     seen = 0
     for it in d["items"]:
         for b, blk in it["x1x2"].items():
+            if b in ("bet365", "avg"):
+                continue  # 2026-10-14 新增列，水位来源字段由多家平均模块单独定义
             for ph in ("open", "mid", "close"):
                 c = blk[ph]
                 assert c["water_source"] in (None, "actual")
@@ -162,7 +164,9 @@ def test_x1x2_baseline_real_only(live_copy):
     c.close()
     d = _table(TestClient(app), date_from="2026-06-20", date_to="2026-06-20")
     for it in d["items"]:
-        for blk in it["x1x2"].values():
+        for b, blk in it["x1x2"].items():
+            if b in ("bet365", "avg"):
+                continue  # 2026-10-14 新增列，水位来源字段由多家平均模块单独定义
             for ph in ("open", "mid", "close"):
                 cell = blk[ph]
                 if cell["water_source"] != "actual":

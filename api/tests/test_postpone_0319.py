@@ -343,6 +343,6 @@ def test_flat_posthoc_flags_never_null_v2d3(v2d3_copy):
     assert rows
     cols = [k for k in rows[0] if (k.startswith("ah_") or k.startswith("x1x2_"))
             and (k.endswith("_asof_backfill") or k.endswith("_phase_assign_late"))]
-    assert any("macau_5df_mid_real" in k for k in cols) and any("close_real" in k for k in cols)
+    assert any("ah_macau_mid_real" in k for k in cols) and any("close_real" in k for k in cols)
     bad = [(r["match_id"], k) for r in rows for k in cols if r[k] is None]
     assert not bad, bad[:10]

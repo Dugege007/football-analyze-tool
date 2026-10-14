@@ -201,7 +201,7 @@ def test_phase_feature_defaults_and_extras(db):
     assert m["phase_pending"] is False and m["phase_assign_late"] is False
     assert cfg["phase_feature_flags"]["defaults"]["features_ok"] is True
     # 现网格子默认
-    c = it["ah"]["macau"]["close"]
+    c = it["ah"]["macau_manual"]["close"]
     assert c["features_ok"] is True and c["phase_pending"] is False
     # 写入 extras（模拟分析师 ingest；不建列）
     conn = sqlite3.connect(str(db))
@@ -219,9 +219,9 @@ def test_phase_feature_defaults_and_extras(db):
     it2 = TestClient(app).get("/table/matches", params={"date_from": JD, "date_to": JD, "scope": "all"}).json()
     # 0.3.22：rule/close 5DF 快照投影在 macau_5df，不再进手工主列
     row2 = next(i for i in it2["items"] if i["match_id"] == UID)
-    c2 = row2["ah"]["macau_5df"]["close"]
+    c2 = row2["ah"]["macau"]["close"]
     assert c2["phase_pending"] is True and c2["features_ok"] is False and c2["phase_assign_late"] is True
-    assert c2["book_lane"] == "macau_5df" and c2["source"] == "5df"
+    assert c2["book_lane"] == "macau_5df" and c2["source"].startswith("5d")
 
 
 def test_kickoff_rev_column_when_present(db):

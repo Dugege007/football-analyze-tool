@@ -37,8 +37,12 @@ from app import collection_schedule as cs
 from app import db as app_db
 from app import kickoff_drift as kd
 from app import leak_suspect as leak
+from app import reason_codes
 from app import fundamentals as fund  # 0.3.21
+from app import team_pending as tp  # 2026-10-14 待确认球队
 from app import open_status as osx  # opening status and source fields (user rule 2026-10-10)
+from app import avg_cells  # 多家平均三格（接口约定第 3 版第 7 节）
+from app import alert_baseline as alb  # 预警档位按每格抓取时刻固定基准（2026-10-14）
 
 router = APIRouter(tags=["table"])
 
@@ -65,6 +69,9 @@ RETURN_HL_WATER = "real_only"
 BOOKS: tuple[str, ...] = ("macau", "crown", "william", "pinnacle")
 PHASES: tuple[str, ...] = ("open", "mid", "close")
 REAL_PHASES: tuple[str, ...] = ("mid_real", "close_real")
+# 接口约定第 1 节：页面按这个顺序画列（五家普通机构加多家平均）。竞彩不在此列。
+TABLE_BOOKS: tuple[str, ...] = ("macau", "crown", "pinnacle", "william", "bet365")
+TABLE_COLUMNS: tuple[str, ...] = TABLE_BOOKS + ("avg",)
 CALC_PHASES = PHASES  # 返还率 / 凯利只按规则值（open/mid/close）计算；*_real 仅原始值（术语文档未写）
 RESULT_VISIBLE_AFTER_KICKOFF = timedelta(hours=3)  # 对齐 v2_0-result-ingest-schedule.md「开赛+3h 主拉」
 LAST_PREMATCH_FRESH_MINUTES = 15  # 2026-10-08 定：minutes_before_kickoff ∈ [0,15] → stale=false
@@ -105,6 +112,7 @@ X1X2_RETURN_HL_WATER = "real_only"  # 欧赔返还率基准 / 上色只认 water
 # 识别：odds_snapshot.source 或 odds_asian.extras.source ∈ 下列；通常 water_src=actual
 MACAU_5DF_SOURCES = frozenset({"5df_macauslot_history", "5dollar_history"})
 MACAU_5DF_BOOK_KEY = "macau_5df"
+MACAU_MANUAL_BOOK_KEY = "macau_manual"  # 旧手工列的新键名（分析师 2026-10-14 确认）
 MACAU_5DF_SOURCE_LABEL = "5df"
 
 
@@ -778,7 +786,7 @@ def build_ah_cell(d: _Data, mpk: int, book: str, phase: str, sched: dict,
             "recorded_at": _iso(rec),
             "target_at": _iso(_to_cn(snap["target_at"])) if phase != "open" else None,
             "basis": basis, "source": f"odds_snapshot/{snap['channel']}/{snap['point']}",
-            "available": True,
+            "available": True, "_source_code": _row_source(snap),
             **CELL_POSTHOC_DEFAULTS, **phase_feature_flags(snap),  # 0.3.20：列或 extras；缺省 features_ok=true
         })
         _set_water_fields(cell, snap["water_src"])
@@ -859,7 +867,7 @@ def build_ah_macau_manual_cell(d: _Data, mpk: int, phase: str, sched: dict,
             "recorded_at": _iso(rec),
             "target_at": _iso(_to_cn(snap["target_at"])) if phase != "open" and quote_time else None,
             "basis": basis, "source": f"odds_snapshot/{snap['channel']}/{snap['point']}",
-            "available": True, "book_lane": "macau_manual",
+            "available": True, "book_lane": "macau_manual", "_source_code": _row_source(snap),
             **CELL_POSTHOC_DEFAULTS, **phase_feature_flags(snap),
         })
         # 手工主列：若行上意外带着 5DF actual 水，剥掉（防御）
@@ -928,6 +936,8 @@ def build_macau_5df_cell(d: _Data, mpk: int, phase: str, sched: dict,
             first = None
         if first is not None and first[1] == "seg":
             _fill_from_seg(cell, first[2], "asian")
+            cell["_source_path"] = cell.get("source")
+            cell["_source_code"] = _row_source(first[2])
             cell["source"] = MACAU_5DF_SOURCE_LABEL
             cell["book_lane"] = "macau_5df"
             _set_water_fields(cell, first[2]["water_src"] if "water_src" in first[2].keys() else "actual")
@@ -957,6 +967,7 @@ def build_macau_5df_cell(d: _Data, mpk: int, phase: str, sched: dict,
             "target_at": _iso(_to_cn(snap["target_at"])) if phase != "open" else None,
             "basis": basis,
             "source": MACAU_5DF_SOURCE_LABEL,
+            "_source_path": f"odds_snapshot/{snap['channel']}/{snap['point']}", "_source_code": _row_source(snap),
             "available": True,
             "book_lane": "macau_5df",
             **CELL_POSTHOC_DEFAULTS, **phase_feature_flags(snap),
@@ -979,6 +990,7 @@ def build_macau_5df_cell(d: _Data, mpk: int, phase: str, sched: dict,
                 "water_censored": (bool(r["water_censored"]) if r["water_censored"] is not None else None),
                 "recorded_at": None, "target_at": None,
                 "basis": "asof_rule", "source": MACAU_5DF_SOURCE_LABEL, "available": True,
+                "_source_path": "odds_asian", "_source_code": _loads(r["extras_json"]).get("source") or None,
                 "book_lane": "macau_5df",
             })
             _set_water_fields(cell, r["water_src"] or "actual")
@@ -1024,7 +1036,7 @@ def build_api_closing(d: _Data, mpk: int, book: str) -> dict | None:
                "away": _r(r["price_away"], 4), "complete": False,
                "quote_time_known": False, "fetched_at": _iso(_to_cn(r["recorded_at"])),
                "basis": "api_closing", "source": f"odds_snapshot/{r['channel']}/{r['point']}",
-               "reference_only": True}
+               "_source_code": _row_source(r), "reference_only": True}
         out["complete"] = all(out[k] is not None for k in ("home", "draw", "away"))
         return out
     return None
@@ -1040,6 +1052,7 @@ def _fill_x_from_snap(cell: dict, r: sqlite3.Row, phase: str, as_of: datetime,
         "recorded_at": _iso(rec), "fetched_at": None if quote_time else _iso(rec_raw),
         "target_at": _iso(_to_cn(r["target_at"])) if (quote_time and phase != "open") else None,
         "basis": basis, "source": f"odds_snapshot/{r['channel']}/{r['point']}", "available": True,
+        "_source_code": _row_source(r),
         "water_source": _x1x2_water_source(r),
         **CELL_POSTHOC_DEFAULTS, **phase_feature_flags(r),  # 0.3.20
     })
@@ -1599,6 +1612,7 @@ def build_last_prematch(d: _Data, mpk: int, book: str, market: str,
                 "over_water": _r(r["water_over"]), "under_water": _r(r["water_under"]),
                 "water_source": WATER_SRC_MAP.get(r["water_src"]) if r["water_src"] else None,
                 "is_inplay": False, "source": f"odds_snapshot/{r['channel']}/{r['point']}",
+                "_source_code": _row_source(r),
                 **_LIVE_MERGE_BLANK,
             })
     if best is None:
@@ -1772,6 +1786,7 @@ class AhCell(_M_):
     target_at: Optional[str] = None
     basis: Optional[str] = None
     source: Optional[str] = None
+    source_path: Optional[str] = None  # 原来的取数路径，只供排查，页面不显示（2026-10-14）
     available: bool = False
     hidden_reason: Optional[str] = None
     minutes_since_open: Optional[float] = None
@@ -1832,6 +1847,7 @@ class LiveEntry(_M_):
     water_source: Optional[str] = None
     is_inplay: bool = False
     source: Optional[str] = None
+    source_path: Optional[str] = None  # 原来的取数路径，只供排查，页面不显示（2026-10-14）
     # 0.3.19：即时（11:10）合并时间线 + 自采 live 行（只在 label=rule_1110 的条目上有值）
     origin: Optional[str] = None  # timeline | own_capture
     odds_source: Optional[str] = None  # hist（时间线回补）| live（前向自采）
@@ -1866,6 +1882,7 @@ class X1x2Cell(_M_):
     target_at: Optional[str] = None
     basis: Optional[str] = None
     source: Optional[str] = None
+    source_path: Optional[str] = None  # 原来的取数路径，只供排查，页面不显示（2026-10-14）
     available: bool = False
     hidden_reason: Optional[str] = None
     minutes_since_open: Optional[float] = None
@@ -1922,6 +1939,7 @@ class ApiClosing(_M_):
     fetched_at: Optional[str] = None
     basis: str = "api_closing"
     source: Optional[str] = None
+    source_path: Optional[str] = None  # 原来的取数路径，只供排查，页面不显示（2026-10-14）
     reference_only: bool = True
 
 
@@ -1958,6 +1976,7 @@ class JcCell(_M_):
     target_at: Optional[str] = None
     basis: Optional[str] = None
     source: Optional[str] = None
+    source_path: Optional[str] = None  # 原来的取数路径，只供排查，页面不显示（2026-10-14）
     available: bool = False
     hidden_reason: Optional[str] = None
     missing_reason: Optional[str] = None  # 0.3.21：collector_empty | legacy_home_only | jc_1x2_incomplete | …
@@ -2004,6 +2023,7 @@ class JcHhadCell(_M_):
     available: bool = False
     missing_reason: Optional[str] = None
     source: Optional[str] = None
+    source_path: Optional[str] = None  # 原来的取数路径，只供排查，页面不显示（2026-10-14）
     captured_at: Optional[str] = None
     recorded_at: Optional[str] = None
     target_at: Optional[str] = None
@@ -2064,6 +2084,8 @@ class MatchInfo(_M_):
     away_team: Optional[str] = None
     home_team_canonical: Optional[str] = None
     away_team_canonical: Optional[str] = None
+    home_team_pending_confirm: bool = False  # 2026-10-14：认不出的球队（按来源原名写），前端悬停「待确认」
+    away_team_pending_confirm: bool = False
 
 
 class Schedule(_M_):
@@ -2102,11 +2124,36 @@ class Prediction(_M_):
 
 
 class Result(_M_):
-    home_goals: int
-    away_goals: int
+    # status：finished = 有完场比分；refund / postponed / cancelled / abandoned = 特殊场次（来自 result_ingest_flags），
+    # 这时比分各列为 null，不结算。
+    status: Optional[str] = None
+    home_goals: Optional[int] = None
+    away_goals: Optional[int] = None
     total_goals: Optional[int] = None
-    score: str
+    score: Optional[str] = None
     wdl: Optional[str] = None
+    jc: Optional["JcResult"] = None  # 2026-10-14：竞彩胜平负（had）与让球胜平负（hhad）的赛果和临盘赔率
+
+
+class JcResultCell(_M_):
+    """2026-10-14：竞彩胜平负（had）或让球胜平负（hhad）的赛果和对应临盘赔率。
+    outcome 为 home / draw / away，outcome_zh 为 胜 / 平 / 负；让球按临盘让球数调整主队进球后再判定。
+    null_reason 只在 outcome 为空时有值：no_result（没有比分或赛果还不可见）、special_status（退款、推迟、取消、腰斩）、
+    no_close_odds（没有完整的临盘赔率）、no_goal_line（让球胜平负没有让球数）。"""
+    outcome: Optional[str] = None
+    outcome_zh: Optional[str] = None
+    odds: Optional[float] = None
+    goal_line: Optional[float] = None
+    adjusted_score: Optional[str] = None
+    null_reason: Optional[str] = None
+
+
+class JcResult(_M_):
+    had: JcResultCell
+    hhad: JcResultCell
+
+
+Result.model_rebuild()
 
 
 class Settlement(_M_):
@@ -2443,11 +2490,27 @@ def _stable(item: dict) -> dict:
             for k in ("kelly", "kelly_multi_avg"):
                 if c.get(k) is None:
                     c[k] = dict(tri)
+    # 旧手工列 ah.macau_manual：补齐和其他机构相同的固定列（扁平格式每行列集合一致）。
+    mm = it.get("ah", {}).get(MACAU_MANUAL_BOOK_KEY)
+    if isinstance(mm, dict):
+        for rp in REAL_PHASES:
+            if mm.get(rp) is None:
+                mm[rp] = _blank(AhCell, _RR_KEYS + _OPEN_KEYS)
+        for ph in PHASES + REAL_PHASES:
+            c = mm.get(ph)
+            if isinstance(c, dict) and c.get("tier_cross") is None:
+                c["tier_cross"] = {"kind": None, "from": {"phase": None, "line": None, "home": None, "away": None},
+                                   "to": {"phase": None, "line": None, "home": None, "away": None}, "sides": None}
+        if mm.get("last_prematch") is None:
+            mm["last_prematch"] = dict(live_blank)
+        for k in _OPEN_KEYS:
+            mm.setdefault("open", {}).setdefault(k, None)
     # 0.3.22：flat 列固定 — macau_5df 三阶段 + 空 mid_real/close_real/last_prematch
-    m5 = it.get("ah", {}).get(MACAU_5DF_BOOK_KEY)
+    # 2026-10-14 起 ah.macau 就是 5DollarFootballAPI 列（别名 ah.macau_5df 已删除），固定列补在 ah.macau 上。
+    m5 = it.get("ah", {}).get("macau")
     if not isinstance(m5, dict):
         m5 = {}
-        it.setdefault("ah", {})[MACAU_5DF_BOOK_KEY] = m5
+        it.setdefault("ah", {})["macau"] = m5
     for ph in PHASES:
         if not isinstance(m5.get(ph), dict):
             m5[ph] = _blank(AhCell)
@@ -2483,10 +2546,150 @@ def _stable(item: dict) -> dict:
         it["prediction"] = _blank(Prediction)
     if it.get("result") is None:
         it["result"] = _blank(Result)
+    if isinstance(it.get("result"), dict) and it["result"].get("jc") is None:
+        it["result"]["jc"] = build_jc_result(None, "no_result", None, None)
     if it.get("settlement") is None:
         it["settlement"] = _blank(Settlement)
     _fill_posthoc_flags(it)
     return it
+
+
+def _apply_alert(cells: dict, market: str = "ah") -> None:
+    """alert 先取现有的 fallback_hl_level（分析师 2026-10-14 确认）；没有这个字段的格子为空值。
+    放在本模块里，因为预警字段只允许在数据表接口里使用（见 test_highlight_fields_not_used_by_strategy_code）。"""
+    for ph in PHASES:
+        c = cells.get(ph)
+        if isinstance(c, dict):
+            # 欧赔不显示预警（分析师 2026-10-14 决定）：样本不够 100 前不放宽门槛，欧赔格子 alert 一律为空值。
+            # 亚盘初盘也不出预警（分析师 2026-10-14 决定），只有亚盘中盘和临盘保留。
+            # 2026-10-14（分析师、算法顾问）：预警档位改用按这一格抓取时刻固定的基准（alert_level），
+            # 不再取随统计时刻变化的 fallback_hl_level；alert_sample_n 是这一格实际用的样本数。
+            level = c.pop("alert_level", None)
+            n = c.pop("alert_sample_n", None)
+            on = market == "ah" and ph in alb.ALERT_PHASES
+            # 2026-10-14（分析师）：盘口为空或抓取时刻为空的格子不计算预警，alert 与 alert_sample_n 都为空值；
+            # 没有抓取时刻就无法保证基准样本严格早于它，可能用到未来数据。
+            if c.get("line") is None or c.get("recorded_at") is None:
+                on = False
+            c["alert"] = level if on else None
+            c["alert_sample_n"] = n if on else None
+
+
+def _row_source(r: Any) -> Optional[str]:
+    try:
+        return r["source"] if "source" in r.keys() else None
+    except (AttributeError, TypeError):
+        return None
+
+
+_SEG_PREFIX = "odds_timeline_seg/"
+_SNAP_PREFIX = "odds_snapshot/"
+_JC_HIST_PREFIX = "5df_odds_history/"
+
+
+def source_code_of(path: Optional[str], known: Optional[str] = None) -> Optional[str]:
+    """把取数路径换成约定 7.8 节的来源代码；已经是来源代码的原样返回。"""
+    if known:
+        return known
+    if path is None:
+        return None
+    if path.startswith(_SEG_PREFIX):
+        return path[len(_SEG_PREFIX):]
+    if path.startswith(_SNAP_PREFIX):
+        parts = path.split("/")
+        return parts[3] if len(parts) >= 4 and parts[3] else path
+    if path.startswith(_JC_HIST_PREFIX) and path.endswith(")") and "(" in path:
+        return path[path.rindex("(") + 1:-1]
+    if path == "odds_asian":
+        return "legacy_import"
+    if path.endswith("(home_only)"):
+        return "legacy_home_only"
+    return path
+
+
+def _normalize_one(c: dict) -> None:
+    known = c.pop("_source_code", None)
+    given_path = c.pop("_source_path", None)
+    src = c.get("source")
+    if src is None:
+        c["source_path"] = None
+        return
+    path = given_path or src
+    if src == MACAU_5DF_SOURCE_LABEL:
+        # 澳门列：写这一格实际的 5DollarFootballAPI 来源代码；查不到具体来源时保留总标签 5df。
+        code = known or (source_code_of(given_path) if given_path and given_path != "odds_asian" else src)
+    else:
+        code = source_code_of(src, known)
+    c["source"] = code
+    c["source_path"] = path if path != code else None
+
+
+def _normalize_sources(blk: Any) -> None:
+    """对一列（各阶段格子）统一来源字段；格子里的 api_closing 等参考子对象同样处理。"""
+    if not isinstance(blk, dict):
+        return
+    for ph, c in blk.items():
+        if isinstance(c, dict) and "source" in c:
+            _normalize_one(c)
+            for sub in c.values():
+                if isinstance(sub, dict) and "source" in sub and sub is not c.get("avg_detail"):
+                    _normalize_one(sub)
+
+
+_JC_ZH = {"home": "胜", "draw": "平", "away": "负"}
+
+
+def _jc_result_cell(result: Optional[dict], res_hidden: Optional[str], close: Optional[dict],
+                    handicap: bool) -> dict:
+    out = {"outcome": None, "outcome_zh": None, "odds": None, "goal_line": None,
+           "adjusted_score": None, "null_reason": None}
+    line = (close or {}).get("goal_line") if handicap else None
+    if handicap and line is not None:
+        out["goal_line"] = float(line)
+    if result is None or result.get("home_goals") is None:
+        out["null_reason"] = "special_status" if res_hidden in RESULT_SPECIAL_STATUSES else "no_result"
+        return out
+    c = close or {}
+    if any(c.get(k) is None for k in ("home", "draw", "away")):
+        # 采集端没有数据时沿用临盘格子的缺失原因（例如 collector_empty），否则写 no_close_odds
+        out["null_reason"] = c.get("missing_reason") if (handicap and c.get("missing_reason")) else "no_close_odds"
+        return out
+    if handicap and line is None:
+        out["null_reason"] = "no_goal_line"
+        return out
+    hg = result["home_goals"] + (float(line) if handicap else 0)
+    ag = result["away_goals"]
+    o = "home" if hg > ag else ("draw" if hg == ag else "away")
+    if handicap:
+        out["adjusted_score"] = f"{hg:g}-{ag}"
+    out.update(outcome=o, outcome_zh=_JC_ZH[o], odds=c[o])
+    return out
+
+
+def build_jc_result(result, res_hidden, jc_1x2: Optional[dict], jc_hhad: Optional[dict]) -> dict:
+    """临盘取 jc_1x2.close 和 jc_hhad.close（与页面显示的临盘一致）。让球数取 jc_hhad.close.goal_line，
+    负数表示主队让球：主队进球加上让球数后再和客队进球比较。"""
+    return {"had": _jc_result_cell(result, res_hidden, (jc_1x2 or {}).get("close"), False),
+            "hhad": _jc_result_cell(result, res_hidden, (jc_hhad or {}).get("close"), True)}
+
+
+RESULT_SPECIAL_STATUSES = ("refund", "postponed", "cancelled", "abandoned")
+_SPECIAL_PRIORITY = {f: i for i, f in enumerate(RESULT_SPECIAL_STATUSES)}
+
+
+def load_result_special_status(conn: sqlite3.Connection) -> dict[int, str]:
+    """result_ingest_flags 里未解决的特殊场次标记 → {match_id: status}；表不存在（例如正式库）时返回空字典。
+    同一场有多个标记时按 refund > postponed > cancelled > abandoned 取一个。只读。"""
+    try:
+        rows = conn.execute("SELECT match_id, flag FROM result_ingest_flags WHERE resolved_at IS NULL AND flag IN "
+                            "('refund','postponed','cancelled','abandoned')").fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    out: dict[int, str] = {}
+    for mid, f in rows:
+        if mid not in out or _SPECIAL_PRIORITY[f] < _SPECIAL_PRIORITY[out[mid]]:
+            out[mid] = f
+    return out
 
 
 def _flat_row(item: dict) -> dict:
@@ -2500,7 +2703,33 @@ def _flat_row(item: dict) -> dict:
         pred = dict(pred)
         rationale = pred.pop("rationale", None)
         src["prediction"] = pred
+    # 多家平均的明细 avg_detail 含长度可变的数组，平铺后每行列集合会不一致，所以整块作为一列原样保留。
+    avg_details = {}
+    for mk in ("ah", "ou", "x1x2"):
+        blk = (src.get(mk) or {}).get("avg")
+        if isinstance(blk, dict):
+            for ph, cell in blk.items():
+                if isinstance(cell, dict) and "avg_detail" in cell:
+                    avg_details[f"{mk}_avg_{ph}_avg_detail"] = cell.pop("avg_detail")
+    # 升降 move 是对象或空值，通用字段在部分格子上缺键；平铺前统一成固定模板，保证每行列集合一致。
+    for mk in ("ah", "ou", "x1x2"):
+        mv_keys = ("compare_to", "line", "left", "mid", "right") if mk == "x1x2" else ("compare_to", "line", "left", "right")
+        for blk in (src.get(mk) or {}).values():
+            if not isinstance(blk, dict):
+                continue
+            for ph, cell in blk.items():
+                if not isinstance(cell, dict) or ph not in PHASES + REAL_PHASES:
+                    continue
+                for k in ("cell_status", "cell_status_reason", "alert", "alert_sample_n", "source_path"):
+                    cell.setdefault(k, None)
+                mv = cell.get("move") if isinstance(cell.get("move"), dict) else {}
+                cell["move"] = {k: mv.get(k) for k in mv_keys}
     flat = {**{k: v for k, v in match.items()}, **flatten({k: v for k, v in src.items() if k != "match_id"})}
+    flat.update(avg_details)
+    # 中文说明列按平铺后的原因列重新生成，保证每行列集合一致（原因列本身已由上面的模板保证一致）
+    flat = {k: v for k, v in flat.items() if not k.endswith("reason_zh")}
+    for k in [k for k in flat if k.endswith("reason") and (flat[k] is None or isinstance(flat[k], str))]:
+        flat[k + "_zh"] = reason_codes.zh(flat[k])
     flat["match_id"] = item["match_id"]
     flat["prediction_rationale"] = rationale
     flat["live"] = live
@@ -2560,6 +2789,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             ORDER BY m.jingcai_date, COALESCE(m.kickoff_hour, 99), COALESCE(m.jc_no, 999999), m.id
             LIMIT ? OFFSET ?""", args + [limit, offset]).fetchall()
     page_ids = [r["id"] for r in rows]
+    _pending = tp.load_pending(conn)
     d = _Data(conn, page_ids)
 
     # 基准样本：库内全部场（不受本次日期/scope/分页影响），按同一取数口径算 open/mid/close 返还率
@@ -2569,6 +2799,8 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
     baseline = _Baseline(baseline_window_days, baseline_min_n)
     fb_q = _FallbackQ()  # hl_v0.3.1：返还率兜底分位数 P10/P25/P90 = 每家 × 每阶段真实水位返还率（as-of，n=场次）
     cells_cache: dict[int, tuple] = {}
+    # 预警基准：样本按格子记录时刻排，查询时只取严格早于这一格抓取时刻、且不是同一场的格子（只在内存里）。
+    alert_base = alb.AsOfCellBaseline(FALLBACK_QS)
     for mr in all_rows:
         extras = meta.get(mr["id"], {})
         kick = M.resolve_kickoff_dt(mr, extras)
@@ -2590,6 +2822,9 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                         ah[b][p]["water_source"] not in BASELINE_EXCLUDED_WATER_SOURCES:
                     baseline.add(("ah", b, p), mr["jingcai_date"], ah[b][p]["return_rate"])
                     fb_q.add(("ah", b, p), mr["jingcai_date"], mr["id"], ah[b][p]["return_rate"])
+                    if p in alb.ALERT_PHASES:
+                        alert_base.add(("ah", b, p), mr["id"], _to_cn(ah[b][p]["recorded_at"]),
+                                       ah[b][p]["return_rate"])
                 # 0.3.18 E：欧赔基准同样 real_only（water_source=actual）
                 if x[b][p].get("water_source") == "actual":
                     baseline.add(("x1x2", b, p), mr["jingcai_date"], x[b][p]["return_rate"])
@@ -2600,13 +2835,19 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 if c5.get("water_source") == "actual":
                     baseline.add(("ah", MACAU_5DF_BOOK_KEY, p), mr["jingcai_date"], c5["return_rate"])
                     fb_q.add(("ah", MACAU_5DF_BOOK_KEY, p), mr["jingcai_date"], mr["id"], c5["return_rate"])
+                    if p in alb.ALERT_PHASES:
+                        alert_base.add(("ah", MACAU_5DF_BOOK_KEY, p), mr["id"], _to_cn(c5["recorded_at"]),
+                                       c5["return_rate"])
         cells_cache[mr["id"]] = (kick, has_ka, sched, ah, x, extras, ah_macau_5df)
     baseline.freeze()
     fb_q.freeze()
+    alert_base.freeze()
+    _alert_min_n = alb.alert_min_n()
 
     preds = {r["match_id"]: r for r in conn.execute(
         "SELECT * FROM predictions WHERE strategy = ?", (strategy,))}
     results = {r["match_id"]: r for r in conn.execute("SELECT * FROM results")}
+    special_status = load_result_special_status(conn)
 
     items: list[dict] = []
     trunc_table = osx.load_quantile_table()  # None when the analyst has not supplied the table
@@ -2631,6 +2872,9 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                     c["fallback_hl_eligible"] = fn >= FALLBACK_MIN_N
                     c["fallback_hl_level"] = fallback_hl_level(c["return_rate"], c.get("water_source"), qs,
                                                                c["fallback_hl_eligible"])
+                    if market == "ah" and p in alb.ALERT_PHASES:
+                        alb.apply_alert_level(c, ("ah", b, p), mpk, alert_base, fallback_hl_level,
+                                              _alert_min_n, _to_cn)
                     # 0.3.17（前端 §13 对账）：返还率本身为空 → baseline_method 也为空
                     c["baseline_method"] = (None if c["return_rate"] is None
                                             else BASELINE_METHOD_EMPIRICAL if med is not None
@@ -2683,6 +2927,9 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             c["fallback_hl_eligible"] = fn >= FALLBACK_MIN_N
             c["fallback_hl_level"] = fallback_hl_level(c["return_rate"], c.get("water_source"), qs,
                                                        c["fallback_hl_eligible"])
+            if p in alb.ALERT_PHASES:
+                alb.apply_alert_level(c, ("ah", MACAU_5DF_BOOK_KEY, p), mpk, alert_base, fallback_hl_level,
+                                      _alert_min_n, _to_cn)
             c["baseline_method"] = (None if c["return_rate"] is None
                                     else BASELINE_METHOD_EMPIRICAL if med is not None
                                     else BASELINE_METHOD_FALLBACK)
@@ -2692,10 +2939,14 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             if p != "open" and ts and open_ts_5:
                 c["minutes_since_open"] = round((ts - open_ts_5).total_seconds() / 60.0, 1)
         apply_water_move_flags(ah_macau_5df, d, mpk, "macau")  # tier 读 asian；异动只比 5df 格内 open→close
-        ah_out[MACAU_5DF_BOOK_KEY] = dict(ah_macau_5df)
-        ah_out[MACAU_5DF_BOOK_KEY]["mid_real"] = None
-        ah_out[MACAU_5DF_BOOK_KEY]["close_real"] = None
-        ah_out[MACAU_5DF_BOOK_KEY]["last_prematch"] = None
+        _macau_5df_blk = dict(ah_macau_5df)
+        _macau_5df_blk["mid_real"] = None
+        _macau_5df_blk["close_real"] = None
+        _macau_5df_blk["last_prematch"] = None
+        # 分析师 2026-10-14 确认：页面的澳门一律用 5DollarFootballAPI 来源。ah.macau 指向它，
+        # 旧手工列改名为 ah.macau_manual（只做存档，页面不读）。原来的别名 ah.macau_5df 已删除（前端已只读 ah.macau）。
+        ah_out[MACAU_MANUAL_BOOK_KEY] = ah_out["macau"]
+        ah_out["macau"] = _macau_5df_blk
         for _b, _blk in ah_out.items():
             if isinstance(_blk, dict):
                 finalize_ah_open(d, mpk, _blk.get("open"), _b, kick, row["competition_name"], eff_as_of, trunc_table,
@@ -2732,11 +2983,13 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             res_hidden = "before_kickoff"
         elif eff_as_of < kick + RESULT_VISIBLE_AFTER_KICKOFF:
             res_hidden = "not_visible_yet"  # 开赛后 3h 内不显示赛果
+        elif mpk in special_status and (res_row is None or res_row["home_goals"] is None):
+            res_hidden = special_status[mpk]  # 退款、推迟、取消、腰斩：无比分，不结算
         elif res_row is None or res_row["home_goals"] is None or res_row["away_goals"] is None:
             res_hidden = "no_result"
         else:
             hg, ag = int(res_row["home_goals"]), int(res_row["away_goals"])
-            result = {"home_goals": hg, "away_goals": ag,
+            result = {"status": "finished", "home_goals": hg, "away_goals": ag,
                       "total_goals": res_row["total_goals"] if res_row["total_goals"] is not None else hg + ag,
                       "score": f"{hg}-{ag}", "wdl": res_row["wdl"]}
         if result is not None:  # 欧赔 api_closing：只在完赛（赛果可见）后单独返回
@@ -2746,6 +2999,9 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                     x_out[b]["api_closing"] = apc
         if result is None:
             settlement, set_hidden = None, ("no_prediction" if pr is None else res_hidden)
+            if res_hidden in RESULT_SPECIAL_STATUSES:
+                result = {"status": res_hidden, "home_goals": None, "away_goals": None,
+                          "total_goals": None, "score": None, "wdl": None}
         else:
             settlement, set_hidden = _settle(pr if prediction is not None else None, result, d, mpk, s_ver)
             # 0.3.19：人工复核 / 推迟待核 → 不结算（validate 同口径单独计数）；void_postponed 钩子（时限未定 = 不生效）
@@ -2773,6 +3029,49 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
         # 0.1.9：自采超窗不再进日核对
         # 0.3.20：kickoff_drift_min（只作信息展示；不碰推迟字段 / 目标时刻 / 日核对）
         _mf_row.update(kd.drift_fields(row["match_uid"], kick, eff_as_of))
+        # 多家平均（接口约定第 3 版第 7 节）：亚盘、大小球按多数盘口换算后平均，欧赔直接平均。
+        # 放在初盘收尾之后加入，避免普通机构的初盘处理流程作用到伪机构 avg 上。
+        # 第二期剩余部分：五家机构的大小球格子、Bet365 的亚盘和欧赔格子，与多家平均同一次取数。
+        _tbl = avg_cells.build_tables(d, mpk, kick, sched, eff_as_of,
+                                      {"ou": TABLE_BOOKS, "ah": ("bet365",), "x1x2": ("bet365",)})
+        _avg = _tbl["avg"]
+        ah_out["bet365"] = _tbl["plain"]["ah"]["bet365"]
+        x_out["bet365"] = _tbl["plain"]["x1x2"]["bet365"]
+        ah_out["avg"] = _avg["ah"]
+        x_out["avg"] = _avg["x1x2"]
+        ou_out = {b: _tbl["plain"]["ou"][b] for b in TABLE_BOOKS}
+        ou_out["avg"] = _avg["ou"]
+        # 通用的格子状态 cell_status（接口约定第 2 节）：已有的亚盘、欧赔、竞彩格子补上状态和原因。
+        for _mk, _blk_all in (("ah", ah_out), ("x1x2", x_out)):
+            for _b, _blk in _blk_all.items():
+                if isinstance(_blk, dict):
+                    for _ph in PHASES + REAL_PHASES:
+                        avg_cells.apply_cell_status(_mk, _ph.replace("_real", ""), _blk.get(_ph), kick, sched,
+                                                    eff_as_of)
+        # 升降 move 与预警 alert（约定第 4 节、第 2 节，分析师 2026-10-14 确认）：已有格子和新格子同一套规则。
+        for _mk, _blk_all in (("ah", ah_out), ("x1x2", x_out), ("ou", ou_out)):
+            for _b, _blk in _blk_all.items():
+                if isinstance(_blk, dict) and _b != "avg":
+                    avg_cells.apply_moves(_mk, _blk)
+                    _apply_alert(_blk, _mk)
+        for _ph in PHASES:
+            avg_cells.apply_cell_status("jc_1x2", _ph, jc.get(_ph), kick, sched, eff_as_of)
+            avg_cells.apply_cell_status("jc_hhad", _ph, jc_hhad.get(_ph), kick, sched, eff_as_of)
+        # 来源字段统一（分析师 2026-10-14 决定，约定 7.8 节）：source 一律写来源代码，原来的取数路径放进 source_path。
+        for _blk_all in (ah_out, x_out, ou_out):
+            for _blk in _blk_all.values():
+                _normalize_sources(_blk)
+        _normalize_sources(jc)
+        _normalize_sources(jc_hhad)
+        # 扁平格式的列集合要每行一致：已有格子都补齐通用字段的键（值为空值）。
+        for _blk_all in (ah_out, x_out, ou_out):
+            for _b, _blk in _blk_all.items():
+                if isinstance(_blk, dict) and _b != "avg":
+                    for _ph in PHASES + REAL_PHASES:
+                        _c = _blk.get(_ph)
+                        if isinstance(_c, dict):
+                            for _k in ("cell_status", "cell_status_reason", "move", "alert", "alert_sample_n", "source_path"):
+                                _c.setdefault(_k, None)
         items.append({
             "match_id": row["match_uid"],
             "match": {
@@ -2789,11 +3088,14 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 "competition_type": row["competition_type"],
                 "home_team": row["home_team"], "away_team": row["away_team"],
                 "home_team_canonical": row["home_canonical"], "away_team_canonical": row["away_canonical"],
+                "home_team_pending_confirm": tp.is_pending(row["home_team_id"], row["home_canonical"], _pending, row["home_team"]),
+                "away_team_pending_confirm": tp.is_pending(row["away_team_id"], row["away_canonical"], _pending, row["away_team"]),
             },
             "phase_exception": exc,
             "schedule": {k: v for k, v in sched.items() if k != "live_rule_1110_target_time"},
             "ah": ah_out,
             "x1x2": x_out,
+            "ou": ou_out,
             "x1x2_base": x_base,
             "multi_avg_prob": x_base["close"]["multi_avg"],
             "jc_1x2": jc,
@@ -2803,13 +3105,22 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             "prediction_hidden_reason": pred_hidden,
             "produced_at": prediction["produced_at"] if prediction else None,
             "as_of": eff_as_of.isoformat(),
-            "result": result,
+            # 2026-10-14：竞彩赛果放在 result.jc 里（结算之后再加，不影响结算）
+            "result": ({**result, "jc": build_jc_result(result, res_hidden, jc, jc_hhad)}
+                       if result is not None else None),
             "result_hidden_reason": res_hidden,
             "hidden_reason": res_hidden,  # 前端名：赛果/结算为空的原因（= result_hidden_reason）
             "settlement": settlement,
             "settlement_hidden_reason": set_hidden,
         })
 
+    # 2026-10-14：竞彩未开售胜平负的场次改原因代码；所有原因代码同时返回中文说明（前端不再维护对照表）
+    _not_on_sale = reason_codes.load_jc_not_on_sale()
+    for _it in items:
+        reason_codes.apply_jc_not_on_sale(_it, _not_on_sale)
+        # prediction 块要与单场预测接口完全一致，不加中文说明（扁平格式里仍有对应的 _zh 列）
+        _ann = reason_codes.annotate({k: v for k, v in _it.items() if k != "prediction"})
+        _it.update({k: v for k, v in _ann.items() if k.endswith("reason_zh")})
     out_items = items if fmt == "nested" else [_flat_row(i) for i in items]
     return {
         "meta": app_db.db_meta(),  # 0.3.18：db=live|v2d3、promoted、readonly
@@ -2822,7 +3133,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
         "scope": scope, "strategy": strategy, "channel": channel,
         "include_live": include_live,
         "settlement_version": s_ver,
-        "books": list(BOOKS),
+        "books": list(TABLE_COLUMNS),  # 接口约定第 1 节：五家机构加多家平均，前端按此顺序画列
         "config": {
             "result_visible_after_kickoff_hours": RESULT_VISIBLE_AFTER_KICKOFF.total_seconds() / 3600,
             "last_prematch_fresh_minutes": LAST_PREMATCH_FRESH_MINUTES,
@@ -2844,11 +3155,11 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 "injury_known_empty": "only when source explicitly empty; never for missing fetch",
             },
             "macau_5df": {  # 0.3.22
-                "path": "ah.macau_5df.{open|mid|close}",
-                "parallel_to": "ah.macau",
-                "book_lane": {"ah.macau": "macau_manual", "ah.macau_5df": "macau_5df"},
+                "path": "ah.macau.{open|mid|close}",
+                "renamed_2026_10_14": "ah.macau 改为 5DollarFootballAPI 来源；旧手工列为 ah.macau_manual；别名 ah.macau_5df 已删除",
+                "book_lane": {"ah.macau": "macau_5df", "ah.macau_manual": "macau_manual"},
                 "source_label": "5df",
-                "primary_rule": "ah.macau = manual only (rule_legacy / pure legacy_import); 5DF water never on primary",
+                "primary_rule": "ah.macau = 5DollarFootballAPI only; manual quotes only in ah.macau_manual (archive, page does not read it)",
                 "identify": "odds_snapshot|odds_asian|timeline with source in 5df_macauslot_history|5dollar_history "
                             "or extras from_channel/from_point fill markers; doubt → macau_5df",
                 "same_lane_only": "water_move/tier_cross/return_rate highlight never cross macau ↔ macau_5df",
@@ -2878,6 +3189,15 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 "min_n": FALLBACK_MIN_N, "below_min_n": "no highlight, grey text 「样本不足，暂不判断」",
                 "excludes": ["manual_review matches", "tier_midpoint / unknown water_source"],
                 "changed_from_0_3_19": "0.3.19 pooled open+mid+close and counted cells; 0.3.20 per phase, n = matches"},
+            "alert_asof": {
+                "decided": "2026-10-14 analyst + algorithm advisor",
+                "applies_to": "ah mid / close cells only; ah open and every x1x2 cell alert = null",
+                "rule": "same P10 / P25 / P90 levels as fallback_hl_level, but the sample is the same (market, book, "
+                        "phase) cells of OTHER matches whose recorded_at is strictly earlier than this cell's "
+                        "recorded_at; the cell's own match never counts; real water only, manual_review excluded",
+                "min_n": _alert_min_n, "min_n_env": "APP_ALERT_MIN_N",
+                "below_min_n": "alert = null", "cell_fields": ["alert", "alert_sample_n"],
+                "deterministic": "depends only on data recorded before the cell's capture time; no DB writes, in-memory only"},
             "kelly_highlight": {"version": "hl_v0.3", "margin": KELLY_HL_MARGIN, "levels": KELLY_HL,  # hl_v0.3.1 未改凯利
                                 "transitional": True,
                                 "next": "hl_v0.4: per-outcome quantile thresholds kelly_thr_{h,d,a} / kelly_n_{h,d,a} (P85/P92/P97 of kelly/return_rate-1)"},

@@ -438,7 +438,7 @@ def test_open_first_tick_beats_api_opening_and_respects_as_of(db, client):
 def test_open_legacy_import_time_unknown_and_flat_columns(db, client):
     """0.3.17：legacy_import 的 earliest 推定为竞彩日 11:10（ts_inferred），usable 与 api_opening 同规则（不一刀切 true）。"""
     d = _get(client, date_from="2026-06-06", date_to="2026-06-06")
-    o = _row(d, U6)["ah"]["macau"]["open"]  # hand-recorded opening quote; opening time unknown (no 11:10 assumption)
+    o = _row(d, U6)["ah"]["macau_manual"]["open"]  # 2026-10-14 起旧手工列改名为 ah.macau_manual；hand-recorded opening quote; opening time unknown (no 11:10 assumption)
     assert o["open_basis"] == "legacy_import"
     assert o["earliest_ts_quote_at"] is None and o["ts_inferred"] is False
     # The hand-recorded opening quote is the book's data at opening, always earlier than mid and close.
