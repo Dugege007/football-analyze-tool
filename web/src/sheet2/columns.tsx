@@ -114,7 +114,7 @@ const MODEL_TEXT: Record<string, string> = { poisson: '泊松模型' }
 const EXCLUDE_TEXT: Record<string, string> = { deviation_too_large: '偏离多数盘口过大' }
 
 /** 多家平均格悬停：按约定第 7.2 节字段显示（第 3 版字段缺失时退回第 2 版字段）。 */
-function AvgTip({ d, market, children }: { d: AvgDetail | null | undefined; market: Market; children: ReactNode }) {
+function AvgTip({ d, market, phase, children }: { d: AvgDetail | null | undefined; market: Market; phase?: Phase; children: ReactNode }) {
   if (!d) return <>{children}</>
   const name = (b: string) => BOOK_NAME[b as Book] ?? b
   const names = (xs: string[] | undefined) => (xs && xs.length ? xs.map(name).join('、') : '无')
@@ -124,6 +124,7 @@ function AvgTip({ d, market, children }: { d: AvgDetail | null | undefined; mark
   const tie = d.tie_break && d.tie_break !== 'none' ? (TIE_TEXT[d.tie_break] ?? d.tie_break) : null
   const tip = (
     <div className="avg-tip">
+      {phase === 'open' && <div>初盘开盘时间不详，各机构开盘时刻可能不同</div>}
       {market !== 'x1x2' && <div>多数盘口：{lineText(d.majority_line)}</div>}
       {tie && <div>平票处理：{tie}{d.median_line != null ? `（中位数 ${lineText(d.median_line)}）` : ''}</div>}
       <div>参与平均：{names(averaged)}{d.averaged_count != null ? `（${d.averaged_count} 家）` : ''}</div>
@@ -207,13 +208,13 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
       if (!cell || st !== 'ok') {
         if (i !== 0) return null
         const stx = <StatusText st={st} reason={st === 'insufficient' ? null : ((cell?.cell_status_reason as string) ?? null)} />
-        return t.avg && cell?.avg_detail ? <AvgTip d={cell.avg_detail as AvgDetail} market={t.avg}>{stx}</AvgTip> : stx
+        return t.avg && cell?.avg_detail ? <AvgTip d={cell.avg_detail as AvgDetail} market={t.avg} phase={t.phase}>{stx}</AvgTip> : stx
       }
       const v = cell[sub.field] as number | null
       const text = (sub.fmt ?? fmtNum)(v)
       const pre = sub.key === 'line' && t.prefix ? t.prefix(r) : null
       const body = <>{pre}<Mv text={text} dir={move?.[sub.key] as MoveDir | undefined} colored={t.phase !== 'open'} /></>
-      return t.avg ? <AvgTip d={cell.avg_detail as AvgDetail | null | undefined} market={t.avg}>{body}</AvgTip> : body
+      return t.avg ? <AvgTip d={cell.avg_detail as AvgDetail | null | undefined} market={t.avg} phase={t.phase}>{body}</AvgTip> : body
     },
   }))
   return { groupId: t.id, headerName: t.title, headerClass: t.first ? SEC : undefined, children }
