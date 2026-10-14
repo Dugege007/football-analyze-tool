@@ -246,6 +246,7 @@ def test_v2d3_moves_and_alert(v2d3_table):
                 if b == "avg" or not isinstance(blk, dict):
                     continue
                 assert blk["open"].get("move") is None
+                assert blk["open"].get("alert") is None  # 初盘不出预警（分析师 2026-10-14 决定）
                 for ph in ("mid", "close"):
                     c = blk[ph]
                     mv = c.get("move")

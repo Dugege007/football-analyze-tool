@@ -2528,7 +2528,8 @@ def _apply_alert(cells: dict, market: str = "ah") -> None:
         c = cells.get(ph)
         if isinstance(c, dict):
             # 欧赔不显示预警（分析师 2026-10-14 决定）：样本不够 100 前不放宽门槛，欧赔格子 alert 一律为空值。
-            c["alert"] = None if market == "x1x2" else c.get("fallback_hl_level")
+            # 亚盘初盘也不出预警（分析师 2026-10-14 决定），只有亚盘中盘和临盘保留。
+            c["alert"] = None if (market == "x1x2" or ph == "open") else c.get("fallback_hl_level")
 
 
 def _row_source(r: Any) -> Optional[str]:
@@ -2611,6 +2612,19 @@ def _flat_row(item: dict) -> dict:
             for ph, cell in blk.items():
                 if isinstance(cell, dict) and "avg_detail" in cell:
                     avg_details[f"{mk}_avg_{ph}_avg_detail"] = cell.pop("avg_detail")
+    # 升降 move 是对象或空值，通用字段在部分格子上缺键；平铺前统一成固定模板，保证每行列集合一致。
+    for mk in ("ah", "ou", "x1x2"):
+        mv_keys = ("compare_to", "line", "left", "mid", "right") if mk == "x1x2" else ("compare_to", "line", "left", "right")
+        for blk in (src.get(mk) or {}).values():
+            if not isinstance(blk, dict):
+                continue
+            for ph, cell in blk.items():
+                if not isinstance(cell, dict) or ph not in PHASES + REAL_PHASES:
+                    continue
+                for k in ("cell_status", "cell_status_reason", "alert", "source_path"):
+                    cell.setdefault(k, None)
+                mv = cell.get("move") if isinstance(cell.get("move"), dict) else {}
+                cell["move"] = {k: mv.get(k) for k in mv_keys}
     flat = {**{k: v for k, v in match.items()}, **flatten({k: v for k, v in src.items() if k != "match_id"})}
     flat.update(avg_details)
     flat["match_id"] = item["match_id"]
@@ -2923,6 +2937,15 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 _normalize_sources(_blk)
         _normalize_sources(jc)
         _normalize_sources(jc_hhad)
+        # 扁平格式的列集合要每行一致：已有格子都补齐通用字段的键（值为空值）。
+        for _blk_all in (ah_out, x_out, ou_out):
+            for _b, _blk in _blk_all.items():
+                if isinstance(_blk, dict) and _b != "avg":
+                    for _ph in PHASES + REAL_PHASES:
+                        _c = _blk.get(_ph)
+                        if isinstance(_c, dict):
+                            for _k in ("cell_status", "cell_status_reason", "move", "alert", "source_path"):
+                                _c.setdefault(_k, None)
         items.append({
             "match_id": row["match_uid"],
             "match": {

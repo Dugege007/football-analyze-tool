@@ -67,7 +67,7 @@ def test_v2d3_macau_5df_mid_available(v2d3):
     it = next(x for x in d["items"] if x["match_id"] == JUNE_UID)
     m5 = it["ah"]["macau"]["mid"]
     assert m5["available"] is True
-    assert m5["source"] == "5df"
+    assert m5["source"].startswith("5d")  # 2026-10-14 起写具体来源代码
     assert m5["water_source"] == "actual"
     assert m5["water_src"] == "actual"
     assert m5["book_lane"] == "macau_5df"
@@ -95,7 +95,7 @@ def test_v2d3_primary_open_close_manual_no_5df_water(v2d3):
         assert prim.get("water_source") is None
         m5 = it["ah"]["macau"][ph]
         assert m5["available"] is True
-        assert m5["source"] == "5df"
+        assert m5["source"].startswith("5d")  # 2026-10-14 起写具体来源代码
         assert m5["water_source"] == "actual"
         assert m5["home_water"] is not None
 
