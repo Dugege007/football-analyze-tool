@@ -30,3 +30,9 @@
 .sheet2-group-label { color: #888; font-size: 12px; margin-right: 6px; }
 .sheet2 .ag-header-group-cell { font-weight: 600; }
 .sheet2 .ag-header-group-cell[col-id^="book."], .sheet2 .ag-header-group-cell[col-id^="pred"] { background: #f5f8ff; }
+.sheet2 .num-cell { justify-content: flex-end; font-variant-numeric: tabular-nums; padding-left: 4px; padding-right: 6px; }
+.sheet2 .line-cell { justify-content: center; }
+.sheet2 .span-status { justify-content: center; }
+.sheet2 .sub-hdr .ag-header-cell-label { justify-content: center; }
+.sheet2 .sub-hdr { padding-left: 4px; padding-right: 4px; font-weight: 400; color: #595959; }
+.sheet2 .ag-header-group-cell-label { justify-content: center; }

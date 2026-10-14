@@ -13,7 +13,7 @@ import {
   statusOf,
   x1x2Move,
 } from './format'
-import { BOOK_NAME, PHASES, PHASE_NAME, type AvgDetail, type Book, type CellStatus, type Move, type MoveDir, type Phase, type Row } from './types'
+import { BOOK_NAME, PHASES, PHASE_NAME, type Phased, type X1x2Cell, type AvgDetail, type Book, type CellStatus, type Move, type MoveDir, type Phase, type Row } from './types'
 
 export type Market = 'ah' | 'ou' | 'x1x2'
 type Col = ColDef<Row> | ColGroupDef<Row>
@@ -49,7 +49,8 @@ const finished = (r?: Row) => r?.match.status === 'finished' && r.result?.home_g
 
 // ───────────── 基本数据列 ─────────────
 export function baseCols(): Col[] {
-  return [{ groupId: 'base', headerName: '基本', children: baseChildren() }]
+  // 九列全部固定在左侧，保证「基本」分组不被固定区和滚动区拆成两段
+  return [{ groupId: 'base', headerName: '基本', marryChildren: true, children: baseChildren() }]
 }
 function baseChildren(): Col[] {
   return [
@@ -59,13 +60,13 @@ function baseChildren(): Col[] {
       cellClass: (p) => dayClass(p.data),
       sort: 'asc', sortIndex: 0,
     },
-    { colId: 'jcNo', headerName: '编号', width: 72, pinned: 'left', valueGetter: (p) => p.data?.match.jc_id ?? '-', cellClass: (p) => dayClass(p.data), sort: 'asc', sortIndex: 1 },
-    { colId: 'kickoff', headerName: '开赛时间', width: 104, pinned: 'left', valueGetter: (p) => kickoffText(p.data?.match.kickoff_at ?? null) },
-    { colId: 'league', headerName: '赛事', width: 84, pinned: 'left', valueGetter: (p) => p.data?.match.league ?? '-' },
-    { colId: 'home', headerName: '主队', width: 96, pinned: 'left', valueGetter: (p) => p.data?.match.home_team ?? '-' },
-    { colId: 'away', headerName: '客队', width: 96, valueGetter: (p) => p.data?.match.away_team ?? '-' },
+    { colId: 'jcNo', headerName: '编号', width: 88, pinned: 'left', valueGetter: (p) => p.data?.match.jc_id ?? '-', cellClass: (p) => dayClass(p.data), sort: 'asc', sortIndex: 1 },
+    { colId: 'kickoff', headerName: '开赛时间', width: 96, pinned: 'left', valueGetter: (p) => kickoffText(p.data?.match.kickoff_at ?? null) },
+    { colId: 'league', headerName: '赛事', width: 96, pinned: 'left', valueGetter: (p) => p.data?.match.league ?? '-' },
+    { colId: 'home', headerName: '主队', width: 88, pinned: 'left', valueGetter: (p) => p.data?.match.home_team ?? '-' },
+    { colId: 'away', headerName: '客队', width: 88, pinned: 'left', valueGetter: (p) => p.data?.match.away_team ?? '-' },
     {
-      colId: 'score', headerName: '比分', width: 76,
+      colId: 'score', headerName: '比分', width: 58, pinned: 'left',
       cellRenderer: (p: P) => {
         const r = p.data
         if (!r) return null
@@ -77,9 +78,9 @@ function baseChildren(): Col[] {
         return '-'
       },
     },
-    { colId: 'goals', headerName: '总进球', width: 70, valueGetter: (p) => (finished(p.data) ? (p.data!.result!.total_goals ?? '-') : '-') },
+    { colId: 'goals', headerName: '总进球', width: 66, pinned: 'left', valueGetter: (p) => (finished(p.data) ? (p.data!.result!.total_goals ?? '-') : '-') },
     {
-      colId: 'outcome', headerName: '赛果', width: 64,
+      colId: 'outcome', headerName: '赛果', width: 56, pinned: 'left',
       cellRenderer: (p: P) => {
         const r = p.data
         if (!r) return null
@@ -133,59 +134,86 @@ function AvgTip({ d, market, children }: { d: AvgDetail | null | undefined; mark
 
 const ALERT_CLASS = { light: 'al-light', medium: 'al-medium', high: 'al-high' } as const
 
-function oddsCol(book: Book, market: Market, phase: Phase, first: boolean): ColDef<Row> {
-  const label = market === 'ah' ? `亚${PHASE_NAME[phase]}` : market === 'ou' ? `大小${PHASE_NAME[phase]}` : `欧${PHASE_NAME[phase]}`
-  return {
-    colId: `${book}.${market}.${phase}`,
-    headerName: label,
-    width: 168,
-    headerClass: first ? SEC : undefined,
+type Sub = 'left' | 'line' | 'mid' | 'right'
+interface TripleSpec {
+  id: string
+  title: string
+  first: boolean
+  phase: Phase
+  /** 取这一阶段的格子与升降 */
+  get: (r: Row) => { cell: Record<string, unknown> | null | undefined; move: Move | null }
+  subs: { key: Sub; field: string; header: string; fmt?: (v: number | null) => string; alert?: boolean }[]
+  avg?: Market | null
+  prefix?: (r: Row) => string | null
+}
+
+/** 一个阶段一组三列（主水 / 盘口 / 客水 等）；格子没有数据时左列跨三列显示状态文字。 */
+function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
+  const n = t.subs.length
+  const children: ColDef<Row>[] = t.subs.map((sub, i) => ({
+    colId: `${t.id}.${sub.key}`,
+    headerName: sub.header,
+    width: sub.key === 'line' ? 58 : 52,
+    headerClass: ['sub-hdr', i === 0 && t.first ? SEC : ''].join(' '),
+    colSpan: i === 0 ? (p) => (p.data && statusOf(t.get(p.data).cell as { cell_status?: CellStatus }) !== 'ok' ? n : 1) : undefined,
     cellClass: (p) => {
-      const c = p.data?.[market]?.[book]?.[phase] as { alert?: keyof typeof ALERT_CLASS | null; cell_status?: CellStatus } | undefined
-      const cls = [first ? SEC : '']
-      if (phase !== 'open' && c?.alert && statusOf(c) === 'ok') cls.push(ALERT_CLASS[c.alert])
+      const cls = ['num-cell', i === 0 && t.first ? SEC : '']
+      if (sub.key === 'line') cls.push('line-cell')
+      const c = p.data ? (t.get(p.data).cell as { alert?: keyof typeof ALERT_CLASS | null; cell_status?: CellStatus } | null) : null
+      if (sub.alert && t.phase !== 'open' && c?.alert && statusOf(c) === 'ok') cls.push(ALERT_CLASS[c.alert])
+      if (i === 0 && statusOf(c) !== 'ok') cls.push('span-status')
       return cls.join(' ')
     },
     cellRenderer: (p: P) => {
       const r = p.data
       if (!r) return null
-      const cells = r[market]?.[book]
-      const c = cells?.[phase]
-      const st = statusOf(c)
-      const colored = phase !== 'open'
-      let body: ReactNode
-      if (!c || st !== 'ok') body = <StatusText st={st} reason={c?.cell_status_reason} />
-      else if (market === 'ah') {
-        const a = c as NonNullable<Row['ah'][Book]>[Phase] & object
-        const m: Move | null = ahMove(cells as Row['ah'][Book], phase)
-        body = (
-          <>
-            <Mv text={fmtNum(a.home_water)} dir={m?.left} colored={colored} /> / <Mv text={ahLineText(a.line)} dir={m?.line} colored={colored} /> /{' '}
-            <Mv text={fmtNum(a.away_water)} dir={m?.right} colored={colored} />
-          </>
-        )
-      } else if (market === 'ou') {
-        const o = c as NonNullable<Row['ou'][Book]>[Phase] & object
-        const m = ouMove(cells as Row['ou'][Book], phase)
-        body = (
-          <>
-            <Mv text={fmtNum(o.over)} dir={m?.left} colored={colored} /> / <Mv text={fmtNum(o.line)} dir={m?.line} colored={colored} /> /{' '}
-            <Mv text={fmtNum(o.under)} dir={m?.right} colored={colored} />
-          </>
-        )
-      } else {
-        const e = c as NonNullable<Row['x1x2'][Book]>[Phase] & object
-        const m = x1x2Move(cells as Row['x1x2'][Book], phase)
-        body = (
-          <>
-            <Mv text={fmtNum(e.home)} dir={m?.left} colored={colored} /> / <Mv text={fmtNum(e.draw)} dir={m?.mid} colored={colored} /> /{' '}
-            <Mv text={fmtNum(e.away)} dir={m?.right} colored={colored} />
-          </>
-        )
-      }
-      return book === 'avg' ? <AvgTip d={c?.avg_detail} market={market}>{body}</AvgTip> : body
+      const { cell, move } = t.get(r)
+      const st = statusOf(cell as { cell_status?: CellStatus })
+      if (!cell || st !== 'ok') return i === 0 ? <StatusText st={st} reason={(cell?.cell_status_reason as string) ?? null} /> : null
+      const v = cell[sub.field] as number | null
+      const text = (sub.fmt ?? fmtNum)(v)
+      const pre = sub.key === 'line' && t.prefix ? t.prefix(r) : null
+      const body = <>{pre}<Mv text={text} dir={move?.[sub.key] as MoveDir | undefined} colored={t.phase !== 'open'} /></>
+      return t.avg ? <AvgTip d={cell.avg_detail as AvgDetail | null | undefined} market={t.avg}>{body}</AvgTip> : body
     },
-  }
+  }))
+  return { groupId: t.id, headerName: t.title, headerClass: t.first ? SEC : undefined, children }
+}
+
+const SUBS: Record<Market, TripleSpec['subs']> = {
+  ah: [
+    { key: 'left', field: 'home_water', header: '主水' },
+    { key: 'line', field: 'line', header: '盘口', fmt: (v) => (v == null ? '-' : ahLineText(v)), alert: true },
+    { key: 'right', field: 'away_water', header: '客水' },
+  ],
+  ou: [
+    { key: 'left', field: 'over', header: '大球' },
+    { key: 'line', field: 'line', header: '盘口', alert: true },
+    { key: 'right', field: 'under', header: '小球' },
+  ],
+  x1x2: [
+    { key: 'left', field: 'home', header: '胜' },
+    { key: 'mid', field: 'draw', header: '平' },
+    { key: 'right', field: 'away', header: '负' },
+  ],
+}
+const MOVE_FN = { ah: ahMove, ou: ouMove, x1x2: x1x2Move } as const
+
+function oddsGroup(book: Book, market: Market, phase: Phase, first: boolean): ColGroupDef<Row> {
+  const label = market === 'ah' ? `亚${PHASE_NAME[phase]}` : market === 'ou' ? `大小${PHASE_NAME[phase]}` : `欧${PHASE_NAME[phase]}`
+  return tripleGroup({
+    id: `${book}.${market}.${phase}`,
+    title: label,
+    first,
+    phase,
+    avg: book === 'avg' ? market : null,
+    subs: SUBS[market],
+    get: (r) => {
+      const cells = r[market]?.[book] as Phased<object> | undefined
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return { cell: cells?.[phase] as Record<string, unknown> | null | undefined, move: (MOVE_FN[market] as any)(cells, phase) }
+    },
+  })
 }
 
 function resultCol(book: Book, market: Market, first: boolean): ColDef<Row> {
@@ -234,7 +262,7 @@ const MARKET_ORDER: Market[] = ['ah', 'ou', 'x1x2']
 export function bookCols(book: Book, markets: Market[] = MARKET_ORDER, resultOnly = false): ColGroupDef<Row> {
   const children: Col[] = []
   markets.forEach((m, i) => children.push(resultCol(book, m, i === 0)))
-  if (!resultOnly) for (const m of markets) PHASES.forEach((ph, i) => children.push(oddsCol(book, m, ph, i === 0)))
+  if (!resultOnly) for (const m of markets) PHASES.forEach((ph, i) => children.push(oddsGroup(book, m, ph, i === 0)))
   return { groupId: `book.${book}`, headerName: BOOK_NAME[book], headerClass: SEC, children }
 }
 
@@ -271,31 +299,41 @@ export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
   if (!resultOnly) {
     for (const kind of ['had', 'hhad'] as const) {
       PHASES.forEach((ph, i) => {
-        children.push({
-          colId: `jc.${kind}.${ph}`,
-          headerName: `${kind === 'had' ? '胜平负' : '让球胜平负'}${PHASE_NAME[ph]}`,
-          width: kind === 'had' ? 140 : 170,
-          headerClass: i === 0 ? SEC : undefined,
-          cellClass: i === 0 ? SEC : undefined,
-          cellRenderer: (p: P) => {
-            const r = p.data
-            if (!r) return null
-            const cells = kind === 'had' ? r.jc_1x2 : r.jc_hhad
-            const c = cells?.[ph]
-            const st = statusOf(c)
-            if (!c || st !== 'ok') return <StatusText st={st} reason={c?.cell_status_reason} />
-            const m = x1x2Move(cells, ph)
-            const colored = ph !== 'open'
-            const gl = kind === 'hhad' ? `(${signedJc((c as { goal_line?: number | null }).goal_line ?? null)}) ` : ''
-            return (
-              <>
-                {gl}
-                <Mv text={fmtNum(c.home)} dir={m?.left} colored={colored} /> / <Mv text={fmtNum(c.draw)} dir={m?.mid} colored={colored} /> /{' '}
-                <Mv text={fmtNum(c.away)} dir={m?.right} colored={colored} />
-              </>
-            )
-          },
-        })
+        const subs: TripleSpec['subs'] = SUBS.x1x2.map((x) => ({ ...x }))
+        children.push(
+          tripleGroup({
+            id: `jc.${kind}.${ph}`,
+            title: `${kind === 'had' ? '胜平负' : '让球胜平负'}${PHASE_NAME[ph]}`,
+            first: i === 0,
+            phase: ph,
+            subs,
+            prefix: undefined,
+            get: (r) => {
+              const cells = (kind === 'had' ? r.jc_1x2 : r.jc_hhad) as Phased<X1x2Cell>
+              return { cell: cells?.[ph] as unknown as Record<string, unknown> | null, move: x1x2Move(cells, ph) }
+            },
+          }),
+        )
+        if (kind === 'hhad') {
+          // 让球数单独一列，放在该阶段三列之前
+          const g = children[children.length - 1] as ColGroupDef<Row>
+          g.children.unshift({
+            colId: `jc.hhad.${ph}.goal`,
+            headerName: '让球',
+            width: 50,
+            headerClass: ['sub-hdr', i === 0 ? SEC : ''].join(' '),
+            cellClass: ['num-cell', i === 0 ? SEC : ''].join(' '),
+            valueGetter: (p) => {
+              const c = p.data?.jc_hhad?.[ph]
+              return c && statusOf(c) === 'ok' ? `(${signedJc(c.goal_line)})` : ''
+            },
+          })
+          ;(g.children[1] as ColDef<Row>).headerClass = 'sub-hdr'
+          ;(g.children[1] as ColDef<Row>).cellClass = (p) => {
+            const c = p.data?.jc_hhad?.[ph]
+            return ['num-cell', c && statusOf(c) !== 'ok' ? 'span-status' : ''].join(' ')
+          }
+        }
       })
     }
   }
