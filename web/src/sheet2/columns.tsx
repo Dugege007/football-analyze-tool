@@ -408,6 +408,27 @@ function signedJc(n: number | null): string {
   return n > 0 ? `+${n}` : n < 0 ? `${n}` : '0'
 }
 
+type Side3 = 'home' | 'draw' | 'away'
+function sideOf(diff: number): Side3 {
+  return diff > 0 ? 'home' : diff < 0 ? 'away' : 'draw'
+}
+/** 接口没给 result.jc.had 时，用比分配竞彩胜平负临盘赔率算出赛果；比分或临盘三项赔率缺任一项就返回 null，页面照旧显示「无法获取」。 */
+function jcHadFromClose(r: Row): { side: Side3; odds: number | null } | null {
+  const hg = r.result?.home_goals, ag = r.result?.away_goals
+  const c = r.jc_1x2?.close
+  if (hg == null || ag == null || !c || c.home == null || c.draw == null || c.away == null) return null
+  const side = sideOf(hg - ag)
+  return { side, odds: c[side] }
+}
+/** 接口没给 result.jc.hhad 时，把让球胜平负临盘的让球数加到主队进球上再判胜平负，配临盘赔率；让球数或赔率缺任一项就返回 null。 */
+function jcHhadFromClose(r: Row): { goal_line: number; side: Side3; odds: number | null } | null {
+  const hg = r.result?.home_goals, ag = r.result?.away_goals
+  const c = r.jc_hhad?.close
+  if (hg == null || ag == null || !c || c.goal_line == null || c.home == null || c.draw == null || c.away == null) return null
+  const side = sideOf(hg + c.goal_line - ag)
+  return { goal_line: c.goal_line, side, odds: c[side] }
+}
+
 export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
   const children: Col[] = [
     {
@@ -416,7 +437,7 @@ export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
         const r = p.data
         if (voidOf(r)) return <VoidText r={r} />
         if (!r || !finished(r)) return '-'
-        const h = r.result?.jc?.had
+        const h = r.result?.jc?.had ?? jcHadFromClose(r)
         if (!h?.side) return <StatusText st={h?.cell_status ?? 'unavailable'} />
         return wdlSpan(h.side, h.odds)
       },
@@ -429,7 +450,7 @@ export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
         const r = p.data
         if (voidOf(r)) return <VoidText r={r} />
         if (!r || !finished(r)) return '-'
-        const h = r.result?.jc?.hhad
+        const h = r.result?.jc?.hhad ?? jcHhadFromClose(r)
         if (!h?.side) return <StatusText st={h?.cell_status ?? 'unavailable'} />
         return wdlSpan(h.side, h.odds, signedJc(h.goal_line))
       },
