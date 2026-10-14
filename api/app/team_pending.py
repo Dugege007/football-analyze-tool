@@ -4,7 +4,8 @@
 1. teams 表若将来有 pending_confirm 列，以该列为准；
 2. team_aliases.source 以 "_pending_confirm" 结尾的别名所属球队（导入包 build_import_file.py 给待确认球队打的来源标记）；
 3. 环境变量 APP_TEAM_PENDING_FILE 指向的导入包 import_rows.csv 或定稿表 teams.csv 里 pending_confirm=true 的常用名；
-4. 以上都没有 → false。
+4. 库里没有球队编号（team_id 为空，未映射）→ 一律 true；
+5. 以上都没有 → false。
 """
 from __future__ import annotations
 
@@ -61,7 +62,10 @@ def load_pending(conn: sqlite3.Connection, file_path: str | None = None) -> tupl
 
 
 def is_pending(team_id, canonical, pending: tuple[set[int], set[str]]) -> bool:
-    ids, names = pending
+    # 2026-10-14 分析师定：库里没有球队编号（未映射）的场次一律算待确认
+    if team_id is None or team_id == "":
+        return True
+    ids, names = pending or (set(), set())
     if team_id is not None:
         try:
             if int(team_id) in ids:

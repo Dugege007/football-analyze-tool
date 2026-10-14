@@ -1,5 +1,7 @@
 # CHANGELOG · match-analysis-api
 
+- 2026-10-14：库里没有球队编号（未映射）的场次，home_team_pending_confirm、away_team_pending_confirm 以及 match.teams_pending_confirm.home、away 一律返回 true（分析师审核口径）。
+
 ## 未发布 — 2026-10-14（分支 backend/team-pending-confirm-20261014，待分析师审核；接口版本号保持 0.3.26）
 
 - 用户规则 2026-10-14：认不出的球队按来源原名写，前端在队名旁加标记，悬停显示「待确认」。新增 `app/team_pending.py`，只读判断球队是否待确认，顺序为：teams 表将来若有 pending_confirm 列以它为准；否则看 team_aliases.source 是否以 `_pending_confirm` 结尾（名称定稿导入包给待确认球队打的来源标记）；否则看环境变量 `APP_TEAM_PENDING_FILE` 指向的 import_rows.csv 或 teams.csv 里 pending_confirm=true 的常用名；都没有时为 false。不改正式库结构，不写库。

@@ -40,7 +40,7 @@ def test_default_false_without_marker(tmp_path):
     p = tp.load_pending(c, file_path=str(tmp_path / "missing.csv"))
     assert p == (set(), set())
     assert tp.is_pending(1, "杜连斯", p) is False
-    assert tp.is_pending(None, None, p) is False
+    assert tp.is_pending(None, None, p) is True  # 未映射（没有球队编号）一律待确认
 
 
 def test_alias_source_suffix_marks_team():
@@ -101,7 +101,9 @@ def test_match_detail_teams_pending_confirm():
     m = build_match_obj(_match_row(1, 2), {}, p)
     assert m["teams_pending_confirm"] == {"home": True, "away": False}
     m2 = build_match_obj(_match_row(None, None), {})
-    assert m2["teams_pending_confirm"] == {"home": False, "away": False}
+    assert m2["teams_pending_confirm"] == {"home": True, "away": True}
+    m3 = build_match_obj(_match_row(5, None), {}, p)
+    assert m3["teams_pending_confirm"] == {"home": False, "away": True}
 
 
 def test_table_model_has_fields():
@@ -112,3 +114,12 @@ def test_table_model_has_fields():
     assert '"away_team_pending_confirm": tp.is_pending(' in src
     if fields is not None:
         assert "home_team_pending_confirm" in fields
+
+
+def test_unmapped_team_id_is_pending():
+    empty = (set(), set())
+    assert tp.is_pending(None, None, empty) is True
+    assert tp.is_pending(None, "某队", empty) is True
+    assert tp.is_pending("", None, empty) is True
+    assert tp.is_pending(7, None, empty) is False
+    assert tp.is_pending(None, None, None) is True

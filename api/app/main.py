@@ -135,8 +135,8 @@ def build_match_obj(row: sqlite3.Row, meta_extras: dict | None = None, pending: 
         "teams": {"home": row["home_team"], "away": row["away_team"]},
         # 2026-10-14：认不出的球队按来源原名写，true 时前端在队名旁加标记、悬停显示「待确认」
         "teams_pending_confirm": {
-            "home": tp.is_pending(row_get(row, "home_team_id"), None, pending) if pending else False,
-            "away": tp.is_pending(row_get(row, "away_team_id"), None, pending) if pending else False,
+            "home": tp.is_pending(row_get(row, "home_team_id"), None, pending),
+            "away": tp.is_pending(row_get(row, "away_team_id"), None, pending),
         },
         "home_team_id": row_get(row, "home_team_id"),
         "away_team_id": row_get(row, "away_team_id"),
