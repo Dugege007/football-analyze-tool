@@ -36,16 +36,16 @@
 .sheet2 .sub-hdr { padding-left: 4px; padding-right: 4px; font-weight: 400; color: #595959; }
 .sheet2 .ag-header-group-cell-label { justify-content: center; }
 /* 每阶段三列的对齐（放在最后，覆盖 num-cell 的默认右对齐） */
-.sheet2 .ag-cell.al-right { justify-content: flex-end; }
-.sheet2 .ag-cell.al-center { justify-content: center; }
-.sheet2 .ag-cell.al-left { justify-content: flex-start; }
 .sheet2 .ag-cell.span-status { justify-content: center; }
-.sheet2 .sub-hdr.al-right .ag-header-cell-label { justify-content: flex-end; }
-.sheet2 .sub-hdr.al-center .ag-header-cell-label { justify-content: center; }
-.sheet2 .sub-hdr.al-left .ag-header-cell-label { justify-content: flex-start; }
 /* 赛果列与预测结果列居中，表头也居中 */
-.sheet2 .ag-cell.res-center { justify-content: center; }
-.sheet2 .res-center .ag-header-cell-label { justify-content: center; }
 .avg-tip-table { margin-top: 4px; border-collapse: collapse; font-size: 12px; }
 .avg-tip-table th, .avg-tip-table td { padding: 1px 8px 1px 0; text-align: left; font-weight: 400; white-space: nowrap; }
 .avg-tip-table th { color: rgba(255,255,255,0.65); }
+/* 对齐（读 columnWidths.ts 的 COLUMN_ALIGN；放最后以覆盖默认） */
+.sheet2 .ag-cell.al-right { justify-content: flex-end; }
+.sheet2 .ag-cell.al-center { justify-content: center; }
+.sheet2 .ag-cell.al-left { justify-content: flex-start; }
+.sheet2 .ag-header-cell.al-right .ag-header-cell-label { justify-content: flex-end; }
+.sheet2 .ag-header-cell.al-center .ag-header-cell-label { justify-content: center; }
+.sheet2 .ag-header-cell.al-left .ag-header-cell-label { justify-content: flex-start; }
+.sheet2 .ag-cell.span-status { justify-content: center; }

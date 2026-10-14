@@ -2,7 +2,7 @@ import type { ColDef, ColGroupDef, ICellRendererParams } from 'ag-grid-community
 import { Tag, Tooltip } from 'antd'
 import type { ReactNode } from 'react'
 import { formatPick } from '../api/pickFormat'
-import { w, type WidthKey } from './columnWidths'
+import { alignClass, w, type WidthKey } from './columnWidths'
 import {
   REASON_TEXT,
   SETTLE_TEXT,
@@ -51,8 +51,23 @@ const finished = (r?: Row) => r?.match.status === 'finished' && r.result?.home_g
 // ───────────── 基本数据列 ─────────────
 export function baseCols(): Col[] {
   // 九列全部固定在左侧，保证「基本」分组不被固定区和滚动区拆成两段
-  return [{ groupId: 'base', headerName: '基本', marryChildren: true, children: baseChildren() }]
+  return [{ groupId: 'base', headerName: '基本', marryChildren: true, children: baseChildren().map((c) => withAlign(c as ColDef<Row>, `base.${(c as ColDef<Row>).colId}` as WidthKey)) }]
 }
+/** 给列加上配置里的对齐类（单元格和表头一起） */
+function withAlign(c: ColDef<Row>, k: WidthKey, sub?: string): ColDef<Row> {
+  const al = alignClass(k, sub)
+  const hc = c.headerClass
+  const cc = c.cellClass
+  return {
+    ...c,
+    headerClass: [typeof hc === 'string' ? hc : Array.isArray(hc) ? hc.join(' ') : '', 'al-hdr', al].join(' '),
+    cellClass:
+      typeof cc === 'function'
+        ? (p) => [String((cc as (x: typeof p) => unknown)(p) ?? ''), al].join(' ')
+        : [typeof cc === 'string' ? cc : Array.isArray(cc) ? cc.join(' ') : '', al].join(' '),
+  }
+}
+
 function baseChildren(): Col[] {
   return [
     {
@@ -180,9 +195,6 @@ interface TripleSpec {
   prefix?: (r: Row) => string | null
 }
 
-/** 三列对齐：左列右对齐、中列居中、右列左对齐（用户 10-14 15:04） */
-const alignOf = (i: number, n: number) => (i === 0 ? 'al-right' : i === n - 1 ? 'al-left' : 'al-center')
-
 /** 一个阶段一组三列（主水 / 盘口 / 客水 等）；格子没有数据时左列跨三列显示状态文字。 */
 function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
   const n = t.subs.length
@@ -190,10 +202,10 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
     colId: `${t.id}.${sub.key}`,
     headerName: sub.header,
     width: w(sub.wkey),
-    headerClass: ['sub-hdr', alignOf(i, n), i === 0 && t.first ? SEC : ''].join(' '),
+    headerClass: ['sub-hdr', alignClass(sub.wkey, sub.header), i === 0 && t.first ? SEC : ''].join(' '),
     colSpan: i === 0 ? (p) => (p.data && statusOf(t.get(p.data).cell as { cell_status?: CellStatus }) !== 'ok' ? n : 1) : undefined,
     cellClass: (p) => {
-      const cls = ['num-cell', alignOf(i, n), i === 0 && t.first ? SEC : '']
+      const cls = ['num-cell', alignClass(sub.wkey, sub.header), i === 0 && t.first ? SEC : '']
       if (sub.key === 'line') cls.push('line-cell')
       const c = p.data ? (t.get(p.data).cell as { alert?: keyof typeof ALERT_CLASS | null; cell_status?: CellStatus } | null) : null
       if (sub.alert && t.phase !== 'open' && c?.alert && statusOf(c) === 'ok') cls.push(ALERT_CLASS[c.alert])
@@ -262,8 +274,8 @@ function resultCol(book: Book, market: Market, first: boolean): ColDef<Row> {
     colId: `${book}.res.${market}`,
     headerName: label,
     width: w(`res.${market}`),
-    headerClass: ['res-center', first ? SEC : ''].join(' '),
-    cellClass: ['res-center', first ? SEC : ''].join(' '),
+    headerClass: ['al-hdr', alignClass(`res.${market}`), first ? SEC : ''].join(' '),
+    cellClass: [alignClass(`res.${market}`), first ? SEC : ''].join(' '),
     cellRenderer: (p: P) => {
       const r = p.data
       if (!r || !finished(r)) return '-'
@@ -315,7 +327,7 @@ function signedJc(n: number | null): string {
 export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
   const children: Col[] = [
     {
-      colId: 'jc.res.had', headerName: '胜平负赛果', width: w('jc.res.had'), headerClass: `res-center ${SEC}`, cellClass: `res-center ${SEC}`,
+      colId: 'jc.res.had', headerName: '胜平负赛果', width: w('jc.res.had'), headerClass: `al-hdr ${alignClass('jc.res.had')} ${SEC}`, cellClass: `${alignClass('jc.res.had')} ${SEC}`,
       cellRenderer: (p: P) => {
         const r = p.data
         if (!r || !finished(r)) return '-'
@@ -327,7 +339,7 @@ export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
   ]
   if (!onlyHad)
     children.push({
-      colId: 'jc.res.hhad', headerName: '让球胜平负赛果', width: w('jc.res.hhad'), headerClass: 'res-center', cellClass: 'res-center',
+      colId: 'jc.res.hhad', headerName: '让球胜平负赛果', width: w('jc.res.hhad'), headerClass: `al-hdr ${alignClass('jc.res.hhad')}`, cellClass: alignClass('jc.res.hhad'),
       cellRenderer: (p: P) => {
         const r = p.data
         if (!r || !finished(r)) return '-'
@@ -361,18 +373,18 @@ export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
             colId: `jc.hhad.${ph}.goal`,
             headerName: '让球',
             width: w('jc.hhad.goal'),
-            headerClass: ['sub-hdr', 'al-right', i === 0 ? SEC : ''].join(' '),
+            headerClass: ['sub-hdr', alignClass('jc.hhad.goal'), i === 0 ? SEC : ''].join(' '),
             // 让球数按盘口规则加粗
-            cellClass: ['num-cell', 'line-cell', 'al-right', i === 0 ? SEC : ''].join(' '),
+            cellClass: ['num-cell', 'line-cell', alignClass('jc.hhad.goal'), i === 0 ? SEC : ''].join(' '),
             valueGetter: (p) => {
               const c = p.data?.jc_hhad?.[ph]
               return c && statusOf(c) === 'ok' ? `(${signedJc(c.goal_line)})` : ''
             },
           })
-          ;(g.children[1] as ColDef<Row>).headerClass = 'sub-hdr al-right'
+          ;(g.children[1] as ColDef<Row>).headerClass = `sub-hdr ${alignClass('jc.hhad.odds', '胜')}`
           ;(g.children[1] as ColDef<Row>).cellClass = (p) => {
             const c = p.data?.jc_hhad?.[ph]
-            return ['num-cell', 'al-right', c && statusOf(c) !== 'ok' ? 'span-status' : ''].join(' ')
+            return ['num-cell', alignClass('jc.hhad.odds', '胜'), c && statusOf(c) !== 'ok' ? 'span-status' : ''].join(' ')
           }
         }
       })
@@ -390,7 +402,7 @@ export function predCols(book: Book, blocks: PredBlock[]): ColGroupDef<Row> {
   for (const b of blocks) {
     const name = b === 'ah' ? '亚盘预测' : b === 'ou' ? '大小预测' : b === 'x1x2' ? '欧盘预测' : '竞彩预测'
     children.push({
-      colId: `pred.${b}`, headerName: name, width: w(`pred.${b}`), headerClass: SEC, cellClass: SEC,
+      colId: `pred.${b}`, headerName: name, width: w(`pred.${b}`), headerClass: `al-hdr ${alignClass(`pred.${b}`)} ${SEC}`, cellClass: `${alignClass(`pred.${b}`)} ${SEC}`,
       cellRenderer: (p: P) => {
         const r = p.data
         if (!r || b !== 'ah') return '-'
@@ -402,11 +414,11 @@ export function predCols(book: Book, blocks: PredBlock[]): ColGroupDef<Row> {
       },
     })
     children.push({
-      colId: `pred.${b}.res`, headerName: '结果', width: w(`pred.${b}.res`), headerClass: 'res-center',
+      colId: `pred.${b}.res`, headerName: '结果', width: w(`pred.${b}.res`), headerClass: `al-hdr ${alignClass(`pred.${b}.res`)}`,
       cellClass: (p) => {
-        if (b !== 'ah') return 'res-center'
+        if (b !== 'ah') return alignClass(`pred.${b}.res`)
         const code = p.data?.settlement_by_book?.[book]?.ah?.code
-        return ['res-center', finished(p.data) && code ? SETTLE_CLASS[code] : ''].join(' ')
+        return [alignClass(`pred.${b}.res`), finished(p.data) && code ? SETTLE_CLASS[code] : ''].join(' ')
       },
       cellRenderer: (p: P) => {
         const r = p.data
