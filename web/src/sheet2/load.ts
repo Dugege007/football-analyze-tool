@@ -136,14 +136,26 @@ export function mapApiRow(it: Raw): Row {
           status: typeof r.status === 'string' ? (r.status as NonNullable<Row['result']>['status']) : null,
           home_goals: r.home_goals ?? null,
           away_goals: r.away_goals ?? null,
-          total_goals: r.total_goals ?? (r.home_goals != null && r.away_goals != null ? r.home_goals + r.away_goals : null),
+          total_goals: r.total_goals ?? null,
           outcome_1x2: r.outcome_1x2 ?? null,
           by_book: r.by_book ?? null,
-          jc: r.jc ?? null,
+          jc: mapJcResult(r.jc),
         }
       : null,
     settlement_by_book: it.settlement_by_book ?? null,
   }
+}
+
+/** 接口的 result.jc.had / hhad 用 outcome 字段，页面用 side；outcome 为空时，collector_empty 记为无法获取。没有该项时返回 null，页面显示「无法获取」，不在页面上自行计算。 */
+function mapJcItem(x: any): { side: 'home' | 'draw' | 'away' | null; odds: number | null; goal_line: number | null; cell_status?: CellStatus } | null {
+  if (!x || typeof x !== 'object') return null
+  const side = x.side ?? x.outcome ?? null
+  if (side == null && !x.null_reason && !x.cell_status) return null
+  return { side, odds: x.odds ?? null, goal_line: x.goal_line ?? null, cell_status: side ? undefined : (x.cell_status ?? 'unavailable') }
+}
+function mapJcResult(jc: any): NonNullable<Row['result']>['jc'] {
+  if (!jc || typeof jc !== 'object') return null
+  return { had: mapJcItem(jc.had), hhad: mapJcItem(jc.hhad) }
 }
 
 /** 接口顶层 books（机构列顺序）；没给时为 null，页面用默认顺序 */
