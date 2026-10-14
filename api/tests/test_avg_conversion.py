@@ -305,3 +305,60 @@ def run_case(case: dict) -> list[str]:
 def test_advisor_cases(case):
     bad = run_case(case)
     assert not bad, "；".join(bad)
+
+
+# ----------------------------------------------------------------------------- 两家门槛：AH-13 与 AH-15 逐项比对完整期望值
+# 期望值抄自算法顾问 2026-10-14 重新生成的 cases.json（旧版备份 testcases/cases.v3.json），写死在测试里，不依赖用例文件。
+
+def _ah(quotes, missing, ge=2.6):
+    return ac.compute_avg("ah", quotes, missing, ge)
+
+
+def _close_list(got, want, tol=0.001):
+    return got is not None and len(got) == len(want) and all(abs(a - b) <= tol for a, b in zip(got, want))
+
+
+def test_ah13_two_books_full_expectation():
+    out = _ah({"william": {"line": 0.25, "water": [0.8, 0.98]}, "bet365": {"line": 0.5, "water": [1.0, 0.85]}},
+              {"macau": "not_captured", "crown": "not_captured", "pinnacle": "not_captured"})
+    d = out["avg_detail"]
+    assert d["majority_line"] == 0.5
+    assert d["tie_break"] == "bet365"
+    assert d["median_line"] == 0.375
+    assert d["voting_books"] == ["william", "bet365"]
+    assert d["averaged_books"] == ["william", "bet365"]
+    assert d["averaged_count"] == 2
+    assert d["excluded_books"] == []
+    assert d["missing_books"] == [{"book": "macau", "reason": "not_captured"}, {"book": "crown", "reason": "not_captured"},
+                                  {"book": "pinnacle", "reason": "not_captured"}]
+    conv = {c["book"]: c for c in d["conversions"]}
+    assert list(conv) == ["william", "bet365"]
+    assert conv["william"]["steps"] == 1 and _close_list(conv["william"]["converted_water"], [1.0429, 0.7515])
+    assert abs(conv["william"]["margin"] - 0.0606) <= 0.001
+    assert conv["bet365"]["steps"] == 0 and _close_list(conv["bet365"]["converted_water"], [1.0, 0.85])
+    assert abs(conv["bet365"]["margin"] - 0.0405) <= 0.001
+    assert out["status"] == "ok"
+    assert _close_list([out["values"]["home_water"], out["values"]["away_water"]], [1.0214, 0.8007])
+
+
+def test_ah15_excluded_plus_two_missing_full_expectation():
+    out = _ah({"macau": {"line": 1.0, "water": [0.92, 0.92]}, "crown": {"line": 1.0, "water": [0.95, 0.93]},
+               "pinnacle": {"line": 0.25, "water": [0.9, 1.0]}},
+              {"william": "no_source", "bet365": "not_captured"})
+    d = out["avg_detail"]
+    assert d["majority_line"] == 1.0
+    assert d["tie_break"] == "none"
+    assert d["median_line"] is None
+    assert d["voting_books"] == ["macau", "crown", "pinnacle"]
+    assert d["averaged_books"] == ["macau", "crown"]
+    assert d["averaged_count"] == 2
+    ex = d["excluded_books"]
+    assert [(e["book"], e["reason"], e["steps"], e["original_line"]) for e in ex] == [("pinnacle", "deviation_too_large", 3, 0.25)]
+    assert abs(ex[0]["margin"] - 0.0263) <= 0.001
+    assert d["missing_books"] == [{"book": "william", "reason": "no_source"}, {"book": "bet365", "reason": "not_captured"}]
+    conv = {c["book"]: c for c in d["conversions"]}
+    assert list(conv) == ["macau", "crown"]
+    assert all(c["steps"] == 0 and c["converted_water"] == c["original_water"] for c in conv.values())
+    assert abs(conv["macau"]["margin"] - 0.0417) <= 0.001 and abs(conv["crown"]["margin"] - 0.031) <= 0.001
+    assert out["status"] == "ok"
+    assert _close_list([out["values"]["home_water"], out["values"]["away_water"]], [0.935, 0.925])
