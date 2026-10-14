@@ -158,3 +158,135 @@ def test_daemon_single_instance_lock(tmp_path):
                        capture_output=True, text=True, timeout=30,
                        env={"FIVEDOLLAR_FOOTBALL_API_KEY": "test", "PATH": "/usr/bin:/bin"})
     assert p.returncode != 0 and "已有一份" in p.stderr
+
+
+# ---------------------------------------------------------------- 竞彩网缓存刷新（MSI 文件导入）
+
+def _bundle(tmp, now, *, ok=True, age_h=0.5, pages=None):
+    import json
+    raw = json.dumps({"errorCode": "0", "value": {"pages": 1, "matchResult": [sp("周六001", "2026-10-10", "大阪樱花", "横滨水手")]}},
+                     ensure_ascii=False)
+    doc = {"fetched_at": R.iso(now - dt.timedelta(hours=age_h)), "begin": "2026-10-06", "end": "2026-10-10",
+           "ok": ok, "error": None if ok else "HTTP 567", "pages": [raw] if pages is None else pages}
+    p = tmp / "latest_bundle.json"
+    p.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    return p
+
+
+def test_sporttery_import_ok_stale_failed_missing(tmp_path):
+    now = dt.datetime(2026, 10, 15, 10, 0, tzinfo=TZ)
+    cache, out = tmp_path / "cache", tmp_path / "out"
+    out.mkdir()
+    r = R.import_sporttery_bundle(_bundle(tmp_path, now), cache, out, now)
+    assert r["ok"] and r["matches"] == 1 and (cache / "msi_2026-10-06_2026-10-10_p1.json").exists()
+    assert ("2026-10-10", "六001") in R.load_sporttery([str(cache)])
+    assert not R.import_sporttery_bundle(_bundle(tmp_path, now, age_h=5), cache, out, now)["ok"]
+    assert not R.import_sporttery_bundle(_bundle(tmp_path, now, ok=False), cache, out, now)["ok"]
+    r = R.import_sporttery_bundle(None, cache, out, now, "MSI 不在线")
+    assert not r["ok"] and "MSI 不在线" in r["error"]
+    recs = R.refresh_records(out)
+    assert [x["ok"] for x in recs] == [True, False, False, False]
+
+
+def test_daily_summary_shows_refresh_and_single_source(tmp_path):
+    db = mkdb(tmp_path)
+    now = dt.datetime(2026, 10, 10, 23, 0, tzinfo=TZ)
+    out = tmp_path / "out"
+    out.mkdir()
+    c = sqlite3.connect(db)
+    R.ensure_schema(c)
+    c.execute("insert into result_ingest_flags values (1, 'single_source', '{}', 'x', 'x', null)")
+    c.commit()
+    c.close()
+    R.import_sporttery_bundle(_bundle(tmp_path, now), tmp_path / "cache", out, now)
+    R.write_daily_summary(db, out / "daily_summary.md", now, days=1)
+    line = [ln for ln in (out / "daily_summary.md").read_text(encoding="utf-8").splitlines() if ln.startswith("| 2026-10-10")][0]
+    cells = [x.strip() for x in line.strip("|").split("|")]
+    assert cells[5] == "1" and cells[6].startswith("成功（23:00，1 场）")
+
+
+# ---------------------------------------------------------------- Football-Data.co.uk 核对、单一来源标记
+
+def _fd_setup(tmp_path):
+    db = mkdb(tmp_path)
+    c = sqlite3.connect(db)
+    R.ensure_schema(c)
+    c.execute("insert into matches values (3,'c','jingcai','2026-10-10','六003','英特杜古','古比斯','2026-10-10T23:00:00+08:00')")
+    c.execute("insert into matches values (4,'d','jingcai','2026-10-10','六004','某甲','某乙','2026-10-10T23:00:00+08:00')")
+    for mid in (3, 4):
+        c.execute("insert into results values (?, 1, 0, 1, '胜')", (mid,))
+        c.execute("insert into result_ingest_log values (?, '5df_csl', null, '1:0', null, '{}', null, 'x')", (mid,))
+    c.commit()
+    c.close()
+    out = tmp_path / "out"
+    (out / "fd_raw").mkdir(parents=True)
+    (out / "fd_raw" / "new_FIN.csv").write_text(
+        "Country,League,Season,Date,Time,Home,Away,HG,AG,Res\nFinland,Veikkausliiga,2026,10/10/2026,18:00,Inter Turku,KuPS,1,0,H\n",
+        encoding="utf-8")
+    (out / "fd_team_map.csv").write_text("中文,英文\n英特杜古,Inter Turku\n古比斯,KuPS\n", encoding="utf-8")
+    return db, out
+
+
+def test_crosscheck_confirms_and_flags_single_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "TEAMS_CSV", str(tmp_path / "none.csv"))
+    db, out = _fd_setup(tmp_path)
+    now = dt.datetime(2026, 10, 11, 9, 0, tzinfo=TZ)
+    r = R.crosscheck_single_source(db, out, tmp_path / "bk", now)
+    assert (r["confirmed"], r["single_source"], r["fd_score_mismatch"]) == (1, 1, 0) and r["backup"]
+    c = sqlite3.connect(db)
+    assert c.execute("select source, fd_score from result_ingest_log where match_id = 3").fetchone() == \
+        ("5df_csl+football_data_co_uk", "1:0")
+    assert c.execute("select flag from result_ingest_flags where match_id = 4 and resolved_at is null").fetchall() == [("single_source",)]
+    c.close()
+    # 第二次：没有变化就不再备份
+    assert R.crosscheck_single_source(db, out, tmp_path / "bk", now)["backup"] is None
+
+
+def test_crosscheck_mismatch(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "TEAMS_CSV", str(tmp_path / "none.csv"))
+    db, out = _fd_setup(tmp_path)
+    (out / "fd_raw" / "new_FIN.csv").write_text(
+        "Country,League,Season,Date,Time,Home,Away,HG,AG,Res\nFinland,Veikkausliiga,2026,10/10/2026,18:00,Inter Turku,KuPS,2,0,H\n",
+        encoding="utf-8")
+    r = R.crosscheck_single_source(db, out, tmp_path / "bk", dt.datetime(2026, 10, 11, 9, 0, tzinfo=TZ))
+    assert r["fd_score_mismatch"] == 1
+
+
+def test_crosscheck_sporttery_only_is_single_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "TEAMS_CSV", str(tmp_path / "none.csv"))
+    db, out = _fd_setup(tmp_path)
+    c = sqlite3.connect(db)
+    c.execute("insert into matches values (5,'e','jingcai','2026-10-10','六005','圣保罗','维多利亚','2026-10-10T08:00:00+08:00')")
+    c.execute("insert into results values (5, 2, 1, 3, '胜')")
+    c.execute("insert into result_ingest_log values (5, 'sporttery', '2:1', null, null, '{}', null, 'x')")
+    c.commit()
+    c.close()
+    now = dt.datetime(2026, 10, 11, 9, 0, tzinfo=TZ)
+    r = R.crosscheck_single_source(db, out, tmp_path / "bk", now)
+    assert r["single_source"] == 2
+    R.write_daily_summary(db, out / "daily_summary.md", now, days=1)
+    txt = (out / "daily_summary.md").read_text(encoding="utf-8")
+    assert "| 单一来源 | 六005 | 2026-10-10 | 圣保罗 对 维多利亚 | 2-1 | 只有竞彩网 |" in txt
+    assert "| 单一来源 | 六004 | 2026-10-10 | 某甲 对 某乙 | 1-0 | 只有 5DF |" in txt
+
+
+def test_summary_lists_fd_mismatch(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "TEAMS_CSV", str(tmp_path / "none.csv"))
+    db, out = _fd_setup(tmp_path)
+    (out / "fd_raw" / "new_FIN.csv").write_text(
+        "Country,League,Season,Date,Time,Home,Away,HG,AG,Res\nFinland,Veikkausliiga,2026,10/10/2026,18:00,Inter Turku,KuPS,2,0,H\n",
+        encoding="utf-8")
+    now = dt.datetime(2026, 10, 11, 9, 0, tzinfo=TZ)
+    R.crosscheck_single_source(db, out, tmp_path / "bk", now)
+    R.write_daily_summary(db, out / "daily_summary.md", now, days=1)
+    assert "| 与 Football-Data.co.uk 不一致 | 六003 |" in (out / "daily_summary.md").read_text(encoding="utf-8")
+
+
+def test_sporttery_import_dry_run_records_nothing(tmp_path):
+    now = dt.datetime(2026, 10, 15, 10, 0, tzinfo=TZ)
+    out = tmp_path / "out"
+    out.mkdir()
+    r = R.import_sporttery_bundle(None, tmp_path / "cache", out, now, "干跑", dry_run=True)
+    assert r["dry_run"] and not r["ok"] and R.refresh_records(out) == []
+    r = R.import_sporttery_bundle(_bundle(tmp_path, now), tmp_path / "cache", out, now, dry_run=True)
+    assert r["ok"] and not (tmp_path / "cache").exists() and R.refresh_records(out) == []
