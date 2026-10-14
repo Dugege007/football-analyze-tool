@@ -4,7 +4,7 @@
  * Sources: odds-data/research/dc_train/team_aliases_proposed.csv, with
  * odds-data/backfill/dc-aliases-review-2026-10-08/corrections.csv winning on conflicts (the approved set in REVIEW.md section 7),
  * together with the teams and team_aliases tables (rules in docs/schema/data-conventions-v1.md section 2).
- * The global alias 阿赫利 is dropped in the approved set, so it is shown unchanged.
+ * Aliases that are valid only in some leagues come from LEAGUE_SCOPED below.
  * Teams in the KuPS group and teams with no record show the source name unchanged;
  * they are listed in web/docs/team-names-pending.csv.
  */
@@ -93,16 +93,33 @@ const TEAM_OTHER_NAMES: Record<string, string[]> = {
   "霍芬海姆TSG": ["霍芬海姆"],
 }
 
+/**
+ * League-scoped team aliases, copied row for row from
+ * odds-data/backfill/dc-aliases-review-2026-10-08/league_scoped_aliases.csv.
+ * Each alias maps to its team only when the match's standard league name (after league mapping)
+ * is one of the listed leagues; elsewhere the source name is shown. Add new rows here when that file changes.
+ */
+const LEAGUE_SCOPED: { alias: string; team: string; leagues: string[] }[] = [
+  { alias: "阿赫利", team: "吉达国民", leagues: ["沙特联", "亚冠", "亚精英赛"] },
+]
+
+/** Returns the scoped team for an alias in a league, or null when no scoped row applies. */
+function scopedTeam(name: string, leagueDisplay: string | null | undefined): string | null {
+  if (!leagueDisplay) return null
+  const hit = LEAGUE_SCOPED.find((r) => r.alias === name && r.leagues.includes(leagueDisplay))
+  return hit ? hit.team : null
+}
+
 /** Returns the display name for a team, preferring the backend canonical name when one exists. */
-export function teamCommon(name: string | null | undefined, canonical?: string | null, _leagueDisplay?: string | null): string | null {
+export function teamCommon(name: string | null | undefined, canonical?: string | null, leagueDisplay?: string | null): string | null {
   const base = (canonical || name)?.trim()
   if (!base) return null
-  return TEAM_DISPLAY[base] ?? base
+  return scopedTeam(base, leagueDisplay) ?? TEAM_DISPLAY[base] ?? base
 }
 
 /** Returns the hover text with the source name and the other recorded names, or undefined when there are none. */
-export function teamAliasTip(name: string | null | undefined, canonical?: string | null, _leagueDisplay?: string | null): string | undefined {
-  const shown = teamCommon(name, canonical)
+export function teamAliasTip(name: string | null | undefined, canonical?: string | null, leagueDisplay?: string | null): string | undefined {
+  const shown = teamCommon(name, canonical, leagueDisplay)
   if (!shown) return undefined
   const others = new Set<string>(TEAM_OTHER_NAMES[shown] ?? [])
   if (name) others.add(name)

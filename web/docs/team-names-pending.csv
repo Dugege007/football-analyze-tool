@@ -22,7 +22,7 @@ team,济州SK,韩国K1联赛,1,,No entry in the teams or team_aliases tables or 
 team,贝西克塔斯,欧联杯,1,,No entry in the teams or team_aliases tables or in the approved alias set
 team,费内巴切,欧洲冠军联赛,1,,No entry in the teams or team_aliases tables or in the approved alias set
 team,阿尔瓦斯尔SC,亚足联冠军精英联赛,1,,No entry in the teams or team_aliases tables or in the approved alias set
-team,阿赫利,沙特阿拉伯职业联赛,2,吉达国民,"Approved set drops 阿赫利 as a global alias (REVIEW.md section 7.1); the league-scoped mapping to 吉达国民 is not read by any code yet, so the source name is shown"
+team_resolved,阿赫利,沙特阿拉伯职业联赛,2,吉达国民,"Resolved: shown as 吉达国民 only in 沙特联, 亚冠 and 亚精英赛 through league_scoped_aliases.csv; elsewhere the source name is shown"
 league,中国杯,,0,,pending_user_confirmation in research/jingcai-competition-whitelist/unmapped_5df.csv; not present in current 8789 data
 league,优胜者杯,,0,,pending_user_confirmation in research/jingcai-competition-whitelist/unmapped_5df.csv; not present in current 8789 data
 league,墨冠杯,,0,,pending_user_confirmation in research/jingcai-competition-whitelist/unmapped_5df.csv; not present in current 8789 data
