@@ -15,6 +15,8 @@ export const REASON_TEXT: Record<string, string> = {
   no_source: '没有来源',
   not_captured: '没采到',
   suspect_truncated: '初盘疑似截断',
+  deviation_too_large: '偏离多数盘口 3 档或以上',
+  conversion_failed: '模型算不出换算结果',
   too_few_books: '有数据的机构少于 3 家',
 }
 
@@ -61,7 +63,10 @@ export function ahMove(cells: Phased<AhCell> | undefined, phase: Phase): Move | 
   if (c.move) return c.move
   const pv = prevPhase(cells, phase)
   if (!pv) return null
-  return { compare_to: pv.p, line: ahLineDir(pv.c.line, c.line), left: waterDir(pv.c.home_water, c.home_water), right: waterDir(pv.c.away_water, c.away_water) }
+  const ld = ahLineDir(pv.c.line, c.line)
+  // 换盘时水位不比较，只给盘口上色（分析师 2026-10-14 定）
+  const nc = ld === 'up' || ld === 'down' || (pv.c.line != null && c.line != null && pv.c.line !== c.line)
+  return { compare_to: pv.p, line: ld, left: nc ? 'not_comparable' : waterDir(pv.c.home_water, c.home_water), right: nc ? 'not_comparable' : waterDir(pv.c.away_water, c.away_water) }
 }
 export function ouMove(cells: Phased<OuCell> | undefined, phase: Phase): Move | null {
   const c = cells?.[phase]
@@ -69,7 +74,9 @@ export function ouMove(cells: Phased<OuCell> | undefined, phase: Phase): Move | 
   if (c.move) return c.move
   const pv = prevPhase(cells, phase)
   if (!pv) return null
-  return { compare_to: pv.p, line: ouLineDir(pv.c.line, c.line), left: waterDir(pv.c.over, c.over), right: waterDir(pv.c.under, c.under) }
+  const ld = ouLineDir(pv.c.line, c.line)
+  const nc = ld === 'up' || ld === 'down'
+  return { compare_to: pv.p, line: ld, left: nc ? 'not_comparable' : waterDir(pv.c.over, c.over), right: nc ? 'not_comparable' : waterDir(pv.c.under, c.under) }
 }
 export function x1x2Move(cells: Phased<X1x2Cell> | undefined, phase: Phase): Move | null {
   const c = cells?.[phase]
@@ -81,3 +88,19 @@ export function x1x2Move(cells: Phased<X1x2Cell> | undefined, phase: Phase): Mov
 }
 
 export const SETTLE_TEXT = { win: '赢', win_half: '赢半', push: '走水', lose_half: '输半', lose: '输', no_bet: '-' } as const
+
+/** 带时区的时间显示成东八区「月-日 时:分」；没有时区按原样 */
+export function bjTime(iso: string | null | undefined): string {
+  if (!iso) return '-'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const b = new Date(d.getTime() + 8 * 3600e3)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(b.getUTCMonth() + 1)}-${p(b.getUTCDate())} ${p(b.getUTCHours())}:${p(b.getUTCMinutes())}`
+}
+export const SOURCE_TEXT: Record<string, string> = {
+  '5df_live_opening': '5DollarFootballAPI 开盘数据',
+  '5df_live': '5DollarFootballAPI 实时采集',
+  '5df_hist_asof_full': '5DollarFootballAPI 历史补数',
+}
+export const sourceText = (s: string | null | undefined): string => (s ? (SOURCE_TEXT[s] ?? (s.startsWith('5df') ? `5DollarFootballAPI（${s}）` : s)) : '未知')

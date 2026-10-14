@@ -217,7 +217,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 export async function listStrategies(base = '/api'): Promise<WithSource<{ items: StrategyDef[] }>> {
   const live = await tryFetch<{ items: StrategyDef[] }>('/strategies', base)
   if (live) return { data: live, source: 'api' }
-  throw new Error(`无法读取方案列表（请确认${base === '/api' ? ' 8787' : '副本 8788'} 已启动）`)
+  throw new Error(`无法读取方案列表（请确认${base === '/api' ? ' 8787' : '副本实例'} 已启动）`)
 }
 
 export async function listStrategyTemplates(): Promise<

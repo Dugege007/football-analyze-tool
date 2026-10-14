@@ -9,6 +9,8 @@ import {
   STATUS_TEXT,
   ahLineText,
   ahMove,
+  bjTime,
+  sourceText,
   fmtNum,
   ouMove,
   statusOf,
@@ -126,7 +128,8 @@ function Mv({ text, dir, colored }: { text: string; dir: MoveDir | undefined; co
 const TIE_TEXT: Record<string, string> = { median: '按中位数', macau: '取澳门', pinnacle: '取平博', crown: '取皇冠', bet365: '取 Bet365', smaller_line: '取较小盘口' }
 const DEVIG_TEXT: Record<string, string> = { power: '幂次法' }
 const MODEL_TEXT: Record<string, string> = { poisson: '泊松模型' }
-const EXCLUDE_TEXT: Record<string, string> = { deviation_too_large: '偏离多数盘口过大' }
+const EXCLUDE_TEXT: Record<string, string> = { deviation_too_large: '偏离多数盘口过大', conversion_failed: '模型算不出换算结果' }
+const GE_SOURCE_TEXT: Record<string, string> = { ou_median_same_phase: '同一阶段各家大小球盘口的中位数（不含威廉）', default: '没有大小球数据，取默认值' }
 
 /** 多家平均格悬停：按约定第 7.2 节字段显示（第 3 版字段缺失时退回第 2 版字段）。 */
 function AvgTip({ d, market, phase, children }: { d: AvgDetail | null | undefined; market: Market; phase?: Phase; children: ReactNode }) {
@@ -137,17 +140,22 @@ function AvgTip({ d, market, phase, children }: { d: AvgDetail | null | undefine
   const averaged = d.averaged_books ?? d.books_used
   const missing = d.missing_books ?? Object.entries(d.books_missing ?? {}).map(([book, reason]) => ({ book, reason }))
   const tie = d.tie_break && d.tie_break !== 'none' ? (TIE_TEXT[d.tie_break] ?? d.tie_break) : null
+  const srcs = d.sources ?? {}
+  const srcBooks = Object.keys(srcs).sort((a, b) => BOOK_ORDER.indexOf(a) - BOOK_ORDER.indexOf(b))
   const tip = (
     <div className="avg-tip">
-      {phase === 'open' && <div>初盘开盘时间不详，各机构开盘时刻可能不同</div>}
+      {phase === 'open' && (Object.keys(srcs).length === 0 || Object.values(srcs).some((x) => !x?.recorded_at)) && <div>初盘开盘时间不详，各机构开盘时刻可能不同</div>}
       {market !== 'x1x2' && <div>多数盘口：{lineText(d.majority_line)}</div>}
-      {tie && <div>平票处理：{tie}{d.median_line != null ? `（中位数 ${lineText(d.median_line)}）` : ''}</div>}
+      {tie && <div>平票处理：{tie}{d.median_line != null ? `（中位数 ${market === 'ah' && d.median_line > 0 ? '+' : ''}${Number(d.median_line.toFixed(3))}）` : ''}</div>}
       <div>参与平均：{names(averaged)}{d.averaged_count != null ? `（${d.averaged_count} 家）` : ''}</div>
       {market !== 'x1x2' && d.voting_books && <div>参与投票：{names(d.voting_books)}</div>}
       {(d.excluded_books ?? []).length > 0 && (
-        <div>剔除：{d.excluded_books!.map((e) => `${name(e.book)}（${EXCLUDE_TEXT[e.reason] ?? e.reason}，相差 ${e.steps} 档）`).join('、')}</div>
+        <div>剔除：{d.excluded_books!.map((e) => `${name(e.book)}（${EXCLUDE_TEXT[e.reason] ?? e.reason}，相差 ${e.steps} 档${e.original_line != null ? `，原盘口 ${lineText(e.original_line)}` : ''}${e.original_water?.length ? `，原水位 ${e.original_water.map(fmtNum).join(' / ')}` : ''}）`).join('、')}</div>
       )}
       {missing.length > 0 && <div>没有数据：{missing.map((m) => `${name(m.book)}（${REASON_TEXT[m.reason] ?? m.reason}）`).join('、')}</div>}
+      {market === 'ah' && d.goal_expectation != null && (
+        <div>总进球期望：{fmtNum(d.goal_expectation)}{d.goal_expectation_source ? `（${GE_SOURCE_TEXT[d.goal_expectation_source] ?? d.goal_expectation_source}）` : ''}</div>
+      )}
       {d.devig_method && <div>去水方法：{DEVIG_TEXT[d.devig_method] ?? d.devig_method}</div>}
       {d.conversion_model && <div>换算模型：{MODEL_TEXT[d.conversion_model] ?? d.conversion_model}</div>}
       {(d.conversions ?? []).length > 0 ? (
@@ -171,6 +179,18 @@ function AvgTip({ d, market, phase, children }: { d: AvgDetail | null | undefine
           <div key={c.book}>换算：{name(c.book)} {lineText(c.raw_line)} {c.raw.map(fmtNum).join(' / ')} → {c.converted.map(fmtNum).join(' / ')}</div>
         ))
       )}
+      {srcBooks.length > 0 && (
+        <table className="avg-tip-table">
+          <thead>
+            <tr><th>机构</th><th>来源</th><th>记录时间</th></tr>
+          </thead>
+          <tbody>
+            {srcBooks.map((b) => (
+              <tr key={b}><td>{name(b)}</td><td>{sourceText(srcs[b]?.source)}</td><td>{srcs[b]?.recorded_at ? bjTime(srcs[b].recorded_at) : '不详'}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   )
   return (
@@ -180,6 +200,7 @@ function AvgTip({ d, market, phase, children }: { d: AvgDetail | null | undefine
   )
 }
 
+const BOOK_ORDER = ['macau', 'crown', 'pinnacle', 'william', 'bet365']
 const ALERT_CLASS = { light: 'al-light', medium: 'al-medium', high: 'al-high' } as const
 
 type Sub = 'left' | 'line' | 'mid' | 'right'

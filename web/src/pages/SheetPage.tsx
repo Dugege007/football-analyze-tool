@@ -26,7 +26,7 @@ import { DEFAULT_STRATEGY } from '../api/strategies'
 import { useDbSource } from '../api/dataSource'
 import { DataSourceSwitch } from '../api/DataSourceBar'
 import { baseCols, bookCols, jcCols, predCols, type Market } from '../sheet2/columns'
-import { loadRows, type DataMode } from '../sheet2/load'
+import { apiBooks, loadRows, type DataMode } from '../sheet2/load'
 import { BOOKS, BOOK_NAME, type Book, type Row } from '../sheet2/types'
 import '../sheet2/sheet2.css'
 
@@ -62,6 +62,13 @@ const ALL_TABS = [...OVERVIEW, ...BOOK_TABS].map((t) => t.value)
 const CMP_MARKET: Partial<Record<TabId, Market>> = { cmp_ah: 'ah', cmp_ou: 'ou', cmp_x1x2: 'x1x2' }
 const CMP_BOOKS: Book[] = ['avg', 'macau', 'crown', 'pinnacle', 'william', 'bet365']
 
+/** 按接口顶层 books 排机构列；接口没给时用默认顺序。多家平均固定在最前（第 1 期已定），其余按接口顺序。 */
+function orderBooks(def: Book[]): Book[] {
+  const ab = apiBooks?.filter((b): b is Book => (def as string[]).includes(b)) ?? []
+  if (!ab.length) return def
+  const rest = ab.filter((b) => b !== 'avg')
+  return [...(def.includes('avg') ? (['avg'] as Book[]) : []), ...rest, ...def.filter((b) => b !== 'avg' && !rest.includes(b))]
+}
 const LS_BOOK = 'sheet2.predBook.v1'
 const lsResultOnly = (t: TabId) => `sheet2.resultOnly.v1.${t}`
 const readBool = (k: string) => {
@@ -84,7 +91,11 @@ export default function SheetPage() {
   const modeParam = sp.get('data') as DataMode | null
   const [mode, setMode] = useState<DataMode>(modeParam === 'api' || modeParam === 'mock' || modeParam === 'both' ? modeParam : 'api')
   const [dbSource, setDbSource] = useDbSource()
-  const [range, setRange] = useState<[Dayjs, Dayjs]>(() => [dayjs().subtract(6, 'day'), dayjs()])
+  const [range, setRange] = useState<[Dayjs, Dayjs]>(() => {
+    // 网址可带 from、to（YYYY-MM-DD）指定日期范围，便于核对和截图
+    const f = sp.get('from'), t = sp.get('to')
+    return f && t && dayjs(f).isValid() && dayjs(t).isValid() ? [dayjs(f), dayjs(t)] : [dayjs().subtract(6, 'day'), dayjs()]
+  })
   const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -143,11 +154,11 @@ export default function SheetPage() {
     else if (tab === 'jc') cols.push(predCols(settleBook, ['jc']), jcCols())
     else if (cmpMarket) {
       cols.push(predCols(settleBook, [cmpMarket]))
-      for (const b of CMP_BOOKS) cols.push(bookCols(b, [cmpMarket], ro))
+      for (const b of orderBooks(CMP_BOOKS)) cols.push(bookCols(b, [cmpMarket], ro))
       if (cmpMarket === 'x1x2') cols.push(jcCols(true, true))
     } else if (lockedBook) cols.push(predCols(lockedBook, ['ah', 'ou', 'x1x2', 'jc']), bookCols(lockedBook))
     return cols
-  }, [tab, settleBook, cmpMarket, ro, lockedBook])
+  }, [tab, settleBook, cmpMarket, ro, lockedBook, rows])
 
   const showBookSelect = tab === 'predict' || !!cmpMarket
   const mockCount = rows.filter((r) => r._mock).length

@@ -851,7 +851,7 @@ export async function loadSheet(p: LoadParams): Promise<LoadResult> {
   let dcs: DailyCheckSummary | null = null
   const src: DbSource = p.source ?? 'live'
   const base = apiBase(src)
-  const instName = src === 'replica' ? '副本 8788' : '后端 8787'
+  const instName = src === 'replica' ? '副本实例' : '后端 8787'
   for (let offset = 0; ; offset += BATCH_PAGE) {
     const q = new URLSearchParams({
       date_from: p.dateFrom,

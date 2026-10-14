@@ -30,7 +30,8 @@ export type CellStatusReason =
   | 'suspect_truncated'
   | 'too_few_books'
   | string
-export type MoveDir = 'up' | 'down' | 'flat' | null
+/** not_comparable：换盘时水位不比较（只给盘口上色） */
+export type MoveDir = 'up' | 'down' | 'flat' | 'not_comparable' | null
 export interface Move {
   compare_to: Phase | null
   line?: MoveDir
@@ -63,15 +64,21 @@ export interface AvgDetail {
   conversion_model?: string | null
   voting_books?: string[]
   averaged_books?: string[]
-  excluded_books?: { book: string; reason: string; steps: number }[]
+  excluded_books?: { book: string; reason: string; steps: number; original_line?: number | null; original_water?: number[] | null; margin?: number | null }[]
   missing_books?: { book: string; reason: string }[]
   tie_break?: TieBreak | string | null
   median_line?: number | null
   conversions?: AvgConversion[]
   averaged_count?: number | null
+  // 7.7 新增
+  goal_expectation?: number | null
+  goal_expectation_source?: string | null
+  sources?: Record<string, { source: string | null; recorded_at: string | null }> | null
 }
 
 interface CellCommon {
+  source?: string | null
+  recorded_at?: string | null
   cell_status?: CellStatus | null
   cell_status_reason?: CellStatusReason | null
   move?: Move | null

@@ -5,7 +5,7 @@
 export const COLUMN_WIDTHS = {
   // 基本九列（所有标签，固定在左侧）
   'base.jcDay': 100, // 竞彩日
-  'base.jcNo': 60, // 编号
+  'base.jcNo': 80, // 编号
   'base.kickoff': 100, // 开赛时间
   'base.league': 90, // 赛事
   'base.home': 100, // 主队
