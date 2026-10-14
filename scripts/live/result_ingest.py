@@ -504,6 +504,28 @@ def write_daily_summary(db: str, path: Path, now: dt.datetime, days: int = 14):
                  (f"，另有 {len(day) - len(okr)} 次失败" if okr and len(day) > len(okr) else "") + \
                  (f"：{day[-1].get('error')}" if not okr else "")
         lines.append(f"| {D.isoformat()} | {ins} | {len(miss)} | {conf} | {spec} | {single} | {rf} | {names or '无'} |")
+    if has_log:
+        lines += ["", "## 待抽查场次（单一来源、与 Football-Data.co.uk 比分不一致）", "",
+                  "以下是还没解决的 single_source 和 fd_score_mismatch 标记，供分析师每日抽查。", "",
+                  "| 标记 | 编号 | 竞彩日 | 对阵 | 比分 | 来源 |", "|---|---|---|---|---|---|"]
+        rows = con.execute(
+            "select f.flag, m.jc_id, m.jingcai_date, m.home_team, m.away_team, r.home_goals, r.away_goals, l.source, f.detail_json "
+            "from result_ingest_flags f join matches m on m.id = f.match_id left join results r on r.match_id = m.id "
+            "left join result_ingest_log l on l.match_id = m.id where f.resolved_at is null "
+            "and f.flag in ('single_source', 'fd_score_mismatch') order by m.kickoff_at desc, m.jc_id").fetchall()
+        names = {"single_source": "单一来源", "fd_score_mismatch": "与 Football-Data.co.uk 不一致"}
+        srcn = {"5df_csl": "只有 5DF", "sporttery": "只有竞彩网"}
+        for fl, jc, jd, h, a, hg, ag, src, det in rows:
+            sc = f"{hg}-{ag}" if hg is not None else "无"
+            extra = ""
+            if fl == "fd_score_mismatch":
+                try:
+                    extra = "；Football-Data.co.uk：" + json.loads(det or "{}").get("fd", "")
+                except Exception:
+                    pass
+            lines.append(f"| {names[fl]} | {jc} | {jd} | {h} 对 {a} | {sc} | {srcn.get(src, src)}{extra} |")
+        if not rows:
+            lines.append("| 无 | | | | | |")
     con.close()
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -513,7 +535,7 @@ def periodic_crosscheck(args, st: State, now: dt.datetime, log):
     db = check_db_path(args.db)
     ro = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=60)
     try:
-        n = ro.execute("select count(*) from result_ingest_log where source = '5df_csl'").fetchone()[0]
+        n = ro.execute("select count(*) from result_ingest_log where source in ('5df_csl', 'sporttery')").fetchone()[0]
     except sqlite3.Error:
         n = 0
     ro.close()
@@ -582,7 +604,7 @@ REFRESH_MAX_AGE_H = 3
 
 
 def import_sporttery_bundle(bundle: Path | None, cache_dir: Path, out_dir: Path, now: dt.datetime,
-                            note: str | None = None) -> dict:
+                            note: str | None = None, dry_run: bool = False) -> dict:
     """把 MSI 上 refresh_sporttery.ps1 生成的 latest_bundle.json 拆页写进缓存目录，并把这次刷新是否成功
     追加到 out_dir/sporttery_refresh.jsonl（每日汇总读它）。bundle 缺失、过期或内容不对都记为失败。"""
     rec = {"at": iso(now), "ok": False, "pages": 0, "matches": 0, "range": None, "error": None}
@@ -601,19 +623,25 @@ def import_sporttery_bundle(bundle: Path | None, cache_dir: Path, out_dir: Path,
             pages = [pages]
         if not pages:
             raise ValueError("刷新文件里没有分页")
-        cache_dir.mkdir(parents=True, exist_ok=True)
         n = 0
+        if not dry_run:
+            cache_dir.mkdir(parents=True, exist_ok=True)
         for i, raw in enumerate(pages, 1):
             j = json.loads(raw)
             if str(j.get("errorCode")) != "0":
                 raise ValueError(f"第 {i} 页 errorCode={j.get('errorCode')}")
             n += len((j.get("value") or {}).get("matchResult") or [])
+            if dry_run:
+                continue
             tmp = cache_dir / f".msi_{doc['begin']}_{doc['end']}_p{i}.tmp"
             tmp.write_text(raw, encoding="utf-8")
             tmp.replace(cache_dir / f"msi_{doc['begin']}_{doc['end']}_p{i}.json")
         rec.update(ok=True, pages=len(pages), matches=n, fetched_at=doc["fetched_at"])
     except Exception as e:
         rec["error"] = f"{type(e).__name__}: {e}"
+    if dry_run:  # 干跑：不写缓存、不记刷新记录
+        rec["dry_run"] = True
+        return rec
     with (out_dir / "sporttery_refresh.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     return rec
@@ -738,13 +766,14 @@ def fd_lookup(rows: list[dict], kickoff_at: str, home_en: set[str], away_en: set
 
 def crosscheck_single_source(db: str, out_dir: Path, backup_root: Path, now: dt.datetime, *, since: str | None = None,
                              dry_run: bool = False) -> dict:
-    """只有 5DF 一个来源（result_ingest_log.source = '5df_csl'）的场次：拿 Football-Data.co.uk 再核对一次。
+    """只有一个来源（result_ingest_log.source = '5df_csl' 或 'sporttery'，2026-10-14 分析师规则）的场次：拿 Football-Data.co.uk 再核对一次。
     - 对上且比分一致：source 改为 5df_csl+football_data_co_uk，fd_score 写入，已有的 single_source 标记置为已解决。
     - 对上但比分不一致：标 fd_score_mismatch（赛果保留，等人工抽查）。
     - 对不上：标 single_source。"""
     ro = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=60)
-    q = ("select l.match_id, m.kickoff_at, m.jc_id, m.home_team, m.away_team, l.fivedf_score, l.fd_score, l.detail_json "
-         "from result_ingest_log l join matches m on m.id = l.match_id where l.source = '5df_csl'")
+    q = ("select l.match_id, m.kickoff_at, m.jc_id, m.home_team, m.away_team, coalesce(l.fivedf_score, l.sporttery_score), "
+         "l.fd_score, l.detail_json, l.source "
+         "from result_ingest_log l join matches m on m.id = l.match_id where l.source in ('5df_csl', 'sporttery')")
     args = []
     if since:
         q += " and m.kickoff_at >= ?"
@@ -754,15 +783,16 @@ def crosscheck_single_source(db: str, out_dir: Path, backup_root: Path, now: dt.
     ro.close()
     rows = fd_rows(out_dir / "fd_raw")
     plan = []
-    for mid, ko, jc, h, a, fs, fds, det in todo:
+    for mid, ko, jc, h, a, fs, fds, det, src in todo:
         r = fd_lookup(rows, ko, names.get(h, set()), names.get(a, set()))
         five = tuple(int(x) for x in fs.split(":")) if fs else None
         if r and five and r["score"] == five:
-            plan.append((mid, "confirm", {"fd": f"{r['file']} {r['date']} {r['home_raw']} {r['score'][0]}-{r['score'][1]} {r['away_raw']}"}, r["score"]))
+            plan.append((mid, "confirm", {"fd": f"{r['file']} {r['date']} {r['home_raw']} {r['score'][0]}-{r['score'][1]} {r['away_raw']}",
+                                          "source": src}, r["score"]))
         elif r:
-            plan.append((mid, "fd_score_mismatch", {"5df": fs, "fd": f"{r['file']} {r['home_raw']} {r['score'][0]}-{r['score'][1]} {r['away_raw']}"}, r["score"]))
+            plan.append((mid, "fd_score_mismatch", {"source": src, "score": fs, "fd": f"{r['file']} {r['home_raw']} {r['score'][0]}-{r['score'][1]} {r['away_raw']}"}, r["score"]))
         else:
-            plan.append((mid, "single_source", {"5df": fs, "jc_id": jc, "match": f"{h} 对 {a}",
+            plan.append((mid, "single_source", {"source": src, "score": fs, "jc_id": jc, "match": f"{h} 对 {a}",
                                                 "fd_crosscheck": "Football-Data.co.uk 公开 CSV 里找不到这场"}, None))
     res = {"checked": len(plan), "confirmed": sum(1 for p in plan if p[1] == "confirm"),
            "single_source": sum(1 for p in plan if p[1] == "single_source"),
@@ -784,9 +814,10 @@ def crosscheck_single_source(db: str, out_dir: Path, backup_root: Path, now: dt.
         with con:
             for mid, act, det, sc in plan:
                 if act == "confirm":
-                    con.execute("update result_ingest_log set source = '5df_csl+football_data_co_uk', fd_score = ?, "
+                    con.execute("update result_ingest_log set source = ?, fd_score = ?, "
                                 "detail_json = json_set(coalesce(detail_json, '{}'), '$.fd_crosscheck', ?) "
-                                "where match_id = ? and source = '5df_csl'", (_s(sc), det["fd"], mid))
+                                "where match_id = ? and source = ?",
+                                (det["source"] + "+football_data_co_uk", _s(sc), det["fd"], mid, det["source"]))
                     con.execute("update result_ingest_flags set resolved_at = ? where match_id = ? and "
                                 "flag = 'single_source' and resolved_at is null", (iso(now), mid))
                 else:
@@ -829,8 +860,10 @@ def main(argv=None):
         daemon(a)
     elif a.cmd == "sporttery_import":
         now = now_cn()
-        rec = import_sporttery_bundle(Path(a.bundle) if a.bundle else None, Path(a.sporttery_cache), od, now, a.note)
-        write_daily_summary(db, od / "daily_summary.md", now)
+        rec = import_sporttery_bundle(Path(a.bundle) if a.bundle else None, Path(a.sporttery_cache), od, now, a.note,
+                                      dry_run=a.dry_run)
+        if not a.dry_run:
+            write_daily_summary(db, od / "daily_summary.md", now)
         print(json.dumps(rec, ensure_ascii=False))
         if not rec["ok"]:
             sys.exit(2)

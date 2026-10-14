@@ -49,9 +49,9 @@ nohup setsid /workspace/odds-data/.venv-dc/bin/python scripts/live/result_ingest
 并在输出目录的 `sporttery_refresh.jsonl` 追加一条记录；`daily_summary.md` 的「竞彩网缓存刷新」列按这些记录写成功或失败。
 文件生成超过 3 小时、MSI 请求失败或分页内容不对，都记为失败。
 
-## 只有 5DF 一个来源的场次
+## 只有一个来源的场次（竞彩网或 5DF，2026-10-14 分析师规则）
 
-`result_ingest_log.source = '5df_csl'` 的场次用 Football-Data.co.uk 公开 CSV 再核对一次（常驻程序每 12 小时最多下载一次 CSV，
+`result_ingest_log.source` 为 `5df_csl` 或 `sporttery` 的场次用 Football-Data.co.uk 公开 CSV 再核对一次（常驻程序每 12 小时最多下载一次 CSV，
 每 30 分钟核对最近 7 天；手动执行 `result_ingest.py crosscheck [--fd-refresh] [--dry-run]`）：
 
 - 对上且比分一致：`source` 改为 `5df_csl+football_data_co_uk`，`fd_score` 写入。
@@ -68,3 +68,6 @@ nohup setsid /workspace/odds-data/.venv-dc/bin/python scripts/live/result_ingest
   同时 `result_hidden_reason` 和 `hidden_reason` 等于同一个值，`settlement` 为 null。
 - 扁平格式：列名 `result_status`。
 - 没有赛果也没有标记时，`result` 仍为 null（扁平格式 `result_status` 为 null），`result_hidden_reason` 照旧。
+
+`daily_summary.md` 末尾的「待抽查场次」表逐场列出未解决的 single_source 和 fd_score_mismatch（标记、编号、竞彩日、对阵、比分、来源），供分析师每日抽查。
+`sporttery_import --dry-run` 只检查文件，不写缓存，也不记刷新记录。

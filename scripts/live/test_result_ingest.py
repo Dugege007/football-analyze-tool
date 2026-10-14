@@ -250,3 +250,43 @@ def test_crosscheck_mismatch(tmp_path, monkeypatch):
         encoding="utf-8")
     r = R.crosscheck_single_source(db, out, tmp_path / "bk", dt.datetime(2026, 10, 11, 9, 0, tzinfo=TZ))
     assert r["fd_score_mismatch"] == 1
+
+
+def test_crosscheck_sporttery_only_is_single_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "TEAMS_CSV", str(tmp_path / "none.csv"))
+    db, out = _fd_setup(tmp_path)
+    c = sqlite3.connect(db)
+    c.execute("insert into matches values (5,'e','jingcai','2026-10-10','六005','圣保罗','维多利亚','2026-10-10T08:00:00+08:00')")
+    c.execute("insert into results values (5, 2, 1, 3, '胜')")
+    c.execute("insert into result_ingest_log values (5, 'sporttery', '2:1', null, null, '{}', null, 'x')")
+    c.commit()
+    c.close()
+    now = dt.datetime(2026, 10, 11, 9, 0, tzinfo=TZ)
+    r = R.crosscheck_single_source(db, out, tmp_path / "bk", now)
+    assert r["single_source"] == 2
+    R.write_daily_summary(db, out / "daily_summary.md", now, days=1)
+    txt = (out / "daily_summary.md").read_text(encoding="utf-8")
+    assert "| 单一来源 | 六005 | 2026-10-10 | 圣保罗 对 维多利亚 | 2-1 | 只有竞彩网 |" in txt
+    assert "| 单一来源 | 六004 | 2026-10-10 | 某甲 对 某乙 | 1-0 | 只有 5DF |" in txt
+
+
+def test_summary_lists_fd_mismatch(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "TEAMS_CSV", str(tmp_path / "none.csv"))
+    db, out = _fd_setup(tmp_path)
+    (out / "fd_raw" / "new_FIN.csv").write_text(
+        "Country,League,Season,Date,Time,Home,Away,HG,AG,Res\nFinland,Veikkausliiga,2026,10/10/2026,18:00,Inter Turku,KuPS,2,0,H\n",
+        encoding="utf-8")
+    now = dt.datetime(2026, 10, 11, 9, 0, tzinfo=TZ)
+    R.crosscheck_single_source(db, out, tmp_path / "bk", now)
+    R.write_daily_summary(db, out / "daily_summary.md", now, days=1)
+    assert "| 与 Football-Data.co.uk 不一致 | 六003 |" in (out / "daily_summary.md").read_text(encoding="utf-8")
+
+
+def test_sporttery_import_dry_run_records_nothing(tmp_path):
+    now = dt.datetime(2026, 10, 15, 10, 0, tzinfo=TZ)
+    out = tmp_path / "out"
+    out.mkdir()
+    r = R.import_sporttery_bundle(None, tmp_path / "cache", out, now, "干跑", dry_run=True)
+    assert r["dry_run"] and not r["ok"] and R.refresh_records(out) == []
+    r = R.import_sporttery_bundle(_bundle(tmp_path, now), tmp_path / "cache", out, now, dry_run=True)
+    assert r["ok"] and not (tmp_path / "cache").exists() and R.refresh_records(out) == []
