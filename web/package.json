@@ -9,7 +9,7 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "check:licenses": "node scripts/check-licenses.mjs",
-    "test": "node scripts/test-pick-format.mjs"
+    "test": "node scripts/test-pick-format.mjs && node scripts/test-reason-hover.mjs"
   },
   "dependencies": {
     "@ag-grid-community/locale": "^36.2.0",

@@ -20,6 +20,52 @@ export const REASON_TEXT: Record<string, string> = {
   too_few_books: '参与平均的机构少于 2 家',
 }
 
+function cleanText(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const text = v.trim()
+  return text ? text : null
+}
+
+/**
+ * 无法获取、未填写格子的悬停文案。
+ * 优先显示接口返回的中文；接口没有给中文时，再查现有对照表，对照表里也没有就显示原因码，以便兼容还没有中文字段的旧响应。
+ */
+export function reasonHoverText(reason: string | null | undefined, reasonZh?: string | null, table: Record<string, string> = REASON_TEXT): string | null {
+  const zh = cleanText(reasonZh)
+  if (zh) return zh
+  const code = cleanText(reason)
+  if (!code) return null
+  return table[code] ?? code
+}
+
+/** 盘口、水位格子的悬停原因：先用 cell_status_reason_zh，没有再用已经从接口映射过来的 missing_reason_zh。 */
+export function oddsCellReason(cell: {
+  cell_status_reason?: unknown
+  cell_status_reason_zh?: unknown
+  missing_reason?: unknown
+  missing_reason_zh?: unknown
+} | null | undefined): { reason: string | null; reasonZh: string | null } {
+  return {
+    reasonZh: cleanText(cell?.cell_status_reason_zh) ?? cleanText(cell?.missing_reason_zh),
+    reason: cleanText(cell?.cell_status_reason) ?? cleanText(cell?.missing_reason),
+  }
+}
+
+/** 赛果格的悬停原因：先读该格的 null_reason_zh，没有再读另外两个中文字段。 */
+export function resultCellReason(cell: {
+  null_reason?: unknown
+  null_reason_zh?: unknown
+  cell_status_reason?: unknown
+  cell_status_reason_zh?: unknown
+  missing_reason?: unknown
+  missing_reason_zh?: unknown
+} | null | undefined): { reason: string | null; reasonZh: string | null } {
+  return {
+    reasonZh: cleanText(cell?.null_reason_zh) ?? cleanText(cell?.cell_status_reason_zh) ?? cleanText(cell?.missing_reason_zh),
+    reason: cleanText(cell?.null_reason) ?? cleanText(cell?.cell_status_reason) ?? cleanText(cell?.missing_reason),
+  }
+}
+
 export const fmtNum = (v: number | null | undefined): string => (v == null ? '-' : String(Number(v.toFixed(2))))
 
 /** 格子状态：接口没给 cell_status 时一律按「无法获取」（草案第 8 节）。 */
