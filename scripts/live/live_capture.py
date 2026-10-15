@@ -1107,6 +1107,8 @@ def ingest(D: str, db: Path = REPLICA_DB, dry_run=False, create_missing_matches:
             rep["backup"] = str(backup_replica(db))
         conn.execute("BEGIN")
         undo = []
+        # 临盘写入或撤回成功后，用这份清单覆盖重算机构赛果。初盘和中盘由刷新函数自己滤掉。
+        settle_writes: list[dict] = []
         if to_write or retract:
             if ensure_kickoff_rev_column(conn):
                 undo.append({"op": "alter_matches_add_kickoff_rev"})
@@ -1118,6 +1120,9 @@ def ingest(D: str, db: Path = REPLICA_DB, dry_run=False, create_missing_matches:
             if old:
                 undo.append({"op": "delete", "old": dict(old)})
                 conn.execute("DELETE FROM odds_snapshot WHERE id=?", (old["id"],))
+                settle_writes.append({
+                    "match_id": r["_match_id"], "market": r["market"], "point": r["point"],
+                })
         for r in to_write:
             if r["phase"] == "live":  # 11:10 fetch: only fills a missing opening quote (user rule 2026-10-10)
                 ov = open_fill_vals(r)
@@ -1138,6 +1143,9 @@ def ingest(D: str, db: Path = REPLICA_DB, dry_run=False, create_missing_matches:
                 cols = list(ov)
                 conn.execute(f"INSERT INTO odds_snapshot ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                              [ov[c] for c in cols])
+                settle_writes.append({
+                    "match_id": ov["match_id"], "market": ov["market"], "point": ov["point"],
+                })
                 rep["written"] += 1
                 rep["opening_filled"] = rep.get("opening_filled", 0) + 1
                 setst(r, "live_1110_opening_filled")
@@ -1204,6 +1212,9 @@ def ingest(D: str, db: Path = REPLICA_DB, dry_run=False, create_missing_matches:
                 "ON CONFLICT(match_id, book, market, channel, point) DO UPDATE SET "
                 + ",".join(f"{c}=excluded.{c}" for c in cols if c not in ("match_id", "book", "market", "channel", "point")),
                 [vals[c] for c in cols])
+            settle_writes.append({
+                "match_id": vals["match_id"], "market": vals["market"], "point": vals["point"],
+            })
             rep["written"] += 1
             setst(r, "ingested")
         # 比赛行 kickoff_rev（0.3.20）：有列写 matches.kickoff_rev，extras 也写
@@ -1215,6 +1226,17 @@ def ingest(D: str, db: Path = REPLICA_DB, dry_run=False, create_missing_matches:
             synced.add(mid)
             sync_match_kickoff_rev(conn, mid, plan_m.get(r["match_uid"]), undo)
         rep["matches_kickoff_rev_synced"] = len(synced)
+        # 亚洲让球盘、大小球、欧盘三项的临盘有写入或撤回时，覆盖重算 market_settle。
+        # 只写当前连接。这里不另外打开数据库，也不打开双写。没有临盘变更时不建表。
+        from app.market_settle import refresh_after_close_writes
+        settled = refresh_after_close_writes(conn, settle_writes)
+        if settled is not None:
+            rep["market_settle"] = {
+                "applied": settled.get("applied"),
+                "rows": settled.get("rows"),
+                "eligible_matches": settled.get("eligible_matches"),
+                "refreshed_match_ids": settled.get("refreshed_match_ids"),
+            }
         conn.commit()
         if undo:
             append_jsonl(D_LOG / "ingest_undo.jsonl", {"ts": iso(now_cn()), "jingcai_date": D, "backup": rep["backup"],

@@ -4,6 +4,7 @@
 默认只统计、不创建表、不写任何行。必须同时给出数据库路径和 --apply 才会落库。
 写正式库之前，还要先备份，并设置环境变量 FORMAL_DB_BACKUP_DONE=1。
 本脚本不会打开双写，也不会修改预测结算。
+完场入库和临盘写入成功后，会调用同一套 apply_backfill 做单场覆盖。本脚本仍是离线全量或指定场次的入口。
 
 用法：
   python api/scripts/backfill_market_settle.py --db /path/to/copy.db

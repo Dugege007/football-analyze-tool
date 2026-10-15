@@ -711,6 +711,12 @@ def main():
             report["counts"]["open_updated"] += 1
         if st_c in ("updated", "would_update"):
             report["counts"]["close_updated"] += 1
+        if st_c == "updated":
+            # 亚洲让球盘临盘水位补上之后，覆盖重算这一场。只写当前连接，不打开双写。
+            from app.market_settle import refresh_after_close_writes
+            refresh_after_close_writes(
+                conn, [{"match_id": m["id"], "market": "asian", "point": "close"}],
+            )
         if st_o == "skip_nonnull" or st_c == "skip_nonnull":
             report["counts"]["skipped_nonnull"] += 1
 

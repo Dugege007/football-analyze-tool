@@ -236,6 +236,7 @@ def sync_rule_to_asian(conn: sqlite3.Connection, *, dry_run: bool) -> dict:
 
     inserted = 0
     skipped_existing = 0
+    close_match_ids: list[int] = []
     for s in snaps:
         phase = s["point"]
         ex = conn.execute(
@@ -277,6 +278,8 @@ def sync_rule_to_asian(conn: sqlite3.Connection, *, dry_run: bool) -> dict:
                 json.dumps(extras, ensure_ascii=False),
             ),
         )
+        if phase == "close":
+            close_match_ids.append(int(s["match_id"]))
         inserted += 1
     if not dry_run:
         # 入库前正负号校验（validate_ah_sign）：整批拦截或单场待复核 → 回滚，不入库
@@ -288,6 +291,13 @@ def sync_rule_to_asian(conn: sqlite3.Connection, *, dry_run: bool) -> dict:
                 conn.rollback()
                 raise SystemExit(f"validate_ah_sign {ph}: {rep['status']} blocked={rep['blocked']} "
                                  f"review={len(rep['review'])} → 已回滚，未入库")
+        # 新写入的亚洲让球盘临盘通过校验后，覆盖重算这些场次。只写当前连接，不打开双写。
+        if close_match_ids:
+            from app.market_settle import refresh_after_close_writes
+            refresh_after_close_writes(
+                conn,
+                [{"match_id": match_id, "market": "asian", "point": "close"} for match_id in close_match_ids],
+            )
         conn.commit()
     return {
         "action": "sync_rule",
