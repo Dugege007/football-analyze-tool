@@ -5,7 +5,7 @@
  * 结算以后端 settlement 为准（source="backend"）；逐场拼装兜底与前端估算结算已停用（旧实现见备份 /tmp/sheet-bak-hl_v0.1-pre/）。
  * 不使用假数据；缺的字段一律 null（不编造）。
  */
-import { apiBase, metaMismatch, type DbMeta } from '../api/dataSource'
+import { apiBase, metaDb, metaMismatch, type DbMeta } from '../api/dataSource'
 import dayjs from 'dayjs'
 import type { Direction } from '../api/types'
 import { parseHandicap } from './handicap'
@@ -55,7 +55,7 @@ export interface LoadResult {
   backendConfigVersion: string | null
   /** 后端结算口径（settlement_version） */
   settlementVersion: string | null
-  /** 响应 meta={db, promoted, readonly}；已核对 meta.db 为 live */
+  /** 响应 meta={db, promoted, readonly}；仅当 meta.db 明确不是 live 时中止 */
   meta: DbMeta | null
   /** 0.3.19：响应顶层 daily_check_summary（本页日核对计数）；多页时按页累加 by_reason / n_matches */
   dailyCheckSummary: DailyCheckSummary | null
@@ -878,11 +878,13 @@ export async function loadSheet(p: LoadParams): Promise<LoadResult> {
     if (!ct.includes('json')) throw new Error('批量接口 /table/matches 返回的不是 JSON')
     const body = (await res.json()) as Partial<BeTableResponse> & Partial<ApiTableResponse> & { settlement_version?: string }
     if (!body || !Array.isArray(body.items)) throw new Error('批量接口 /table/matches 响应缺少 items')
-    // 数据来源只认响应 meta.db；不是 live 直接报错，不静默混用
+    // 只有响应明确写出、且不是 live 的 meta.db 才中止。没有该字段时继续。
     const m = (body as { meta?: DbMeta }).meta ?? null
     const bad = metaMismatch(m)
     if (bad) throw new Error(bad)
-    if (meta && m && meta.db !== m.db) throw new Error(`分页返回的 meta.db 前后不一致（${meta.db} / ${m.db}），已停止显示`)
+    const prevDb = metaDb(meta)
+    const pageDb = metaDb(m)
+    if (prevDb && pageDb && prevDb !== pageDb) throw new Error(`分页返回的 meta.db 前后不一致（${meta?.db} / ${m?.db}），已停止显示`)
     meta = m
     asOf = body.as_of ?? asOf
     cfg = (body as BeTableResponse).config_version ?? cfg
