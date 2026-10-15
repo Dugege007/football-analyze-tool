@@ -5,7 +5,7 @@
 - 期望值：handicap = −snapshot.line（odds_asian 主让为正；快照 API 记法主让为负），水位原样；
 - 只改与快照不一致的行；extras 记 resync_0317 {before, snapshot_target_at, phase_target}；
 - 写前备份由调用方负责；写后跑 validate_ah_sign.validate_conn（exit≠0 / blocked → 回滚）。
-用法：.venv/bin/python scripts/resync_odds_asian_mid_from_snapshot.py --db data/v2d3/app.db [--apply] --out <csv>
+用法：.venv/bin/python scripts/resync_odds_asian_mid_from_snapshot.py --db data/app.db [--apply] --out <csv>
 """
 from __future__ import annotations
 
@@ -23,6 +23,9 @@ from validate_ah_sign import validate_conn  # noqa: E402
 
 LIVE = (ROOT / "data" / "app.db").resolve()
 
+
+# 运行前必须先备份正式库（SQLite backup 接口），再设置 FORMAL_DB_BACKUP_DONE=1；详见 app/formal_db.py。
+from app.formal_db import FORMAL_DB_PATH, guard_write_target  # noqa: E402
 
 def plan(c: sqlite3.Connection) -> list[dict]:
     c.row_factory = sqlite3.Row
@@ -60,9 +63,7 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()
-    if a.db.resolve() == LIVE:
-        print("REFUSE: live app.db is never written", file=sys.stderr)
-        return 2
+    guard_write_target(a.db, writing=a.apply)
     c = sqlite3.connect(a.db)
     rows = plan(c)
     with a.out.open("w", newline="", encoding="utf-8") as f:

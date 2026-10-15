@@ -7,7 +7,7 @@
 - 人工复核场（matches.manual_review=1）、探针场不进特征（match_ids 已排除）。
 - 旧 SHADOW_S2 / SHADOW_N4 冻结：本脚本只删/写 *_V2 自己的行，写前后核对旧 key 行数不变。
 - 不走种子脚本；拒绝写现网 data/app.db。N4-V2 现在 0 行（只挂定义），等前向采集写入真实水位后再积累。
-用法：.venv/bin/python scripts/generate_shadow_s2n4_v2.py --db data/v2d3/app.db [--dry-run]
+用法：.venv/bin/python scripts/generate_shadow_s2n4_v2.py --db data/app.db [--dry-run]
 """
 from __future__ import annotations
 
@@ -38,6 +38,9 @@ SPECS = {
 }
 assert {v["old"]: k for k, v in SPECS.items()} == FROZEN_NO_APPEND
 
+
+# 运行前必须先备份正式库（SQLite backup 接口），再设置 FORMAL_DB_BACKUP_DONE=1；详见 app/formal_db.py。
+from app.formal_db import FORMAL_DB_PATH, guard_write_target  # noqa: E402
 
 def build(conn) -> dict[str, Any]:
     g.TIER_WATER_EXCLUDED["rows"] = 0
@@ -102,9 +105,7 @@ def main() -> int:
     ap.add_argument("--db", type=Path, required=True)
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
-    if a.db.resolve() == LIVE:
-        print("REFUSE: live app.db is never written", file=sys.stderr)
-        return 2
+    guard_write_target(a.db, writing=not a.dry_run)
     conn = connect(a.db)
     try:
         def frozen():

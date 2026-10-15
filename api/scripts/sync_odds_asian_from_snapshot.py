@@ -7,6 +7,8 @@
   ensure-view         重建 v_odds_asian_rule（仅 open/mid/close）
   rehearse            上述三步 + 对照报告（默认）
 
+注意：必须显式传入 --db 库路径，没有默认值；不传会报错退出。
+
 硬约束：
   - 默认拒绝写入现网 data/app.db（除非 --i-know-this-is-production 且环境 DUAL_WRITE_ODDS_ASIAN=1）
   - t8/t1 不进 odds_asian；缺 rule.mid → 跳过该 phase 并记 gaps
@@ -65,7 +67,6 @@ sys.path.insert(0, str(ROOT))
 
 from app.db import apply_sql_idempotent, connect  # noqa: E402
 
-DEFAULT_DB = ROOT / "data" / "v2d2" / "app.db"
 LIVE_DB = (ROOT / "data" / "app.db").resolve()
 VIEW_SQL = Path(str(_REPO_ROOT / "docs/schema/v2_0_d2_view_asian_rule.sql"))
 V2_MIGRATION = Path(str(_REPO_ROOT / "docs/schema/v2_0_odds_timeline.sql"))
@@ -396,7 +397,8 @@ def rehearse(conn: sqlite3.Connection, *, dry_run: bool) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="D2 snapshot↔odds_asian rehearsal")
-    ap.add_argument("--db", type=Path, default=DEFAULT_DB)
+    ap.add_argument("--db", type=Path, default=None,
+                    help="必须显式传入要处理的库路径（没有默认值，避免误写）")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument(
         "--i-know-this-is-production",
@@ -410,6 +412,9 @@ def main() -> None:
         choices=["rehearse", "legacy-to-snapshot", "sync-rule", "ensure-view", "fp"],
     )
     args = ap.parse_args()
+    if args.db is None:
+        ap.error("必须显式传入 --db <库路径>；本脚本没有默认库，避免误写。"
+                 "例如：--db data/v2d2/app.db（副本演练）。")
     if args.command != "fp":
         assert_db_allowed(args.db, force_live=args.i_know_this_is_production)
     args.db.parent.mkdir(parents=True, exist_ok=True)

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""从 5DF fixture 映射回填开赛分钟到副本（默认 v2d3）。
+"""【已作废或仅归档用】本脚本设计上只写研究副本（默认 v2d3），并在副本里把冲突标成 conflict；研究库已并入正式库，因此不得在正式库上运行。保留原逻辑仅供归档查阅。
+
+从 5DF fixture 映射回填开赛分钟到副本（默认 v2d3）。
 
 口径（2026-10-07 与足球分析师对齐）：
 - 源：backfill/macau_mid_water_fixture_map.json 的 fixture_ko（已由 5DF kickoff 映射，

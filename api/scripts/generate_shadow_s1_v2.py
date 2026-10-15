@@ -12,7 +12,7 @@
   按用户规则，手工初盘就是机构开盘时的数据，开盘一定早于中盘和临盘，所以 usable_at_mid 和 usable_at_close
   恒为 true（分析师 2026-10-10 拍板）；开盘时间未知，但不再推定为竞彩日 11:10。数值可能记错的问题通过分来源对照来查。
 - as-of：mid/close 快照 recorded_at ≤ target_at < 开赛；open recorded_at ≤ close target_at；否则跳过。
-用法：.venv/bin/python scripts/generate_shadow_s1_v2.py --db data/v2d3/app.db [--dry-run]
+用法：.venv/bin/python scripts/generate_shadow_s1_v2.py --db data/app.db [--dry-run]
 """
 from __future__ import annotations
 
@@ -39,6 +39,9 @@ LIVE = (ROOT / "data" / "app.db").resolve()
 TZ = timezone(timedelta(hours=8))
 UNAVAILABLE = frozenset({38, 43})
 
+
+# 运行前必须先备份正式库（SQLite backup 接口），再设置 FORMAL_DB_BACKUP_DONE=1；详见 app/formal_db.py。
+from app.formal_db import FORMAL_DB_PATH, guard_write_target  # noqa: E402
 
 def upper_side_api(line: float) -> str:
     """API 记法：负 = 主让 → 主上盘；正 → 客上盘；平手 → 主（S1 B4 约定）。"""
@@ -193,9 +196,7 @@ def main() -> int:
     ap.add_argument("--db", type=Path, required=True)
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
-    if a.db.resolve() == LIVE:
-        print("REFUSE: live app.db is never written", file=sys.stderr)
-        return 2
+    guard_write_target(a.db, writing=not a.dry_run)
     conn = connect(a.db)
     try:
         frozen_before = conn.execute("SELECT COUNT(*), group_concat(id) FROM predictions WHERE strategy=?",

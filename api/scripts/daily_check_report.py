@@ -2,7 +2,7 @@
 """0.3.19 日核对清单（只读）：按 /table/matches 同一口径数各原因的场次，含 instant_src_diff（即时 11:10 两路来源不一致）；
 0.3.20 起另列 own_1110_out_of_window（自采超出 [11:00, 11:20]）。返还率「偏高」不是告警，不进本清单。
 
-用法：.venv/bin/python scripts/daily_check_report.py --db data/v2d3/app.db --from 2026-06-01 --to 2026-10-08 [--json out.json]
+用法：.venv/bin/python scripts/daily_check_report.py --db data/app.db --from 2026-06-01 --to 2026-10-08 [--json out.json]
 只以 mode=ro 打开库，不写任何表。
 """
 from __future__ import annotations
@@ -19,9 +19,12 @@ sys.path.insert(0, str(ROOT))
 from app import table_matches as tm  # noqa: E402
 
 
+# 运行前必须先备份正式库（SQLite backup 接口），再设置 FORMAL_DB_BACKUP_DONE=1；详见 app/formal_db.py。
+from app.formal_db import FORMAL_DB_PATH, guard_write_target  # noqa: E402
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default=str(ROOT / "data" / "v2d3" / "app.db"))
+    ap.add_argument("--db", default=str(FORMAL_DB_PATH))
     ap.add_argument("--from", dest="date_from", required=True)
     ap.add_argument("--to", dest="date_to", required=True)
     ap.add_argument("--scope", default="all")

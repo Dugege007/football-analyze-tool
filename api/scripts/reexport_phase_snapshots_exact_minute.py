@@ -32,6 +32,9 @@ COLS = ("id", "match_id", "book", "market", "channel", "point", "recorded_at", "
         "extras_json")
 
 
+# 运行前必须先备份正式库（SQLite backup 接口），再设置 FORMAL_DB_BACKUP_DONE=1；详见 app/formal_db.py。
+from app.formal_db import FORMAL_DB_PATH, guard_write_target  # noqa: E402
+
 def _postpone(m) -> dict | None:
     """0.3.19：v2d3 推迟场列（无列 / 空 → None）。"""
     keys = m.keys()
@@ -54,8 +57,7 @@ def main() -> int:
     a = ap.parse_args()
     only = {int(x) for x in a.match_ids.split(",") if x.strip()}
     db = Path(a.db).resolve()
-    if db == LIVE_DB:
-        raise SystemExit("拒绝写现网 data/app.db")
+    db = guard_write_target(db, writing=not a.dry_run)
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db))

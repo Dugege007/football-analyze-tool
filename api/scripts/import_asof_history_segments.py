@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Import the full 5DollarFootballAPI odds history that the missed-mid rescue already downloaded
+"""【已作废或仅归档用】本脚本只允许写已归档的 v2d3 研究副本；研究库已并入正式库，不得在正式库上运行。保留原逻辑仅供归档查阅。
+
+Import the full 5DollarFootballAPI odds history that the missed-mid rescue already downloaded
 (odds-data/5dollar/live/asof_backfill/raw/<fixture>_<bookmaker>_asian.json) into odds_timeline_seg.
 
 Why (analyst finding, 2026-10-10): the rescue for a missed mid stage only wrote one as-of row into odds_snapshot

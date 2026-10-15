@@ -13,8 +13,8 @@
 
 用法：
   .venv/bin/python scripts/fill_macau_mid_water.py fetch
-  .venv/bin/python scripts/fill_macau_mid_water.py import --db data/v2d3/app.db
-  .venv/bin/python scripts/fill_macau_mid_water.py report --db data/v2d3/app.db
+  .venv/bin/python scripts/fill_macau_mid_water.py import --db data/app.db
+  .venv/bin/python scripts/fill_macau_mid_water.py report --db data/app.db
 """
 from __future__ import annotations
 # --- public repo: paths are env-overridable (see config.example.env) ---
@@ -67,6 +67,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+# 运行前必须先备份正式库（SQLite backup 接口），再设置 FORMAL_DB_BACKUP_DONE=1；详见 app/formal_db.py。
+from app.formal_db import FORMAL_DB_PATH, guard_write_target  # noqa: E402
 
 from app.collection_schedule import TZ_CN, channel_targets  # noqa: E402
 from app.db import apply_sql_idempotent, connect  # noqa: E402
@@ -95,7 +97,7 @@ MAP_PATH = Path(str(_ODDS_DATA_DIR / "backfill/macau_mid_water_fixture_map.json"
 RAW_DIR = Path(str(_ODDS_DATA_DIR / "5dollar/macau-mid-water-fill-2026-10-07/raw"))
 LOG_DIR = Path(str(_ODDS_DATA_DIR / "5dollar/macau-mid-water-fill-2026-10-07/logs"))
 MIGRATION = Path(str(_REPO_ROOT / "docs/schema/v2_0_odds_timeline.sql"))
-DEFAULT_DB = ROOT / "data" / "v2d3" / "app.db"
+DEFAULT_DB = FORMAL_DB_PATH
 BASE = "https://api.5dollarfootballapi.com/v1"
 SOURCE = "5df_macauslot_history"
 BOOK = "macau"
@@ -138,16 +140,8 @@ def _env_dual_write_on() -> bool:
 
 
 def assert_db_allowed(db: Path, *, force_live: bool) -> None:
-    resolved = db.resolve()
-    live = (ROOT / "data" / "app.db").resolve()
-    if resolved == live:
-        if not force_live:
-            raise SystemExit(
-                "拒绝写现网 data/app.db。请用副本（如 data/v2d3/app.db）。"
-                "若确要写现网须同时：DUAL_WRITE_ODDS_ASIAN=1 且 --i-know-this-is-production"
-            )
-        if not _env_dual_write_on():
-            raise SystemExit("现网双写开关关闭（DUAL_WRITE_ODDS_ASIAN!=1）。按拍板保持关闭。")
+    """force_live 仅为兼容旧命令行参数而保留：并库后正式库是默认目标，改由备份确认保护。"""
+    guard_write_target(db, writing=True)
 
 
 def load_map() -> dict:

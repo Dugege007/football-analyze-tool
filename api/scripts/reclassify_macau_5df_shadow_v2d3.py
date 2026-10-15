@@ -14,11 +14,16 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-V2D3 = ROOT / "data" / "v2d3" / "app.db"
+import sys  # noqa: E402
+sys.path.insert(0, str(ROOT))
+# 运行前必须先备份正式库（SQLite backup 接口），再设置 FORMAL_DB_BACKUP_DONE=1；详见 app/formal_db.py。
+from app.formal_db import FORMAL_DB_PATH, guard_write_target  # noqa: E402
+V2D3 = FORMAL_DB_PATH  # 变量名保留以免改动其他引用；默认值现为正式库
 LIVE = ROOT / "data" / "app.db"
 TZ = timezone(timedelta(hours=8))
 KEYS = ("SHADOW_S1", "SHADOW_S1_V2")
 FLAG = "macau_to_5df"
+
 
 
 def _touch_fs(fs: dict) -> bool:
@@ -118,10 +123,7 @@ def main() -> None:
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args()
     db = args.db.resolve()
-    if db.resolve() == LIVE.resolve():
-        raise SystemExit("REFUSE: will not write live data/app.db")
-    if "v2d3" not in str(db):
-        raise SystemExit(f"REFUSE: expected v2d3 path, got {db}")
+    db = guard_write_target(db, writing=args.apply)
     dry = not args.apply
     conn = sqlite3.connect(str(db))
     conn.row_factory = sqlite3.Row
