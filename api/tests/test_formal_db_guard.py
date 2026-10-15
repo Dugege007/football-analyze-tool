@@ -31,3 +31,16 @@ def test_other_path_is_not_blocked(tmp_path, monkeypatch):
     monkeypatch.delenv(formal_db.BACKUP_ENV, raising=False)
     p = tmp_path / "x.db"
     assert formal_db.guard_write_target(p, writing=True) == p.resolve()
+
+
+def test_sync_odds_asian_requires_explicit_db_path():
+    """sync_odds_asian_from_snapshot 没有默认库：不传 --db 必须报错退出（退出码 2）并给出清晰提示，避免误写。"""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "sync_odds_asian_from_snapshot.py"
+    proc = subprocess.run([sys.executable, str(script), "fp"], capture_output=True, text=True,
+                          env={**__import__("os").environ, "FAT_DISABLE_DOTENV": "1"})
+    assert proc.returncode == 2
+    assert "必须显式传入 --db" in proc.stderr
