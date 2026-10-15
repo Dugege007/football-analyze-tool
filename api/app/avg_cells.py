@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from app import avg_conversion as ac
+from app.source_codes import canonical_source_code
 
 PHASES = ("open", "mid", "close")
 MARKETS = {"ah": "asian", "ou": "ou", "x1x2": "euro_1x2"}
@@ -216,7 +217,7 @@ def plain_cell(market: str, q: Optional[dict], reason: str) -> dict:
     if q is not None:
         vals = ([q["line"]] if market != "x1x2" else []) + list(q["water"])
         cell.update({k: (round(float(v), 4) if v is not None else None) for k, v in zip(keys, vals)})
-        cell.update(source=q.get("source"), recorded_at=q.get("recorded_at"),
+        cell.update(source=canonical_source_code(q.get("source")), recorded_at=q.get("recorded_at"),
                     cell_status="ok", cell_status_reason=None)
     else:
         cell.update(source=None, recorded_at=None,
@@ -303,7 +304,7 @@ def build_tables(d: Any, mpk: int, kick: Optional[datetime], sched: dict, as_of:
             quotes = {b: {k: v for k, v in q.items() if k in ("line", "water")} for b, q in sel[m].items()}
             miss = {b: reason for b in ac.BOOKS if b not in quotes}
             cell = build_avg_cell(m, phase, quotes, miss, mu if m == "ah" else None, mu_src if m == "ah" else None)
-            cell["avg_detail"]["sources"] = {b: {"source": q.get("source"), "recorded_at": q.get("recorded_at")}
+            cell["avg_detail"]["sources"] = {b: {"source": canonical_source_code(q.get("source")), "recorded_at": q.get("recorded_at")}
                                              for b, q in sel[m].items()}
             avg[m][phase] = cell
             for b in plain.get(m, ()):
