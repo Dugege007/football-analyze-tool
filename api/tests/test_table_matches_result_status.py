@@ -69,6 +69,12 @@ def test_flat_result_status_column(db, client):
 
 
 def test_without_flags_table_no_status(db, client):
+    # 并库后正式库自己带有 result_ingest_flags 表（比如 2026-10-10|六006 是退款标记）；
+    # 这个用例要验证「没有标记时表格不输出状态」，所以先在临时副本里把标记表整个删掉。
+    c = sqlite3.connect(str(db))
+    c.execute("DROP TABLE IF EXISTS result_ingest_flags")
+    c.commit()
+    c.close()
     _setup(db, flags=False)
     d = _q(client)
     assert _row(d, f"{D}|三001")["result"] is None

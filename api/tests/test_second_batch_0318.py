@@ -80,16 +80,22 @@ def _table(client, **kw):
     return r.json()
 
 
-def test_exception_count_live_143_to_146(live_copy):
+def test_exception_count_formal_after_merge(live_copy):
+    # 2026-10-15 并库之后正式库共 316 场（竞彩 314 场加 2 场非竞彩探针场），其中例外场 241 场；
+    # 并库前的 177 场里有 146 场例外场，截止到 2026-07-05 这 177 场的例外场数量不变。
     d = _table(TestClient(app), date_from="2026-01-01", date_to="2026-12-31")
     items = d["items"]
-    assert len(items) == 177
+    assert len(items) == 316
     assert d["config"]["exception_rule"] == "jc_code_ge_2300"
-    assert sum(1 for i in items if i["schedule"]["phase_exception"]) == 146
-    for uid in ("2026-06-13|六008", "2026-06-16|二020", "2026-06-20|六036"):
+    assert sum(1 for i in items if i["schedule"]["phase_exception"]) == 241
+    old = _table(TestClient(app), date_from="2026-01-01", date_to="2026-07-05")["items"]
+    assert len(old) == 177 and sum(1 for i in old if i["schedule"]["phase_exception"]) == 146
+    # 并库后正式库有 kickoff_jc 列，这三场的竞彩开赛时间是次日 12:00。
+    for uid, jc in (("2026-06-13|六008", "2026-06-14T12:00:00+08:00"), ("2026-06-16|二020", "2026-06-17T12:00:00+08:00"),
+                    ("2026-06-20|六036", "2026-06-21T12:00:00+08:00")):
         it = next(i for i in items if i["match_id"] == uid)
         assert it["schedule"]["phase_exception"] is True
-        assert it["match"]["kickoff_jc"] is None  # 现网无 kickoff_jc 列 → null（API 容忍列缺失）
+        assert it["match"]["kickoff_jc"] == jc
 
 
 # ---------------- 3. N1 close_unusable / by_close_basis ----------------

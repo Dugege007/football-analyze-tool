@@ -89,6 +89,20 @@ def _insert_match(c: sqlite3.Connection, uid: str, *, scope: str, date: str, hou
     return mid
 
 
+def _blank_match_odds(c: sqlite3.Connection, mid: int, *, snapshots: bool = True, timeline: bool = True,
+                      books: tuple = ()) -> None:
+    """把一场比赛在临时副本里的赔率快照和时间线段清空，回到「这场比赛没有这类数据」的起点。
+
+    2026-10-15 研究库并入正式库之后，正式库里这些老比赛已经有 5DollarFootballAPI 的欧赔快照和澳门时间线段，
+    而下面的用例要在空白起点上自己插入快照来验证规则，所以先清空；books 非空时只清这些机构的 odds_asian 行。"""
+    if snapshots:
+        c.execute("DELETE FROM odds_snapshot WHERE match_id=? AND market='euro_1x2'", (mid,))
+    if timeline:
+        c.execute("DELETE FROM odds_timeline_seg WHERE match_id=?", (mid,))
+    for b in books:
+        c.execute("DELETE FROM odds_asian WHERE match_id=? AND book=?", (mid, b))
+
+
 @pytest.fixture(scope="module")
 def prod_sha_before():
     return _sha(PROD_DB)
@@ -138,10 +152,19 @@ def test_unfinished_match_has_no_result_or_settlement(db, client):
 
 
 def test_no_score_rows_hidden(db, client):
-    d = _get(client, date_from="2026-07-05", date_to="2026-07-05")
-    row = _row(d, "2026-07-05|日201")  # 现网 results 行比分为空
+    # 并库后正式库里所有赛果都有比分（日201 的比分是 1-0），所以在临时副本里插入一场已开赛但比分为空的比赛来验证。
+    c = sqlite3.connect(str(db))
+    _insert_match(c, "2026-07-05|extra|空比分甲|空比分乙", scope="extra", date="2026-07-05", hour=12,
+                  kickoff_at="2026-07-05T12:00:00+08:00", jc_id=None, goals=(None, None))
+    c.commit()
+    c.close()
+    d = _get(client, date_from="2026-07-05", date_to="2026-07-05", scope="all")
+    row = _row(d, "2026-07-05|extra|空比分甲|空比分乙")  # results 行存在但比分为空
     assert row["result"] is None and row["settlement"] is None
     assert row["result_hidden_reason"] == "no_result"
+    # 日201 在正式库里已经有比分 1-0。
+    r201 = _row(d, "2026-07-05|日201")
+    assert r201["result"]["score"] == "1-0"
 
 
 def test_as_of_before_kickoff_plus_3h_hides_result(db, client):
@@ -208,6 +231,12 @@ def test_unknown_settlement_version_400(db, client):
 
 
 def test_actual_or_095_falls_back_without_macau_water(db, client):
+    # 正式库里六204 的澳门临盘已经有真实水位；在临时副本里把这一格水位清空，才能验证「缺水位时回退 0.95」。
+    c = sqlite3.connect(str(db))
+    c.execute("UPDATE odds_asian SET home_water=NULL, away_water=NULL, water_src=NULL WHERE book='macau'"
+              " AND phase='close' AND match_id=(SELECT id FROM matches WHERE match_uid='2026-06-06|六204')")
+    c.commit()
+    c.close()
     d = _get(client, date_from="2026-06-06", date_to="2026-06-06",
              settlement_version="ah_v4_macau_actual_or_095")
     s = _row(d, "2026-06-06|六204")["settlement"]
@@ -217,13 +246,23 @@ def test_actual_or_095_falls_back_without_macau_water(db, client):
 # ---------------------------------------------------------------- missing data / coverage
 
 def test_missing_data_is_null_with_markers(db, client):
+    # 正式库里一001 的澳门中盘水位和平博三格已经有数据；在临时副本里删掉这些行，回到「缺数据」的起点再验证空值和标记。
+    c = sqlite3.connect(str(db))
+    mid0 = c.execute("SELECT id FROM matches WHERE match_uid='2026-06-01|一001'").fetchone()[0]
+    c.execute("DELETE FROM odds_asian WHERE match_id=? AND ((book='macau' AND phase='mid') OR book='pinnacle')", (mid0,))
+    # 并库后一001 有 5DF 澳门时间线和带报价时刻的快照，会产生「开赛前最后一条」；一并删掉，只留手工导入的旧快照。
+    c.execute("DELETE FROM odds_timeline_seg WHERE match_id=?", (mid0,))
+    c.execute("DELETE FROM odds_snapshot WHERE match_id=? AND book='macau' AND market='asian'"
+              " AND channel != 'rule_legacy'", (mid0,))
+    c.commit()
+    c.close()
     d = _get(client, date_from="2026-06-01", date_to="2026-06-01")
     row = _row(d, "2026-06-01|一001")
     mac = row["ah"]["macau_manual"]
     assert mac["close"]["line"] == 0.0 and mac["close"]["basis"] == "legacy_import"
     assert mac["close"]["home_water"] is None and mac["close"]["water_source"] is None
     assert mac["close"]["return_rate"] is None
-    assert mac["mid"]["available"] is False and mac["mid"]["line"] is None  # 现网澳门无 mid
+    assert mac["mid"]["available"] is False and mac["mid"]["line"] is None  # 上面已删掉这一格
     for ph in ("open", "mid", "close"):
         assert row["ah"]["pinnacle"][ph]["available"] is False
         assert row["x1x2"]["pinnacle"][ph]["home"] is None
@@ -269,8 +308,14 @@ def test_scope_filter(db, client):
 
 
 def test_pagination_and_defaults(db, client):
-    d = _get(client)  # 缺省：库内最大竞彩日往前 6 天
-    assert d["date_to"] == "2026-07-05" and d["date_from"] == "2026-06-29"
+    d = _get(client)  # 缺省：库内不晚于今天的最大竞彩日，往前 6 天
+    # 并库后正式库已有 2026-10-16 的竞彩日，所以缺省的结束日是「不晚于今天的最大竞彩日」，不能再写死 2026-07-05。
+    c = sqlite3.connect(str(db))
+    today = datetime.now(TZ_CN).date().isoformat()
+    expect_to = c.execute("SELECT MAX(jingcai_date) FROM matches WHERE jingcai_date <= ?", (today,)).fetchone()[0]
+    c.close()
+    assert d["date_to"] == expect_to
+    assert d["date_from"] == (datetime.fromisoformat(expect_to) - timedelta(days=6)).date().isoformat()
     p1 = _get(client, date_from="2026-06-01", date_to="2026-07-05", limit=10, offset=0)
     p2 = _get(client, date_from="2026-06-01", date_to="2026-07-05", limit=10, offset=10)
     assert p1["total"] == 177 and p1["count"] == 10
@@ -369,6 +414,7 @@ def _snap(c, mid, book, market, channel, point, *, rec=None, tgt=None, line=None
 def test_kelly_pinnacle_base_and_consensus(db, client):
     c = _with_timeline(db)
     mid = c.execute("SELECT id FROM matches WHERE match_uid='2026-06-06|六204'").fetchone()[0]
+    _blank_match_odds(c, mid)  # 并库后这场已有 5DF 欧赔和澳门时间线段，先清空再插入用例自己的数据
     for book, o in (("pinnacle", (2.0, 3.5, 4.0)), ("macau", (1.9, 3.3, 3.8)), ("crown", (2.05, 3.4, 3.7))):
         _snap(c, mid, book, "euro_1x2", "rule", "close", rec="2026-06-06T14:50:00+08:00",
               tgt="2026-06-06T15:00:00+08:00", ph=o[0], pd=o[1], pa=o[2])
@@ -398,6 +444,7 @@ def test_kelly_pinnacle_base_and_consensus(db, client):
 def test_kelly_falls_back_to_consensus_without_pinnacle(db, client):
     c = _with_timeline(db)
     mid = c.execute("SELECT id FROM matches WHERE match_uid='2026-06-06|六204'").fetchone()[0]
+    _blank_match_odds(c, mid)  # 并库后这场已有 5DF 欧赔和澳门时间线段，先清空再插入用例自己的数据
     _snap(c, mid, "macau", "euro_1x2", "rule", "close", rec="2026-06-06T14:50:00+08:00",
           tgt="2026-06-06T15:00:00+08:00", ph=1.9, pd=3.3, pa=3.8)
     c.commit()
@@ -422,6 +469,9 @@ def test_snapshot_line_sign_and_real_phases(db, client):
     c = _with_timeline(db)
     # 例外场：2026-06-01|一001 开赛 06-02 00:00 → phase_exception
     mid = c.execute("SELECT id FROM matches WHERE match_uid='2026-06-01|一001'").fetchone()[0]
+    # 并库后一001 已有澳门亚盘快照和时间线段：先清空，再插入用例自己的三条（欧赔不受影响，只清亚盘）。
+    c.execute("DELETE FROM odds_snapshot WHERE match_id=? AND market='asian' AND book='macau'", (mid,))
+    c.execute("DELETE FROM odds_timeline_seg WHERE match_id=?", (mid,))
     # 0.3.22：rule 快照标 5DF → 进 ah.macau_5df；actual/t1 无 5DF 标记 → 仍可进主列 close_real
     _snap(c, mid, "macau", "asian", "rule", "close", rec="2026-06-01T21:50:00+08:00",
           tgt="2026-06-01T22:00:00+08:00", line=-0.25, wh=0.9, wa=0.94, source="5df_macauslot_history")
@@ -470,6 +520,7 @@ def _seg(c, mid, start, end, line, wh, wa, book="pinnacle", inplay=0):
 def test_live_and_last_prematch(db, client):
     c = _with_timeline(db)
     mid = c.execute("SELECT id FROM matches WHERE match_uid='2026-06-06|六204'").fetchone()[0]  # 开赛 16:00
+    _blank_match_odds(c, mid)  # 并库后这场已有 5DF 欧赔和澳门时间线段，先清空再插入用例自己的数据
     _seg(c, mid, "2026-06-06T09:00:00+08:00", "2026-06-06T11:30:00+08:00", -0.25, 0.95, 0.95)
     _seg(c, mid, "2026-06-06T11:30:00+08:00", "2026-06-06T15:50:00+08:00", -0.5, 0.9, 1.0)
     _seg(c, mid, "2026-06-06T15:50:00+08:00", "2026-06-06T16:00:00+08:00", -0.5, 0.85, 1.05)

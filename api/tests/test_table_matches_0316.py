@@ -98,6 +98,15 @@ def _ins(c, uid, date, hour, kickoff_at, known=1, goals=None):
     return mid
 
 
+def _blank_match_odds(c, mid):
+    """把一场比赛在临时副本里的欧赔快照和时间线段清空，回到「这场比赛没有这类数据」的起点。
+
+    2026-10-15 研究库并入正式库之后，正式库里这些老比赛已经有 5DollarFootballAPI 的欧赔快照和澳门时间线段，
+    而下面的用例要在空白起点上自己插入快照来验证规则（插入同一个键会违反唯一约束），所以先清空。"""
+    c.execute("DELETE FROM odds_snapshot WHERE match_id=? AND market='euro_1x2'", (mid,))
+    c.execute("DELETE FROM odds_timeline_seg WHERE match_id=?", (mid,))
+
+
 # ---------------------------------------------------------------- 1. 例外场两端都含
 
 def test_phase_exception_predicate_inclusive():
@@ -246,6 +255,7 @@ def _snap_x(c, mid, book, point, ph, pd, pa, api_phase=None, rec="2026-10-07T10:
 def test_api_closing_separate_and_only_after_result(db, client):
     c = _with_timeline(db)
     done = c.execute("SELECT id FROM matches WHERE match_uid='2026-06-06|六204'").fetchone()[0]  # 3-0 已完赛
+    _blank_match_odds(c, done)
     fut = _ins(c, "2099-02-01|x2000", "2099-02-01", 20, "2099-02-01T20:00:00+08:00")
     for mid in (done, fut):
         for b, o in (("macau", (1.9, 3.3, 3.8)), ("pinnacle", (2.0, 3.5, 4.0)), ("crown", (2.05, 3.4, 3.7))):
@@ -285,6 +295,7 @@ def test_api_closing_not_in_baseline(db, client):
     c = _with_timeline(db)
     ids = [r[0] for r in c.execute("SELECT id FROM matches WHERE jingcai_date < '2026-06-20'")]
     for mid in ids:
+        _blank_match_odds(c, mid)
         _snap_x(c, mid, "macau", "close", 1.9, 3.3, 3.8, api_phase="closing")
     c.commit()
     c.close()
@@ -302,6 +313,7 @@ def test_api_closing_row_does_not_change_multi_avg_kelly_rr(db, client):
     """同一场：有/无 api_closing 行时，multi_avg / 凯利（任何基准）/ n_avg / 返还率 / 基准 完全一致。"""
     c = _with_timeline(db)
     mid = c.execute("SELECT id FROM matches WHERE match_uid='2026-06-06|六204'").fetchone()[0]
+    _blank_match_odds(c, mid)
     for b, o in (("pinnacle", (2.0, 3.5, 4.0)), ("macau", (1.9, 3.3, 3.8)), ("crown", (2.05, 3.4, 3.7))):
         _snap_x(c, mid, b, "close", *o, rec="2026-06-06T14:50:00+08:00")  # 有真实报价时刻的临盘
     c.commit()
@@ -359,6 +371,7 @@ def _m6(c):
 def test_open_first_tick_from_timeline(db, client):
     c = _with_timeline(db)
     mid = _m6(c)
+    _blank_match_odds(c, mid)
     _seg_x(c, mid, "pinnacle", "asian", "2026-06-05T09:00:00+08:00", line=-0.5, wh=0.95, wa=0.95)
     _seg_x(c, mid, "pinnacle", "asian", "2026-06-04T20:00:00+08:00", line=-0.25, wh=0.9, wa=1.0)
     c.commit()
@@ -373,6 +386,7 @@ def test_open_first_tick_from_timeline(db, client):
 def test_open_api_opening_only_is_unusable_and_has_no_durations(db, client):
     c = _with_timeline(db)
     mid = _m6(c)
+    _blank_match_odds(c, mid)
     _snap_x(c, mid, "william", "open", 2.1, 3.3, 3.5, api_phase="opening", rec="2026-10-07T10:00:00+00:00")
     _snap_x(c, mid, "william", "close", 2.0, 3.4, 3.6, rec="2026-06-06T14:55:00+08:00")  # 有时间戳 → 会成为 first_tick
     c.commit()
@@ -397,6 +411,7 @@ def test_open_api_opening_only_is_unusable_and_has_no_durations(db, client):
 def test_open_api_opening_with_own_1110_capture_per_phase(db, client):
     c = _with_timeline(db)
     mid = _m6(c)
+    _blank_match_odds(c, mid)
     _snap_x(c, mid, "william", "open", 2.1, 3.3, 3.5, api_phase="opening", rec="2026-10-07T10:00:00+00:00")
     _own_1110(c, mid, "william", "euro_1x2", "2026-06-06T11:10:00+08:00", ph=2.05, pd=3.3, pa=3.6)
     c.commit()
@@ -412,6 +427,7 @@ def test_open_api_opening_with_own_1110_capture_per_phase(db, client):
 def test_open_api_opening_usable_both_when_quote_before_mid_inclusive(db, client):
     c = _with_timeline(db)
     mid = _m6(c)
+    _blank_match_odds(c, mid)
     _snap_x(c, mid, "william", "open", 2.1, 3.3, 3.5, api_phase="opening", rec="2026-10-07T10:00:00+00:00")
     _own_1110(c, mid, "william", "euro_1x2", "2026-06-06T08:00:00+08:00", ph=2.05, pd=3.3, pa=3.6)  # = 中盘目标
     c.commit()
@@ -423,6 +439,7 @@ def test_open_api_opening_usable_both_when_quote_before_mid_inclusive(db, client
 def test_open_first_tick_beats_api_opening_and_respects_as_of(db, client):
     c = _with_timeline(db)
     mid = _m6(c)
+    _blank_match_odds(c, mid)
     _snap_x(c, mid, "william", "open", 2.1, 3.3, 3.5, api_phase="opening", rec="2026-10-07T10:00:00+00:00")
     _seg_x(c, mid, "william", "euro_1x2", "2026-06-05T12:00:00+08:00", ph=2.2, pd=3.2, pa=3.4)
     c.commit()
@@ -440,6 +457,8 @@ def test_open_legacy_import_time_unknown_and_flat_columns(db, client):
     d = _get(client, date_from="2026-06-06", date_to="2026-06-06")
     o = _row(d, U6)["ah"]["macau_manual"]["open"]  # 2026-10-14 起旧手工列改名为 ah.macau_manual；hand-recorded opening quote; opening time unknown (no 11:10 assumption)
     assert o["open_basis"] == "legacy_import"
+    # 并库后正式库有六204 的 5DF 澳门时间线，但手工开盘格只看手工自己的报价时刻，不看 5DF 的时刻
+    # （分析师 2026-10-15 决定），所以这里仍然没有带时刻的报价，开盘时间也仍然未知。
     assert o["earliest_ts_quote_at"] is None and o["ts_inferred"] is False
     # The hand-recorded opening quote is the book's data at opening, always earlier than mid and close.
     assert o["usable_at_mid"] is True and o["usable_at_close"] is True and o["unusable_reason"] is None

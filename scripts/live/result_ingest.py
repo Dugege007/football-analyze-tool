@@ -39,7 +39,10 @@ TZ = dt.timezone(dt.timedelta(hours=8))
 BASE_5DF = "https://api.5dollarfootballapi.com/v1"
 SPORTTERY_URL = ("https://webapi.sporttery.cn/gateway/uniform/football/getUniformMatchResultV1.qry"
                  "?matchBeginDate={b}&matchEndDate={e}&leagueId=&pageSize=100&pageNo={p}&isFix=0&matchPage=1&pcOrWap=1")
-PROD_DB = "/workspace/match-analysis-api/data/app.db"
+PROD_DB = os.environ.get("APP_DB_PATH", "/workspace/match-analysis-api/data/app.db")
+# 2026-10-15 研究副本并入正式库：flag 文件或 FORMAL_MERGED=1 → 合并后模式（--db 默认指向正式库，允许写）
+FORMAL_MERGED = os.environ.get("FORMAL_MERGED", "").strip() == "1" or os.path.exists(
+    os.path.join(os.path.dirname(PROD_DB), "FORMAL_MERGED.flag"))
 MAIN_PULL_H, RETRY_MIN, CUTOFF_H = 3, 30, 6
 GAP_SEC = 3.0
 BACKUP_KEEP = 24
@@ -88,6 +91,8 @@ def wdl(h: int, a: int) -> str:
 
 def check_db_path(db: str) -> str:
     real = os.path.realpath(db)
+    if FORMAL_MERGED and real == os.path.realpath(PROD_DB):
+        return real  # 合并后模式：正式库就是唯一库
     if real == os.path.realpath(PROD_DB) or not real.endswith(os.path.join("v2d3", "app.db")):
         raise SystemExit(f"拒绝写入：{db} 不是研究副本 v2d3（正式库绝对不能写）。")
     return real
@@ -837,7 +842,7 @@ def main(argv=None):
     p.add_argument("--note", default=None, help="sporttery_import：没拿到文件时写进汇总的原因")
     p.add_argument("--sporttery-cache", default=SPORTTERY_CACHE)
     p.add_argument("--fd-refresh", action="store_true", help="crosscheck：先下载 Football-Data.co.uk 公开 CSV")
-    p.add_argument("--db", default=os.environ.get("V2D3_DB_PATH", "/workspace/match-analysis-api/data/v2d3/app.db"))
+    p.add_argument("--db", default=os.environ.get("V2D3_DB_PATH") or (PROD_DB if FORMAL_MERGED else "/workspace/match-analysis-api/data/v2d3/app.db"))
     p.add_argument("--out-dir", default="/workspace/odds-data/backfill/result-ingest-2026-10-14")
     p.add_argument("--backup-root", default="/workspace/backups")
     p.add_argument("--csl-dir", default=None)

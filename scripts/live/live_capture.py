@@ -82,7 +82,11 @@ def _rp_env(name, default, base=None):
 _MA_API_ROOT = _rp_env('MA_API_ROOT', _REPO_ROOT / 'api')
 _ODDS_DATA_DIR = _rp_env('ODDS_DATA_DIR', _REPO_ROOT / 'data' / 'odds-data')
 _APP_DB = _rp_env('APP_DB_PATH', _MA_API_ROOT / 'data' / 'app.db', _MA_API_ROOT)
-_V2D3_DB = _rp_env('V2D3_DB_PATH', _MA_API_ROOT / 'data' / 'v2d3' / 'app.db', _MA_API_ROOT)
+# 2026-10-15 研究副本并入正式库：存在 data/FORMAL_MERGED.flag（或环境变量 FORMAL_MERGED=1）= 合并后模式，
+# 「副本写入目标」默认就是正式库 APP_DB_PATH，且允许写正式库；显式设置 V2D3_DB_PATH 仍优先。删除 flag 即回到旧语义。
+_FORMAL_MERGED = _rp_os.environ.get('FORMAL_MERGED', '').strip() == '1' or (_MA_API_ROOT / 'data' / 'FORMAL_MERGED.flag').exists()
+_V2D3_DB = (_APP_DB if (_FORMAL_MERGED and not _rp_os.environ.get('V2D3_DB_PATH', '').strip())
+            else _rp_env('V2D3_DB_PATH', _MA_API_ROOT / 'data' / 'v2d3' / 'app.db', _MA_API_ROOT))
 _BACKUP_DIR = _rp_env('BACKUP_DIR', _REPO_ROOT / 'backups' / 'football')
 # --- end path config ---
 
@@ -1016,7 +1020,7 @@ def flip(r: dict) -> dict:
 
 def ingest(D: str, db: Path = REPLICA_DB, dry_run=False, create_missing_matches: bool | None = None) -> dict:
     db = db.resolve()
-    if db == PROD_DB or db.name != "app.db" or db.parent.name != "v2d3":
+    if not (_FORMAL_MERGED and db == PROD_DB) and (db == PROD_DB or db.name != "app.db" or db.parent.name != "v2d3"):
         raise SystemExit(f"拒绝写入 {db}：只允许 v2d3 研究副本（…/v2d3/app.db）")
     if os.environ.get("DUAL_WRITE_ODDS_ASIAN", "0").strip().lower() in ("1", "true", "yes", "on"):
         raise SystemExit("DUAL_WRITE_ODDS_ASIAN 被打开了；本脚本要求保持关闭")

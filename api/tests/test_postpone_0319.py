@@ -147,11 +147,14 @@ def test_092_actual_snapshots_reexported():
     assert rows == {"t8": "2026-07-06T00:00:00+08:00", "t1": "2026-07-06T07:00:00+08:00"}
 
 
-def test_postpone_columns_absent_on_live_is_null(live_copy):
+def test_postpone_columns_filled_on_formal_after_merge(live_copy):
+    # 2026-10-15 研究库并入正式库之后，正式库有推迟列，日092 是推迟场（原定 08:00，实际 09:00，延后 60 分钟）。
     d = _table(TestClient(app), date_from="2026-07-05", date_to="2026-07-05")
     it = next(i for i in d["items"] if i["match_id"] == "2026-07-05|日092")
     m = it["match"]
-    assert m["postponed"] is False and m["kickoff_original"] is None and m["kickoff_jc_conflict"] is None
+    assert m["postponed"] is True and m["kickoff_original"] == "2026-07-06T08:00:00+08:00"
+    assert m["kickoff_actual"] == "2026-07-06T09:00:00+08:00" and m["postpone_delay_minutes"] == 60.0
+    assert m["kickoff_jc_conflict"] is False
     assert m["manual_review"] is False and m["daily_check"] == []
 
 
@@ -280,7 +283,7 @@ def test_live_db_untouched_by_reads():
     c = sqlite3.connect(f"file:{PROD_DB}?mode=ro", uri=True)
     cols = {r[1] for r in c.execute("PRAGMA table_info(matches)")}
     c.close()
-    assert not ({"kickoff_original", "manual_review"} & cols)  # 现网不加列
+    assert {"kickoff_original", "manual_review"} <= cols  # 并库后正式库带有推迟列和人工复核列
     assert hashlib.sha256(PROD_DB.read_bytes()).hexdigest() == h
 
 
