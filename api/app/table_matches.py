@@ -43,6 +43,7 @@ from app import team_pending as tp  # 2026-10-14 待确认球队
 from app import open_status as osx  # opening status and source fields (user rule 2026-10-10)
 from app import avg_cells  # 多家平均三格（接口约定第 3 版第 7 节）
 from app import alert_baseline as alb  # 预警档位按每格抓取时刻固定基准（2026-10-14）
+from app import market_settle as msettle  # 机构赛果：只读 market_settle，不改预测结算
 
 router = APIRouter(tags=["table"])
 
@@ -2146,6 +2147,8 @@ class Result(_M_):
     total_goals: Optional[int] = None
     score: Optional[str] = None
     wdl: Optional[str] = None
+    outcome_1x2: Optional[str] = None  # 完场胜平负：home | draw | away。未完赛为空。
+    by_book: Optional[dict] = None  # 五家机构的机构赛果。未完赛整段为空，不写成五家都无法获取。
     jc: Optional["JcResult"] = None  # 2026-10-14：竞彩胜平负（had）与让球胜平负（hhad）的赛果和临盘赔率
 
 
@@ -2562,6 +2565,13 @@ def _stable(item: dict) -> dict:
         it["result"] = _blank(Result)
     if isinstance(it.get("result"), dict) and it["result"].get("jc") is None:
         it["result"]["jc"] = build_jc_result(None, "no_result", None, None)
+    if isinstance(it.get("result"), dict):
+        # 扁平格式每行的列集合必须一致：未完赛的 by_book 在这里展开成空键，嵌套格式仍保持整段 null。
+        it["result"].setdefault("outcome_1x2", None)
+        raw_by_book = it["result"].get("by_book")
+        it["result"]["by_book"] = (
+            msettle.blank_by_book() if raw_by_book is None else msettle.ensure_by_book_keys(raw_by_book)
+        )
     if it.get("settlement") is None:
         it["settlement"] = _blank(Settlement)
     _fill_posthoc_flags(it)
@@ -2693,6 +2703,34 @@ def build_jc_result(result, res_hidden, jc_1x2: Optional[dict], jc_hhad: Optiona
     负数表示主队让球：主队进球加上让球数后再和客队进球比较。"""
     return {"had": _jc_result_cell(result, res_hidden, (jc_1x2 or {}).get("close"), False),
             "hhad": _jc_result_cell(result, res_hidden, (jc_hhad or {}).get("close"), True)}
+
+
+def attach_market_result(result: dict | None, res_hidden: str | None, jc_1x2: Optional[dict],
+                         jc_hhad: Optional[dict], *, finished: bool, outcome: str | None,
+                         by_book: dict | None) -> dict | None:
+    """把机构赛果接到 result 上。未完赛、特殊场次、或赛果仍被隐藏时，by_book 整段为空。
+
+    这里不计算预测结算，也不改变缺盘时退回澳门的现网逻辑。
+    """
+    if result is None:
+        return None
+    payload = {**result, "jc": build_jc_result(result, res_hidden, jc_1x2, jc_hhad)}
+    if not finished:
+        payload["outcome_1x2"] = None
+        payload["by_book"] = None
+        return payload
+    payload["outcome_1x2"] = outcome
+    payload["by_book"] = by_book
+    return payload
+
+
+def _market_by_book(match_pk: int, stored: dict, computed: dict, extra_time_blocked: set[int]) -> dict:
+    """已完赛时组装五家机构。加时比分未核实则整场无法获取；有落库行就不再现算。"""
+    if match_pk in extra_time_blocked:
+        return msettle.unavailable_by_book("extra_time_unverified")
+    if match_pk in stored:
+        return stored[match_pk]
+    return computed.get(match_pk) or msettle.unavailable_by_book("not_captured")
 
 
 RESULT_SPECIAL_STATUSES = ("refund", "postponed", "cancelled", "abandoned")
@@ -2870,6 +2908,19 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
         "SELECT * FROM predictions WHERE strategy = ?", (strategy,))}
     results = {r["match_id"]: r for r in conn.execute("SELECT * FROM results")}
     special_status = load_result_special_status(conn)
+    # 机构赛果只服务本页已完赛、且没有特殊标记的场次。有表则读表；没有行才在内存里算，接口本身不写库。
+    extra_time_blocked = msettle.load_extra_time_unverified(conn)
+    settle_scores: dict[int, tuple[int, int]] = {}
+    for mid in page_ids:
+        if mid in special_status or mid in extra_time_blocked:
+            continue
+        res_row_page = results.get(mid)
+        if res_row_page is None or res_row_page["home_goals"] is None or res_row_page["away_goals"] is None:
+            continue
+        settle_scores[mid] = (int(res_row_page["home_goals"]), int(res_row_page["away_goals"]))
+    stored_by_book = msettle.load_by_book(conn, list(settle_scores))
+    missing_scores = {mid: pair for mid, pair in settle_scores.items() if mid not in stored_by_book}
+    computed_by_book = msettle.compute_by_book_many(conn, missing_scores)
 
     items: list[dict] = []
     trunc_table = osx.load_quantile_table()  # None when the analyst has not supplied the table
@@ -3128,8 +3179,18 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             "produced_at": prediction["produced_at"] if prediction else None,
             "as_of": eff_as_of.isoformat(),
             # 2026-10-14：竞彩赛果放在 result.jc 里（结算之后再加，不影响结算）
-            "result": ({**result, "jc": build_jc_result(result, res_hidden, jc, jc_hhad)}
-                       if result is not None else None),
+            # 机构赛果 by_book 与预测结算分开：未完赛整段为空；已完赛优先读 market_settle。
+            "result": attach_market_result(
+                result, res_hidden, jc, jc_hhad,
+                finished=(result is not None and result.get("status") == "finished"
+                          and result.get("home_goals") is not None and mpk not in special_status),
+                outcome=(msettle.outcome_1x2(int(result["home_goals"]), int(result["away_goals"]))
+                         if result is not None and result.get("home_goals") is not None
+                         and result.get("away_goals") is not None else None),
+                by_book=(_market_by_book(mpk, stored_by_book, computed_by_book, extra_time_blocked)
+                         if result is not None and result.get("status") == "finished"
+                         and result.get("home_goals") is not None and mpk not in special_status else None),
+            ),
             "result_hidden_reason": res_hidden,
             "hidden_reason": res_hidden,  # 前端名：赛果/结算为空的原因（= result_hidden_reason）
             "settlement": settlement,
