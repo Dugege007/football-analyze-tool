@@ -452,6 +452,8 @@ def run(D: str, keys: list[str] | None, missed_mid_rule: bool, db: Path, dry_run
 
     # backup once before first write
     need_backup = not dry_run
+    # 规则临盘补写成功后，用这份清单覆盖重算机构赛果。真实通道的 t1 不是规则临盘，不会进入重算。
+    settle_writes: list[dict] = []
     try:
         for t in targets:
             m5 = t["_match"]
@@ -625,6 +627,10 @@ def run(D: str, keys: list[str] | None, missed_mid_rule: bool, db: Path, dry_run
                         report["backup"] = str(backup_replica(db))
                         need_backup = False
                     bstat["result"] = upsert_snapshot(conn, vals)
+                    if bstat["result"] in ("inserted", "upserted") and t.get("point") == "close":
+                        settle_writes.append({
+                            "match_id": mid_row["id"], "market": "asian", "point": "close",
+                        })
                     # Since 2026-10-10: the full history fetched for this rescue also goes into odds_timeline_seg,
                     # so that the first record of the match is not mistaken for a late (truncated) opening.
                     bstat["timeline_import"] = _import_full_history(conn, mid_row["id"], book, ticks, kick, orient,
@@ -642,6 +648,10 @@ def run(D: str, keys: list[str] | None, missed_mid_rule: bool, db: Path, dry_run
             report["targets"].append(trep)
 
         if not dry_run:
+            # 亚洲让球盘规则临盘补写成功后，覆盖重算这些场次。只写当前连接，不打开双写。
+            if settle_writes:
+                from app.market_settle import refresh_after_close_writes
+                report["market_settle"] = refresh_after_close_writes(conn, settle_writes)
             conn.commit()
             # 更新 captured state
             st = jload(state_path(D), {}) or {}

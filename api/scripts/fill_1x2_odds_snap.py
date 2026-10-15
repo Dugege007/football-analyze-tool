@@ -471,6 +471,7 @@ def cmd_import(args: argparse.Namespace) -> None:
         "source": SOURCE,
     }
 
+    close_writes: list[dict] = []
     for it in items:
         mid = it["match_id"]
         fid = str(it["fixture_id"])
@@ -496,6 +497,8 @@ def cmd_import(args: argparse.Namespace) -> None:
                 summary["by_book_point_inserted"][key] = (
                     summary["by_book_point_inserted"].get(key, 0) + 1
                 )
+                if snap["point"] == "close":
+                    close_writes.append({"match_id": mid, "market": MARKET, "point": "close"})
             acts[key] = act
         index_blob(conn, mid, fid, path, 200)
         # per-match william complete?
@@ -513,6 +516,10 @@ def cmd_import(args: argparse.Namespace) -> None:
             }
         )
 
+    # 欧盘三项临盘补齐或填空成功后，覆盖重算这些场次。只写当前连接，不打开双写，不另写文件。
+    if close_writes:
+        from app.market_settle import refresh_after_close_writes
+        summary["market_settle"] = refresh_after_close_writes(conn, close_writes)
     conn.commit()
     summary["coverage"] = coverage_query(conn)
     out_path = LOG_DIR / "import_summary.json"

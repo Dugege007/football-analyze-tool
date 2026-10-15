@@ -113,6 +113,14 @@ def main() -> int:
             c.rollback()
             rep["rolled_back"] = True
         else:
+            # 亚洲让球盘临盘更正通过校验后，覆盖重算这些场次。只写当前连接，不打开双写。
+            close_ids = [int(r["match_id"]) for r in rows if r["phase"] == "close"]
+            if close_ids:
+                from app.market_settle import refresh_after_close_writes
+                rep["market_settle"] = refresh_after_close_writes(
+                    c,
+                    [{"match_id": match_id, "market": "asian", "point": "close"} for match_id in close_ids],
+                )
             c.commit()
             rep["applied"] = True
     c.close()

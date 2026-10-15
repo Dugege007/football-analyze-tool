@@ -674,6 +674,7 @@ def cmd_import(args: argparse.Namespace) -> None:
             close_tick = ticks[-1]
 
         snaps: dict[str, dict] = {}
+        close_snapshot_written = False
         for point, tick, tgt in (
             ("open", open_tick, _parse_dt(open_tick["recorded_at"])),
             ("mid", mid_tick, mid_at),
@@ -686,6 +687,8 @@ def cmd_import(args: argparse.Namespace) -> None:
                 snaps[point] = s
                 act = upsert_snapshot(conn, mid, s)
                 summary["snap_actions"][act] = summary["snap_actions"].get(act, 0) + 1
+                if point == "close" and act in ("inserted", "updated"):
+                    close_snapshot_written = True
                 if point == "mid" and s.get("approx"):
                     summary["approx_mid"] += 1
 
@@ -705,6 +708,8 @@ def cmd_import(args: argparse.Namespace) -> None:
         index_blob(conn, mid, fid, path)
 
         fill = apply_odds_asian_fill(conn, mid, snaps)
+        if close_snapshot_written or fill["phases"].get("close") in ("inserted", "water_filled"):
+            summary.setdefault("close_match_ids", []).append(mid)
         summary["mid_inserted"] += fill["mid_inserted"]
         summary["water_filled_phases"] += fill["water_filled"]
         summary["water_skipped_nonnull"] += fill["water_skipped_nonnull"]
@@ -728,6 +733,14 @@ def cmd_import(args: argparse.Namespace) -> None:
     if _rep["status"] != "pass":
         conn.rollback()
         raise SystemExit(f"validate_ah_sign: {_rep['status']} blocked={_rep['blocked']} → 已回滚，未入库")
+    # 亚洲让球盘临盘快照或水位补齐成功后，覆盖重算这些场次。只写当前连接，不打开双写。
+    close_match_ids = summary.get("close_match_ids") or []
+    if close_match_ids:
+        from app.market_settle import refresh_after_close_writes
+        summary["market_settle"] = refresh_after_close_writes(
+            conn,
+            [{"match_id": match_id, "market": "asian", "point": "close"} for match_id in close_match_ids],
+        )
     conn.commit()
 
     # coverage report

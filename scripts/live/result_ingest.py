@@ -12,6 +12,7 @@
 
 写库规则：
 - 只插入 results 里缺失的行，不覆盖已有的行。
+- 新插入的完场比分提交前，用与 backfill_market_settle 相同的单场重算写入 market_settle。只写当前这个库，不打开双写，不计算竞彩赛果。
 - 两个来源都有比分且不一致：不写，标记 score_conflict。
 - 竞彩退款：标记 refund；5DF 推迟、取消、腰斩：标记 postponed、cancelled、abandoned；这些都不进可结算赛果。
 - 每次有内容要写之前，先用 sqlite backup 备份到 /workspace/backups/v2d3-before-result-ingest-<时间戳>/app.db。
@@ -348,7 +349,7 @@ def apply(db: str, decisions: list[tuple[dict, dict]], backup_root: Path, batch_
     """decisions: [(match, decision)]。只插入缺失 results；标记 upsert 到 result_ingest_flags。"""
     writes = [(m, d) for m, d in decisions if d["action"] == "write"]
     flags = [(m, f, det) for m, d in decisions for f, det in d.get("flags", [])]
-    res = {"inserted": 0, "flagged": len(flags), "backup": None, "batch_id": None}
+    res = {"inserted": 0, "flagged": len(flags), "backup": None, "batch_id": None, "market_settle": None}
     if dry_run or (not writes and not flags):
         return res
     res["backup"] = backup(db, backup_root)
@@ -360,12 +361,14 @@ def apply(db: str, decisions: list[tuple[dict, dict]], backup_root: Path, batch_
                               (batch_label, now.strftime("%y%m"), len(writes)))
             bid = cur.lastrowid
             res["batch_id"] = bid
+            inserted_ids = []
             for m, d in writes:
                 h, a = d["score"]
                 c = con.execute("insert or ignore into results(match_id, home_goals, away_goals, total_goals, wdl) "
                                 "values (?, ?, ?, ?, ?)", (m["id"], h, a, h + a, wdl(h, a)))
                 if c.rowcount:
                     res["inserted"] += 1
+                    inserted_ids.append(m["id"])
                     con.execute("insert or ignore into result_ingest_log(match_id, source, sporttery_score, fivedf_score, "
                                 "fd_score, detail_json, batch_id, ingested_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
                                 (m["id"], d["source"], _s(d.get("sporttery_score")), _s(d.get("fivedf_score")),
@@ -377,6 +380,8 @@ def apply(db: str, decisions: list[tuple[dict, dict]], backup_root: Path, batch_
                             "values (?, ?, ?, ?, ?) on conflict(match_id, flag) do update set "
                             "detail_json = excluded.detail_json, last_seen_at = excluded.last_seen_at",
                             (m["id"], f, json.dumps(det, ensure_ascii=False), iso(now), iso(now)))
+            if inserted_ids:
+                res["market_settle"] = _refresh_market_settle(con, inserted_ids, now)
     finally:
         con.close()
     return res
@@ -384,6 +389,16 @@ def apply(db: str, decisions: list[tuple[dict, dict]], backup_root: Path, batch_
 
 def _s(t):
     return f"{t[0]}:{t[1]}" if t else None
+
+
+def _refresh_market_settle(con: sqlite3.Connection, match_ids: list[int], now: dt.datetime) -> dict:
+    """完场比分已经插入之后，在同一个事务里覆盖重算这些场次的机构赛果。"""
+    api_root = Path(__file__).resolve().parents[2] / "api"
+    if str(api_root) not in sys.path:
+        sys.path.insert(0, str(api_root))
+    from app.market_settle import refresh_after_results_written
+
+    return refresh_after_results_written(con, match_ids, now=iso(now))
 
 
 # ----------------------------------------------------------------------------- 定时

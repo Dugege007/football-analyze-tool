@@ -9,6 +9,11 @@
 settle_code 返回的是二元组 (结算码, 系数)，落库和接口只保留结算码字符串。
 
 预测结算（settlement / settlement_by_book）不在本模块里，缺临盘时也不退回澳门。
+竞彩胜平负和让球胜平负不写入这张表。
+
+完场比分写入 results 成功之后，以及亚洲让球盘、大小球、欧盘三项的临盘写入或更新成功之后，
+调用 refresh_after_results_written 或 refresh_after_close_writes。这两处都进入 apply_backfill，
+按 match_id + book + market 覆盖原行。触发函数只写调用方已经打开的连接，不提交，不另开数据库，不写文件，也不打开双写。
 """
 from __future__ import annotations
 
@@ -29,6 +34,14 @@ SCHEMA_SQL = Path(__file__).resolve().parents[2] / "docs" / "schema" / "v2_1_mar
 # 五家机构，顺序与数据表列一致。不许用另一家的临盘填补空缺。
 BOOKS: tuple[str, ...] = ("macau", "crown", "pinnacle", "william", "bet365")
 MARKETS: tuple[str, ...] = ("ah", "ou", "x1x2")
+
+# 这些市场的临盘（phase 或 point 为 close）写入或更新后，要覆盖重算机构赛果。
+# 竞彩盘不在其中。真实通道的 t1 也不是规则临盘，不会命中。
+CLOSE_QUOTE_MARKETS: frozenset[str] = frozenset({
+    "asian", "ah",
+    "ou", "goalline",
+    "euro_1x2", "1x2", "x1x2",
+})
 
 # 规则临盘优先；同一机构的旧规则通道只在规则临盘缺失时使用，仍然不是跨机构顶替。
 CLOSE_CHANNELS: tuple[str, ...] = ("rule", "rule_legacy")
@@ -69,10 +82,25 @@ _RECORD_COLUMNS = (
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """创建 market_settle。语句可以重复执行，不会改已有比赛行。"""
-    from app.db import apply_sql_idempotent
+    """创建 market_settle。这些语句可以重复执行，不会改写已经存在的比赛行。
 
-    apply_sql_idempotent(conn, SCHEMA_SQL)
+    版本登记只在 schema_migrations 已经存在时执行。赛果入库使用的临时库可能还没有这张表，
+    跳过登记，避免因此中断完场写入。
+    """
+    from app.db import split_sql
+
+    has_migrations = _has_table(conn, "schema_migrations")
+    for statement in split_sql(SCHEMA_SQL.read_text(encoding="utf-8")):
+        if statement.lstrip().upper().startswith("PRAGMA"):
+            continue
+        if not has_migrations and "SCHEMA_MIGRATIONS" in statement.upper():
+            continue
+        try:
+            conn.execute(statement)
+        except sqlite3.OperationalError as error:
+            if "duplicate column name" in str(error).lower():
+                continue
+            raise
 
 
 def outcome_1x2(home_goals: int, away_goals: int) -> str:
@@ -374,6 +402,7 @@ def plan_backfill(
     now: datetime | str | None = None,
 ) -> dict[str, Any]:
     """统计将要写入和删除的行。不创建表，也不修改数据库。"""
+    conn.row_factory = sqlite3.Row
     scope = _scope_match_ids(conn, match_ids, jingcai_date)
     blocked = load_blocking_flags(conn)
     eligible = _eligible_scores(conn, scope, blocked)
@@ -401,6 +430,7 @@ def apply_backfill(
     now: datetime | str | None = None,
 ) -> dict[str, Any]:
     """覆盖写入 market_settle，并删除范围内不再可结算的场次。调用方负责提交。"""
+    conn.row_factory = sqlite3.Row
     ensure_schema(conn)
     planned = plan_backfill(conn, match_ids=match_ids, jingcai_date=jingcai_date, now=now)
     _upsert_records(conn, planned["records"])
@@ -409,6 +439,92 @@ def apply_backfill(
     summary["applied"] = True
     summary["deleted_matches"] = deleted
     return summary
+
+
+def refresh_matches(
+    conn: sqlite3.Connection,
+    match_ids: Sequence[int],
+    *,
+    now: datetime | str | None = None,
+) -> dict[str, Any]:
+    """对列出的场次覆盖重算 market_settle。
+
+    与 api/scripts/backfill_market_settle.py 在带上 --apply 和 --match-id 时调用的 apply_backfill
+    是同一套逻辑，不另写结算公式。缺临盘的格子写成 unavailable。五家机构之间不互相顶替。
+    只写入传入的连接，不提交事务，不打开第二个数据库，不写文件，也不打开双写。
+    竞彩胜平负和让球胜平负不在本函数的计算范围内。
+    """
+    ordered: list[int] = []
+    seen: set[int] = set()
+    for match_id in match_ids:
+        value = int(match_id)
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    if not ordered:
+        return {
+            "applied": True,
+            "rows": 0,
+            "eligible_matches": 0,
+            "deleted_matches": 0,
+            "refreshed_match_ids": [],
+        }
+    summary = apply_backfill(conn, match_ids=ordered, now=now)
+    summary["refreshed_match_ids"] = ordered
+    return summary
+
+
+def refresh_after_results_written(
+    conn: sqlite3.Connection,
+    match_ids: Sequence[int],
+    *,
+    now: datetime | str | None = None,
+) -> dict[str, Any]:
+    """完场比分写入 results 成功之后，对这几场比赛覆盖重算机构赛果。"""
+    return refresh_matches(conn, match_ids, now=now)
+
+
+def is_close_quote_write(market: str | None, point: str | None) -> bool:
+    """判断这次写入是不是会改变机构赛果所用临盘的亚洲让球盘、大小球或欧盘三项。
+
+    初盘、中盘和竞彩盘返回否。真实通道的 t1 也不是规则临盘，返回否。
+    """
+    if market is None or point is None:
+        return False
+    return str(point) == "close" and str(market) in CLOSE_QUOTE_MARKETS
+
+
+def refresh_after_close_writes(
+    conn: sqlite3.Connection,
+    writes: Sequence[Mapping[str, Any]],
+    *,
+    now: datetime | str | None = None,
+) -> dict[str, Any] | None:
+    """亚洲让球盘、大小球或欧盘三项的临盘写入或更新成功之后，覆盖重算受影响的场次。
+
+    没有临盘变更时返回 None，不创建表，也不写行。
+    只写入传入的连接，不提交事务，不打开第二个数据库，不写文件，也不打开双写。
+    """
+    match_ids: list[int] = []
+    for row in writes:
+        market = row.get("market")
+        point = row.get("point")
+        if point is None:
+            point = row.get("phase")
+        market_text = None if market is None else str(market)
+        point_text = None if point is None else str(point)
+        if not is_close_quote_write(market_text, point_text):
+            continue
+        match_id = row.get("match_id")
+        if match_id is None:
+            match_id = row.get("_match_id")
+        if match_id is None:
+            continue
+        match_ids.append(int(match_id))
+    if not match_ids:
+        return None
+    return refresh_matches(conn, match_ids, now=now)
 
 
 def format_computed_at(now: datetime | str | None = None) -> str:
@@ -891,7 +1007,8 @@ def _summarize(
         "scope_matches": len(scope),
         "eligible_matches": len(eligible),
         "blocked_matches": len(blocked_in_scope),
-        "blocked_flags": dict(sorted(blocked_in_scope.items())),
+        # 键写成字符串，方便调用方把统计直接序列化成 JSON。
+        "blocked_flags": {str(match_id): flag for match_id, flag in sorted(blocked_in_scope.items())},
         "rows": len(records),
         "by_cell_status": by_status,
         "by_null_reason": by_reason,

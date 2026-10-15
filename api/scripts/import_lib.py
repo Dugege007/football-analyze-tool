@@ -587,4 +587,9 @@ def insert_match(conn: sqlite3.Connection, item: dict, batch_id: int, *, write_p
     # else: leave any existing predictions untouched on re-import of same uid
     # (monthly files have no prediction; do not DELETE)
 
+    # 本场的 results 和亚盘都已经按导入内容重写。完场比分存在时覆盖重算机构赛果；
+    # 比分被撤回时删掉这一场已经落库的机构赛果。只写当前连接，不提交，不打开双写，不计算竞彩赛果。
+    from app.market_settle import refresh_after_results_written
+    refresh_after_results_written(conn, [match_id])
+
     return match_id

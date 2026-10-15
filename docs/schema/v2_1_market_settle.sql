@@ -1,7 +1,11 @@
 -- 机构赛果（亚洲让球盘、大小球、欧盘胜平负 × 五家机构）
 -- 口径：uploads 中的《机构赛果落库口径》2026-10-15，第 4 节。
 -- 唯一键是 match_id + book + market。重复计算必须覆盖原行，不能追加第二行。
--- 本文件只建表，不写入任何比赛的业务数据。回填写库见 api/scripts/backfill_market_settle.py，默认不执行。
+-- 本文件只建表，不写入任何比赛的业务数据。
+-- 离线回填见 api/scripts/backfill_market_settle.py，不带 --apply 时不写库。
+-- 持续落库与离线回填使用同一套 apply_backfill：完场比分写入 results 成功后重算该场；
+-- 亚洲让球盘、大小球、欧盘三项的临盘写入或更新成功后，同样按唯一键覆盖该场。
+-- 触发路径只写当前数据库连接里的 market_settle，不打开双写，也不计算竞彩赛果。
 
 CREATE TABLE IF NOT EXISTS market_settle (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
