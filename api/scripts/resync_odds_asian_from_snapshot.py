@@ -6,7 +6,7 @@
 - 期望值：handicap = −snapshot.line（odds_asian 主让为正；快照 API 记法主让为负，0 仍为 0），水位、water_src 原样；
 - 只改与快照不一致的行；extras 记 resync_0318 {before, snapshot_target_at, phase_target, exception_rule}；
 - 写前备份由调用方负责；写后逐 phase 跑 validate_ah_sign.validate_conn（exit=2 / blocked → 整体回滚）。
-用法：.venv/bin/python scripts/resync_odds_asian_from_snapshot.py --db data/v2d3/app.db --phases open,close [--apply] --out <csv>
+用法：.venv/bin/python scripts/resync_odds_asian_from_snapshot.py --db data/app.db --phases open,close [--apply] --out <csv>
 """
 from __future__ import annotations
 
@@ -25,6 +25,9 @@ from validate_ah_sign import validate_conn  # noqa: E402
 LIVE = (ROOT / "data" / "app.db").resolve()
 PHASES = ("open", "mid", "close")
 
+
+# 运行前必须先备份正式库（SQLite backup 接口），再设置 FORMAL_DB_BACKUP_DONE=1；详见 app/formal_db.py。
+from app.formal_db import FORMAL_DB_PATH, guard_write_target  # noqa: E402
 
 def plan(c: sqlite3.Connection, phases: tuple[str, ...]) -> list[dict]:
     c.row_factory = sqlite3.Row
@@ -67,9 +70,7 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()
-    if a.db.resolve() == LIVE:
-        print("REFUSE: live app.db is never written", file=sys.stderr)
-        return 2
+    guard_write_target(a.db, writing=a.apply)
     phases = tuple(p.strip() for p in a.phases.split(",") if p.strip())
     bad = [p for p in phases if p not in PHASES]
     if bad:

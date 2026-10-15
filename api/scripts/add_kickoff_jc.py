@@ -53,6 +53,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+# 运行前必须先备份正式库（SQLite backup 接口），再设置 FORMAL_DB_BACKUP_DONE=1；详见 app/formal_db.py。
+from app.formal_db import FORMAL_DB_PATH, guard_write_target  # noqa: E402
 from app.collection_schedule import TZ_CN  # noqa: E402
 
 LIVE_DB = (ROOT / "data" / "app.db").resolve()
@@ -87,8 +89,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     db = Path(a.db).resolve()
-    if db == LIVE_DB:
-        raise SystemExit("拒绝写现网 data/app.db")
+    db = guard_write_target(db, writing=not a.dry_run)
     conn = sqlite3.connect(str(db))
     conn.row_factory = sqlite3.Row
     cols = {r[1] for r in conn.execute("PRAGMA table_info(matches)")}

@@ -7,7 +7,7 @@
   协作中拍板：hhad 一 phase 一行当前线 + hist；odds_jc_home 冻结；injury 不伪 known_empty
 
 硬规则：
-  - 默认 --db 指向 data/v2d3/app.db；拒绝现网 data/app.db
+  - 默认 --db 指向 data/app.db（正式库）；拒绝现网 data/app.db
   - 默认 --dry-run（只探测／统计，不写）；要落库加 --apply
   - 不碰 predictions／settlements；不 seed；不开 DUAL_WRITE
   - 不投影 odds_snapshot jc_spf/jc_hhad（local collector 未通、无正式采盘行；见 ACCEPTANCE）
@@ -15,7 +15,7 @@
 用法：
   .venv/bin/python scripts/migrate_jc_fundamentals_schema.py
   .venv/bin/python scripts/migrate_jc_fundamentals_schema.py --apply
-  .venv/bin/python scripts/migrate_jc_fundamentals_schema.py --db data/v2d3/app.db --apply
+  .venv/bin/python scripts/migrate_jc_fundamentals_schema.py --db data/app.db --apply
 """
 from __future__ import annotations
 
@@ -30,9 +30,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.db import LIVE_DB_PATH, SCHEMA_DIR, apply_sql_idempotent  # noqa: E402
+# 运行前必须先备份正式库（SQLite backup 接口），再设置 FORMAL_DB_BACKUP_DONE=1；详见 app/formal_db.py。
+from app.formal_db import FORMAL_DB_PATH, guard_write_target  # noqa: E402
 
 SQL_PATH = SCHEMA_DIR / "v2_0_jc_fundamentals.sql"
-DEFAULT_DB = ROOT / "data" / "v2d3" / "app.db"
+DEFAULT_DB = FORMAL_DB_PATH
 TZ_CN = timezone(timedelta(hours=8))
 HHAD_META_COLS = (
     "source", "captured_at", "target_at", "usable_at_mid", "usable_at_close",
@@ -47,6 +49,7 @@ STATS_META_COLS = (
 )
 
 
+
 def _cols(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 
@@ -57,11 +60,8 @@ def _has_table(conn: sqlite3.Connection, name: str) -> bool:
     ).fetchone() is not None
 
 
-def _refuse_live(db: Path) -> None:
-    if db.resolve() == LIVE_DB_PATH.resolve():
-        raise SystemExit(
-            "REFUSE: 拒绝写现网 data/app.db。本迁移只允许 v2d3 副本（DUAL_WRITE 关）。"
-        )
+def _refuse_live(db: Path, *, writing: bool = True) -> None:
+    guard_write_target(db, writing=writing)
 
 
 def _as_of_for_match(jingcai_date: str | None) -> str:
@@ -234,12 +234,12 @@ def seed_stats_obs(conn: sqlite3.Connection, fetched_at: str) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--db", type=Path, default=DEFAULT_DB, help="目标库（默认 data/v2d3/app.db）")
+    ap.add_argument("--db", type=Path, default=DEFAULT_DB, help="目标库（默认 data/app.db）")
     ap.add_argument("--apply", action="store_true", help="真正写入；默认 dry-run")
     ap.add_argument("--skip-obs-seed", action="store_true", help="只 DDL+stats 打标，不写 stats_obs")
     args = ap.parse_args()
     db = args.db if args.db.is_absolute() else (ROOT / args.db)
-    _refuse_live(db)
+    _refuse_live(db, writing=args.apply)
     if not db.exists():
         raise SystemExit(f"db missing: {db}")
     if not SQL_PATH.exists():
