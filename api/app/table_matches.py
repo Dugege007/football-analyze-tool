@@ -27,7 +27,7 @@ import json
 import sqlite3
 import statistics
 from datetime import date as date_cls, datetime, timedelta
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -146,6 +146,10 @@ def is_5df_macau_row(r: Any) -> bool:
     if isinstance(ex.get("source"), str) and (
         ex["source"].startswith("5df") or ex["source"].startswith("5dollar")
     ):
+        return True
+    # The merged formal database marks 5DF rows in odds_asian with the key "src" (for example
+    # "5df_hist:macauslot"); a value whose prefix is 5df or 5dollar means the row comes from 5DF.
+    if isinstance(ex.get("src"), str) and (ex["src"].startswith("5df") or ex["src"].startswith("5dollar")):
         return True
     # fill / resync 派生：from_channel + actual 水位（或 from_point）
     ws = _get("water_src")
@@ -519,17 +523,23 @@ def _is_own_capture(r: sqlite3.Row) -> bool:
     return (r["point"] == "rule_1110" or ex.get("label") == "rule_1110" or ex.get("capture") == "own")
 
 
-def _ts_quotes(d: "_Data", mpk: int, book: str, market: str, as_of: datetime
+def _ts_quotes(d: "_Data", mpk: int, book: str, market: str, as_of: datetime,
+               row_filter: Optional[Callable[[Any], bool]] = None
                ) -> tuple[tuple[datetime, str, sqlite3.Row] | None, datetime | None]:
     """(first_tick 候选, earliest_ts_quote_at)。只看带真实报价时刻、≤ as_of、非赛中的报价。
 
     first_tick 候选 = API 历史 tick（odds_timeline_seg 变化点 ∪ 有真实报价时刻的 odds_snapshot，排除 api_* 与自抓）；
     earliest_ts_quote_at = 上述 ∪ 自抓快照（11:10 等）中最早的时刻。
+
+    row_filter: when given, only rows for which it returns True are considered. The manual Macau opening cell
+    passes a filter that rejects 5DF rows, so that its earliest quote time never comes from 5DF.
     """
     first: tuple[datetime, str, sqlite3.Row] | None = None
     earliest: datetime | None = None
     for s in d.timeline.get(mpk, []):
         if s["book"] != book or s["market"] != market or s["is_inplay"]:
+            continue
+        if row_filter is not None and not row_filter(s):
             continue
         ts = _to_cn(s["seg_start_at"])
         if ts is None or ts > as_of:
@@ -538,6 +548,8 @@ def _ts_quotes(d: "_Data", mpk: int, book: str, market: str, as_of: datetime
             first = (ts, "seg", s)
     for r in d.snap_by_match.get(mpk, []):
         if r["book"] != book or r["market"] != market or r["channel"] == "rule_legacy":
+            continue
+        if row_filter is not None and not row_filter(r):
             continue
         if _loads(r["extras_json"]).get("api_phase") in ("opening", "closing"):
             continue
@@ -834,7 +846,9 @@ def build_ah_macau_manual_cell(d: _Data, mpk: int, phase: str, sched: dict,
 
     # open：非 5DF 的 first_tick 才进主列（现网/副本时间线多为 5DF → 跳过）
     if phase == "open":
-        first, earliest = _ts_quotes(d, mpk, "macau", "asian", as_of)
+        # The manual opening cell uses only the manual quote times; 5DF quote times belong to the macau_5df lane.
+        first, earliest = _ts_quotes(d, mpk, "macau", "asian", as_of,
+                                     row_filter=lambda row: not is_5df_macau_row(row))
         if first is not None and is_5df_macau_row(first[2]):
             first = None  # 5DF tick 留给 macau_5df
         if first is not None and first[1] == "seg":
@@ -2587,6 +2601,26 @@ _SNAP_PREFIX = "odds_snapshot/"
 _JC_HIST_PREFIX = "5df_odds_history/"
 
 
+# Import batch names such as "5df_hist_gapfill_20261014" live only in the database. The interface never prints a batch
+# name as a source. A source that starts with one of these prefixes and is not already an agreed source code is
+# mapped to the agreed code of the same real origin. The agreed code list itself does not change.
+# 5df_hist batches contain whole 5DollarFootballAPI history files, so they map to "5df_hist_asof_full".
+BATCH_SOURCE_PREFIX_TO_CODE = (
+    ("5df_hist", "5df_hist_asof_full"),
+)
+AGREED_5DF_HISTORY_CODES = frozenset({"5df_hist_asof", "5df_hist_asof_full"})
+
+
+def canonical_source_code(code: Optional[str]) -> Optional[str]:
+    """Map an import batch name to the agreed source code; every other value is returned unchanged."""
+    if not isinstance(code, str) or code in AGREED_5DF_HISTORY_CODES:
+        return code
+    for prefix, agreed in BATCH_SOURCE_PREFIX_TO_CODE:
+        if code.startswith(prefix):
+            return agreed
+    return code
+
+
 def source_code_of(path: Optional[str], known: Optional[str] = None) -> Optional[str]:
     """把取数路径换成约定 7.8 节的来源代码；已经是来源代码的原样返回。"""
     if known:
@@ -2620,6 +2654,9 @@ def _normalize_one(c: dict) -> None:
         code = known or (source_code_of(given_path) if given_path and given_path != "odds_asian" else src)
     else:
         code = source_code_of(src, known)
+    code = canonical_source_code(code)
+    if "/" not in path:
+        path = canonical_source_code(path)  # a bare batch name must not leak through source_path either
     c["source"] = code
     c["source_path"] = path if path != code else None
 

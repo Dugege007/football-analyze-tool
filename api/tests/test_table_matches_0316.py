@@ -457,9 +457,9 @@ def test_open_legacy_import_time_unknown_and_flat_columns(db, client):
     d = _get(client, date_from="2026-06-06", date_to="2026-06-06")
     o = _row(d, U6)["ah"]["macau_manual"]["open"]  # 2026-10-14 起旧手工列改名为 ah.macau_manual；hand-recorded opening quote; opening time unknown (no 11:10 assumption)
     assert o["open_basis"] == "legacy_import"
-    # 并库后正式库有六204 的 5DF 澳门时间线，澳门最早的带时刻报价是 2026-06-01T21:34:45+08:00；
-    # 手工开盘报价本身的开盘时间仍然未知（open_time 为空、不拿这个时刻顶替）。
-    assert o["earliest_ts_quote_at"] == "2026-06-01T21:34:45+08:00" and o["ts_inferred"] is False
+    # 并库后正式库有六204 的 5DF 澳门时间线，但手工开盘格只看手工自己的报价时刻，不看 5DF 的时刻
+    # （分析师 2026-10-15 决定），所以这里仍然没有带时刻的报价，开盘时间也仍然未知。
+    assert o["earliest_ts_quote_at"] is None and o["ts_inferred"] is False
     # The hand-recorded opening quote is the book's data at opening, always earlier than mid and close.
     assert o["usable_at_mid"] is True and o["usable_at_close"] is True and o["unusable_reason"] is None
     assert o["status"] == "ok" and o["source_kind"] == "manual" and o["open_time"] is None
