@@ -24,7 +24,7 @@ npm run dev
 ```
 
 - 网页界面开发服务器地址：http://127.0.0.1:5173
-- 接口转发：浏览器访问的 `/api` 会被转发到 `VITE_API_BASE`（默认 http://127.0.0.1:8787），`/api-replica` 会被转发到 `VITE_API_REPLICA_BASE`（默认 http://127.0.0.1:8788）。
+- 接口转发：浏览器访问的 `/api` 会被转发到 `VITE_API_BASE`（默认 http://127.0.0.1:8787）。页面只连接这一份正式库。
 - 配置方法：复制 `.env.example` 为 `.env.local` 后修改。
 - 后端不可用时，界面会自动回落到内置的虚构示例数据；如果只想使用真实接口，在 `.env.local` 中设置 `VITE_USE_MOCK=0`。
 

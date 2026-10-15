@@ -2,7 +2,7 @@
  * 数据加载：现有批量接口 /table/matches（format=nested）映射到第 1 期字段；接口还没提供的字段留空，页面显示「无法获取」。
  * 不请求 live 快照（include_live=none），不读手工澳门列（ah.macau 已指向 5DollarFootballAPI 来源）。
  */
-import { apiBase, type DbSource } from '../api/dataSource'
+import { apiBase } from '../api/dataSource'
 import { mockRows } from './mock'
 import type { AhCell, OuCell, CellStatus, JcHhadCell, MatchStatus, Phase, Phased, Row, X1x2Cell } from './types'
 
@@ -208,15 +208,15 @@ function mapJcResult(jc: any): NonNullable<Row['result']>['jc'] {
 /** 接口顶层 books（机构列顺序）；没给时为 null，页面用默认顺序 */
 export let apiBooks: string[] | null = null
 
-export async function loadApi(source: DbSource, dateFrom: string, dateTo: string, strategy: string): Promise<Row[]> {
+export async function loadApi(dateFrom: string, dateTo: string, strategy: string): Promise<Row[]> {
   const rows: Row[] = []
   for (let offset = 0; ; offset += 200) {
     const q = new URLSearchParams({ date_from: dateFrom, date_to: dateTo, scope: 'jingcai', strategy, include_live: 'none', limit: '200', offset: String(offset) })
     let res: Response
     try {
-      res = await fetch(`${apiBase(source)}/table/matches?${q}`)
+      res = await fetch(`${apiBase}/table/matches?${q}`)
     } catch {
-      throw new Error(`批量接口连接失败，请确认${source === 'replica' ? '副本实例' : '后端实例'}已启动`)
+      throw new Error('批量接口连接失败，请确认后端实例已启动')
     }
     if (!res.ok) throw new Error(`批量接口返回错误（HTTP ${res.status}）`)
     const body = (await res.json()) as { items?: Raw[]; total?: number; books?: string[] }
@@ -228,8 +228,8 @@ export async function loadApi(source: DbSource, dateFrom: string, dateTo: string
   return rows
 }
 
-export async function loadRows(mode: DataMode, source: DbSource, dateFrom: string, dateTo: string, strategy: string): Promise<Row[]> {
+export async function loadRows(mode: DataMode, dateFrom: string, dateTo: string, strategy: string): Promise<Row[]> {
   if (mode === 'mock') return mockRows()
-  const api = await loadApi(source, dateFrom, dateTo, strategy)
+  const api = await loadApi(dateFrom, dateTo, strategy)
   return mode === 'both' ? [...mockRows(), ...api] : api
 }

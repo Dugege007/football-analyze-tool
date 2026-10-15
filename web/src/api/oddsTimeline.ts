@@ -4,7 +4,7 @@
  * 契约：odds-data/schema/v2_0-prematch-odds-timeline-chart.md
  */
 
-import { apiBase, readDbSource, type DbSource } from './dataSource'
+import { apiBase } from './dataSource'
 
 /** 阶段锚点：初盘 / 中盘 / 临盘（来自表格快照，非 timeline ticks） */
 export type PhaseAnchorKind = 'open' | 'mid' | 'close'
@@ -209,11 +209,10 @@ export async function fetchPhaseAnchorsForBook(
   matchId: string,
   book: string,
   kickoffAt: string,
-  src: DbSource = readDbSource(),
 ): Promise<PhaseAnchorMark[]> {
   const ahKey = timelineBookToAhKey(book)
   const date = parseMatchDate(matchId)
-  const base = apiBase(src)
+  const base = apiBase
   const q = new URLSearchParams()
   if (date) {
     q.set('date', date)
@@ -382,7 +381,7 @@ function extractErrorMessage(status: number, body: OddsTimelineErrorBody | null)
 
 /**
  * 拉取赛前盘口／水位时序（真接口）。
- * 走现网／副本 dataSource 基址；展开 Collapse 后再调用；切换 book 再请求。
+ * 走正式库 /api；展开 Collapse 后再调用；切换 book 再请求。
  */
 export async function fetchOddsTimeline(
   matchId: string,
@@ -390,11 +389,9 @@ export async function fetchOddsTimeline(
   options?: {
     market?: string
     forceRefresh?: boolean
-    src?: DbSource
   },
 ): Promise<OddsTimelineResponse> {
-  const src = options?.src ?? readDbSource()
-  const base = apiBase(src)
+  const base = apiBase
   const market = options?.market ?? 'asian'
   const q = new URLSearchParams()
   q.set('book', book)

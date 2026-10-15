@@ -254,7 +254,7 @@ export interface ApiTableMatch {
   kickoff_jc?: string | null
   /** 0.3.19：kickoff_jc 与开赛时间相差 ≥ 90 分钟 → true；null = 没查（不显示） */
   kickoff_jc_conflict?: boolean | null
-  /** 0.3.19 推迟场（v2d3 有值；现网 null） */
+  /** 0.3.19 推迟场；库里没有该列时为空 */
   postponed?: boolean | null
   kickoff_original?: string | null
   kickoff_actual?: string | null

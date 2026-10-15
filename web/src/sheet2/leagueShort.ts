@@ -2,7 +2,7 @@
  * League display names for the 赛事 column.
  *
  * Every display name is the name the user recorded manually in the legacy match records
- * (odds-data/imports/predictions/CFFXDJ_5_V3_predictions.csv and the v2d3 leagues table seeded from them).
+ * (odds-data/imports/predictions/CFFXDJ_5_V3_predictions.csv and the leagues table seeded from them).
  * The link from the backend's full name to that manual name comes from
  * odds-data/research/jingcai-competition-whitelist/competition_alias_seed.csv (canonical_status legacy),
  * which matched every legacy name to the 竞彩 and 5DollarFootballAPI names.

@@ -21,7 +21,7 @@ const jingcaiDetail: MatchDetail & { prediction: Prediction } = {
     },
     h2h: { matches: 4, last6: { home_gf: 5, home_ga: 4 }, home_streak_last6: 1 },
     rank: { home: 5, away: 12 },
-    popularity_diff: null,
+    popularity_diff: 0.053,
     support_proxy_odds: 0.12,
     injury: null,
     weather: null,

@@ -68,15 +68,7 @@ import {
 } from './compareSplit'
 import { BasisTip } from './BasisTip'
 import RunViewer from './RunViewer'
-import {
-  apiBase,
-  fetchHealthMeta,
-  metaMismatch,
-  REPLICA_READONLY_TIP,
-  useDbSource,
-  type DbMeta,
-} from '../api/dataSource'
-import { DataSourceSwitch, ReplicaBanner } from '../api/DataSourceBar'
+import { apiBase, fetchHealthMeta, metaMismatch, type DbMeta } from '../api/dataSource'
 
 const { Title, Text } = Typography
 
@@ -153,12 +145,14 @@ export default function ComparePage() {
     'per_strategy',
   )
   const [result, setResult] = useState<CompareResponse | null>(null)
-  // 0.3.18：数据源（现网 / 副本），标识以 /health 返回的 meta 为准；副本只读，不能对比（对比会写入验证记录，副本一律 403）
-  const [dbSource, setDbSource] = useDbSource()
   const [dbMeta, setDbMeta] = useState<DbMeta | null>(null)
   const [metaError, setMetaError] = useState<string | null>(null)
-  const replicaMode = dbSource === 'replica' || dbMeta?.readonly === true
-  const readonlyLock = replicaMode || metaError != null
+  const readonlyLock = dbMeta?.readonly === true || metaError != null
+  const lockTip = metaError
+    ? metaError
+    : dbMeta?.readonly
+      ? '接口为只读，不能新建验证记录。可在下方按编号查看已有验证记录。'
+      : undefined
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -166,21 +160,28 @@ export default function ComparePage() {
     setDbMeta(null)
     setItems([])
     try {
-      const meta = await fetchHealthMeta(dbSource)
-      const bad = metaMismatch(dbSource, meta)
+      let meta: DbMeta | null
+      try {
+        meta = await fetchHealthMeta()
+      } catch (e) {
+        const text = e instanceof Error ? e.message : ''
+        setMetaError(text.includes('HTTP') ? text : '元信息读取失败，请确认正式库已启动')
+        return
+      }
+      const bad = metaMismatch(meta)
       if (bad) {
         setMetaError(bad)
         return
       }
       setDbMeta(meta)
-      const res = await listStrategies(apiBase(dbSource))
+      const res = await listStrategies(apiBase)
       setItems(res.data.items)
     } catch (e) {
       message.error(e instanceof Error ? e.message : '加载方案失败')
     } finally {
       setLoading(false)
     }
-  }, [dbSource])
+  }, [])
 
   useEffect(() => {
     void refresh()
@@ -207,7 +208,7 @@ export default function ComparePage() {
 
   const onCompare = async () => {
     if (readonlyLock) {
-      message.warning(REPLICA_READONLY_TIP)
+      message.warning(lockTip ?? '当前不能新建验证记录')
       return
     }
     if (selectedIds.length === 0) {
@@ -792,22 +793,13 @@ export default function ComparePage() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <ReplicaBanner meta={dbMeta} />
-      {metaError ? <Alert type="error" showIcon message="数据源标识不符" description={metaError} /> : null}
+      {metaError ? <Alert type="error" showIcon message={metaError} /> : null}
       <Card>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <Title level={3} style={{ marginTop: 0 }}>
             对比
             <HelpTip tip="多选方案后拉取对比数据。可以打开方案叠加和结算灵敏度：结算灵敏度用同一批注单按真实水位结算，作为副表，用不同颜色的曲线叠加显示。" />
           </Title>
-          <DataSourceSwitch
-            value={dbSource}
-            onChange={(s) => {
-              setDbSource(s)
-              setSelectedIds([])
-              setResult(null)
-            }}
-          />
         </div>
         <Space wrap style={{ width: '100%', marginBottom: 12 }} align="start">
           <Select
@@ -827,7 +819,7 @@ export default function ComparePage() {
           />
           <Space wrap>
             <Text type="secondary">自动验证</Text>
-            <Tooltip title={readonlyLock ? REPLICA_READONLY_TIP : undefined}>
+            <Tooltip title={lockTip}>
               <Switch checked={autoValidate && !readonlyLock} disabled={readonlyLock} onChange={setAutoValidate} />
             </Tooltip>
             <Text type="secondary">方案叠加</Text>
@@ -862,20 +854,14 @@ export default function ComparePage() {
                 setResult(null)
               }}
             />
-            <Tooltip
-              title={
-                readonlyLock
-                  ? `${REPLICA_READONLY_TIP}：对比会新建验证记录，副本实例拒绝一切写入；可在下方按编号查看已有验证记录`
-                  : undefined
-              }
-            >
+            <Tooltip title={lockTip}>
               <Button
                 type="primary"
                 loading={comparing}
                 disabled={selectedIds.length === 0 || readonlyLock}
                 onClick={() => void onCompare()}
               >
-                {readonlyLock ? `开始对比（${REPLICA_READONLY_TIP}）` : '开始对比'}
+                开始对比
               </Button>
             </Tooltip>
           </Space>
@@ -895,7 +881,7 @@ export default function ComparePage() {
         ) : null}
       </Card>
 
-      <RunViewer source={dbSource} />
+      <RunViewer />
 
       <Card
         title={stackActive ? '累计盈亏 / 组合资金' : '累计盈亏折线'}

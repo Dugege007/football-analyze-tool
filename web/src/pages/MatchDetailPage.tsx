@@ -30,7 +30,8 @@ import { DEFAULT_STRATEGY, STRATEGY_WHITELIST } from '../api/strategies'
 import OddsWaterTimelineChart from '../components/OddsWaterTimelineChart'
 import { HelpTip, LabelWithHelp } from '../components/HelpTip'
 import { isCollectorEmpty } from '../sheet/types'
-import { apiBase, useDbSource } from '../api/dataSource'
+import { apiBase } from '../api/dataSource'
+import { formatPopularityDiff } from '../api/popularity'
 import type {
   AsianLineFull,
   AsianPhases,
@@ -106,17 +107,15 @@ export default function MatchDetailPage() {
   const [predError, setPredError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [timelineOpen, setTimelineOpen] = useState(true)
-  const [dbSource] = useDbSource()
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError(null)
 
-    const base = apiBase(dbSource)
     Promise.all([
-      getMatch(matchId, base),
-      getMatchOdds(matchId, base).catch(() => null),
+      getMatch(matchId, apiBase),
+      getMatchOdds(matchId, apiBase).catch(() => null),
     ])
       .then(([d, o]) => {
         if (cancelled) return
@@ -134,13 +133,13 @@ export default function MatchDetailPage() {
     return () => {
       cancelled = true
     }
-  }, [matchId, dbSource])
+  }, [matchId])
 
   useEffect(() => {
     let cancelled = false
     setPredError(null)
     setPrediction(null)
-    getMatchPrediction(matchId, strategy, apiBase(dbSource))
+    getMatchPrediction(matchId, strategy, apiBase)
       .then((p) => {
         if (!cancelled) setPrediction(p.data)
       })
@@ -150,7 +149,7 @@ export default function MatchDetailPage() {
     return () => {
       cancelled = true
     }
-  }, [matchId, strategy, dbSource])
+  }, [matchId, strategy])
 
   const asianRows = useMemo(() => {
     const asian = odds?.asian ?? {}
@@ -305,6 +304,10 @@ export default function MatchDetailPage() {
                   {formatInjury(stats)}
                 </Text>
                 {metaLabel(stats, 'injury') ? <HelpTip tip={`数据来源：${metaLabel(stats, 'injury')}`} /> : null}
+              </Descriptions.Item>
+              <Descriptions.Item label="人气差值">
+                {formatPopularityDiff(stats.popularity_diff) ?? '—'}
+                {metaLabel(stats, 'popularity') ? <HelpTip tip={`数据来源：${metaLabel(stats, 'popularity')}`} /> : null}
               </Descriptions.Item>
               <Descriptions.Item label="支持率代理">
                 {stats.support_proxy_odds ?? '—'}

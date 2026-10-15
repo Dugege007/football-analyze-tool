@@ -23,8 +23,6 @@ import { AgGridReact } from 'ag-grid-react'
 import { AG_GRID_LOCALE_CN } from '@ag-grid-community/locale'
 import { HelpTip } from '../components/HelpTip'
 import { DEFAULT_STRATEGY } from '../api/strategies'
-import { useDbSource } from '../api/dataSource'
-import { DataSourceSwitch } from '../api/DataSourceBar'
 import { baseCols, bookCols, jcCols, predCols, type Market } from '../sheet2/columns'
 import { apiBooks, loadRows, type DataMode } from '../sheet2/load'
 import { BOOKS, BOOK_NAME, type Book, type Row } from '../sheet2/types'
@@ -95,7 +93,6 @@ export default function SheetPage() {
   }
   const modeParam = sp.get('data') as DataMode | null
   const [mode, setMode] = useState<DataMode>(modeParam === 'api' || modeParam === 'mock' || modeParam === 'both' ? modeParam : 'api')
-  const [dbSource, setDbSource] = useDbSource()
   const [range, setRange] = useState<[Dayjs, Dayjs]>(() => {
     // 网址可带 from、to（YYYY-MM-DD）指定日期范围，便于核对和截图
     const f = sp.get('from'), t = sp.get('to')
@@ -136,14 +133,14 @@ export default function SheetPage() {
     setLoading(true)
     setError(null)
     try {
-      setRows(await loadRows(mode, dbSource, range[0].format('YYYY-MM-DD'), range[1].format('YYYY-MM-DD'), DEFAULT_STRATEGY))
+      setRows(await loadRows(mode, range[0].format('YYYY-MM-DD'), range[1].format('YYYY-MM-DD'), DEFAULT_STRATEGY))
     } catch (e) {
       setRows([])
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
     }
-  }, [mode, dbSource, range])
+  }, [mode, range])
   useEffect(() => {
     void load()
   }, [load])
@@ -175,7 +172,6 @@ export default function SheetPage() {
           数据表
         </Typography.Title>
         <RangePicker value={range} onChange={(v) => v?.[0] && v[1] && setRange([v[0], v[1]])} allowClear={false} disabled={mode === 'mock'} />
-        <DataSourceSwitch value={dbSource} onChange={setDbSource} />
         <Space size={4}>
           <Typography.Text>数据</Typography.Text>
           <Segmented<DataMode>

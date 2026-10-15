@@ -5,7 +5,7 @@
  * 结算以后端 settlement 为准（source="backend"）；逐场拼装兜底与前端估算结算已停用（旧实现见备份 /tmp/sheet-bak-hl_v0.1-pre/）。
  * 不使用假数据；缺的字段一律 null（不编造）。
  */
-import { apiBase, metaMismatch, type DbMeta, type DbSource } from '../api/dataSource'
+import { apiBase, metaMismatch, type DbMeta } from '../api/dataSource'
 import dayjs from 'dayjs'
 import type { Direction } from '../api/types'
 import { parseHandicap } from './handicap'
@@ -46,8 +46,6 @@ export interface LoadParams {
   strategy: string
   /** 即时盘口：none | all；只在「盘口快照」视图请求 */
   includeLive: IncludeLive
-  /** 数据源：现网 /api（8787）或副本 /api-replica（8788）；默认现网 */
-  source?: DbSource
 }
 
 export interface LoadResult {
@@ -57,7 +55,7 @@ export interface LoadResult {
   backendConfigVersion: string | null
   /** 后端结算口径（settlement_version） */
   settlementVersion: string | null
-  /** 0.3.18 §12.1：响应 meta={db, promoted, readonly}（已和所选数据源核对过） */
+  /** 响应 meta={db, promoted, readonly}；已核对 meta.db 为 live */
   meta: DbMeta | null
   /** 0.3.19：响应顶层 daily_check_summary（本页日核对计数）；多页时按页累加 by_reason / n_matches */
   dailyCheckSummary: DailyCheckSummary | null
@@ -656,7 +654,7 @@ export function fromBackendRow(be: BeTableRow): ApiTableRow {
       live: [],
     }
   }
-  // 0.3.22 预留：副本将先出 ah.macau_5df（5DF 真实水位）；现网/无键则跳过
+  // 0.3.22 预留：响应带 ah.macau_5df（5DF 真实水位）时映射；无键则跳过
   const v5 = be.ah?.['macau_5df']
   if (v5) {
     ah.macau_5df = {
@@ -849,9 +847,7 @@ export async function loadSheet(p: LoadParams): Promise<LoadResult> {
   let sv: string | null = null
   let meta: DbMeta | null = null
   let dcs: DailyCheckSummary | null = null
-  const src: DbSource = p.source ?? 'live'
-  const base = apiBase(src)
-  const instName = src === 'replica' ? '副本实例' : '后端 8787'
+  const base = apiBase
   for (let offset = 0; ; offset += BATCH_PAGE) {
     const q = new URLSearchParams({
       date_from: p.dateFrom,
@@ -866,7 +862,7 @@ export async function loadSheet(p: LoadParams): Promise<LoadResult> {
     try {
       res = await fetch(`${base}/table/matches?${q}`)
     } catch {
-      throw new Error(`批量接口 /table/matches 连接失败，请确认${instName}已启动`)
+      throw new Error('批量接口 /table/matches 连接失败，请确认后端实例已启动')
     }
     if (!res.ok) {
       let detail = ''
@@ -882,9 +878,9 @@ export async function loadSheet(p: LoadParams): Promise<LoadResult> {
     if (!ct.includes('json')) throw new Error('批量接口 /table/matches 返回的不是 JSON')
     const body = (await res.json()) as Partial<BeTableResponse> & Partial<ApiTableResponse> & { settlement_version?: string }
     if (!body || !Array.isArray(body.items)) throw new Error('批量接口 /table/matches 响应缺少 items')
-    // 数据源标识只认响应 meta；与所选不符直接报错，不静默混用
+    // 数据来源只认响应 meta.db；不是 live 直接报错，不静默混用
     const m = (body as { meta?: DbMeta }).meta ?? null
-    const bad = metaMismatch(src, m)
+    const bad = metaMismatch(m)
     if (bad) throw new Error(bad)
     if (meta && m && meta.db !== m.db) throw new Error(`分页返回的 meta.db 前后不一致（${meta.db} / ${m.db}），已停止显示`)
     meta = m

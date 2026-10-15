@@ -18,7 +18,6 @@ import {
   type OddsTimelineResponse,
   type PhaseAnchorMark,
 } from '../api/oddsTimeline'
-import { useDbSource } from '../api/dataSource'
 
 const { Text } = Typography
 
@@ -354,7 +353,6 @@ export default function OddsWaterTimelineChart({
   active = true,
   heightPerChart = 260,
 }: OddsWaterTimelineChartProps) {
-  const [dbSource] = useDbSource()
   const [book, setBook] = useState<OddsTimelineBook>(defaultBook)
   const [logCoef, setLogCoef] = useState(DEFAULT_LOG_TIME_COEF)
   const [loading, setLoading] = useState(false)
@@ -370,12 +368,12 @@ export default function OddsWaterTimelineChart({
     setError(null)
     ;(async () => {
       try {
-        const res = await fetchOddsTimeline(matchId, book, { src: dbSource })
+        const res = await fetchOddsTimeline(matchId, book)
         if (cancelled) return
         setData(res)
         const kick = res.kickoff_at || kickoffAt || ''
         const marks = kick
-          ? await fetchPhaseAnchorsForBook(matchId, res.book || book, kick, dbSource)
+          ? await fetchPhaseAnchorsForBook(matchId, res.book || book, kick)
           : []
         if (!cancelled) setAnchors(marks)
       } catch (e) {
@@ -390,7 +388,7 @@ export default function OddsWaterTimelineChart({
     return () => {
       cancelled = true
     }
-  }, [active, matchId, book, dbSource, kickoffAt, reloadKey])
+  }, [active, matchId, book, kickoffAt, reloadKey])
 
   useEffect(() => {
     const cleanup = load()
