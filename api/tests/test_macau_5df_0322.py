@@ -116,7 +116,9 @@ def test_same_lane_no_cross_compare(v2d3):
         assert m5c.get("water_move_eligible") is True
 
 
-def test_live_macau_mid_no_data_and_5df_unavailable(live):
+def test_formal_macau_mid_manual_empty_and_5df_lane_filled(live):
+    # 2026-10-15 研究库并入正式库之后：正式库已有 5DollarFootballAPI 的澳门水位，
+    # 所以 5DF 并列列 ah.macau 在 open、mid、close 三格都有数据；手工主列 ah.macau_manual 仍然没有中盘。
     c = TestClient(app)
     r = c.get("/table/matches", params={
         "date_from": "2026-06-01", "date_to": "2026-06-01", "scope": "jc", "limit": 5,
@@ -132,8 +134,10 @@ def test_live_macau_mid_no_data_and_5df_unavailable(live):
     assert prim["open"].get("home_water") is None
     m5 = it["ah"]["macau"]
     for ph in ("open", "mid", "close"):
-        assert m5[ph]["available"] is False
-        assert m5[ph].get("hidden_reason") in ("no_data", None) or m5[ph]["available"] is False
+        assert m5[ph]["available"] is True
+        assert m5[ph]["source"].startswith("5d")
+        assert m5[ph]["water_source"] == "actual"
+        assert m5[ph]["home_water"] is not None
         assert m5[ph].get("book_lane") == "macau_5df"
 
 
