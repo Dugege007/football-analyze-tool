@@ -31,7 +31,8 @@
 │   ├── live/               实时采集 live_capture、as-of 补中盘、gap-scan、rescue_queue/worker
 │   ├── backfill/           历史补数（5DF 多公司队列、澳门中盘补水、API-Football/InferSports/football-data 日更）
 │   ├── model/              Dixon-Coles 泊松模型（N5）及其单测
-│   └── tools/              小工具（文本规范化 dry-run 等）
+│   ├── tools/              小工具（文本规范化 dry-run 等）
+│   └── sync_formal_db.ps1  启动前按 SHA256 同步正式库（未变化则跳过解压）
 ├── integrations/5dollar/   5DF 接入说明、实时采集说明、补救队列格式、响应样例（schema_example，合成数据）
 ├── docs/
 │   ├── schema/             口径卡、DDL、OpenAPI 草案、补救/采集/消歧/赛果入库等文档
@@ -232,4 +233,5 @@ npm run dev
 ### Windows 一键启动与关闭
 
 - 双击仓库根目录的 `start.bat`：在两个最小化窗口里分别启动后台接口（端口 8787）和网页界面（端口 5173），等网页可以访问后自动打开浏览器。第一次运行时如果没有 `web\node_modules`，会先自动执行 `npm install`。使用前需要已经按上文创建好 `.venv` 虚拟环境。
+- 启动后台接口之前，`start.bat` 会先运行 `scripts/sync_formal_db.ps1`。夜间任务或运维把 `app_latest.db.gz` 和 `app_latest.db.sha256` 放进 `D:\Du_Test\football\sync\`。这个目录里同时有这两份文件时，启动就用这一份；否则改用 `C:\Users\win10\football-sync\`。脚本计算本机 `D:\Du_Test\football\current\app_latest.db` 的 SHA256，并与校验文件比较。校验和一致时跳过解压，直接继续启动。校验和不同，或者本机正式库还不存在时，脚本把压缩包解压，再原子替换为 `current\app_latest.db`。同步目录不存在，或者校验文件和压缩包缺失时，脚本只给出提示，并继续用现有数据库启动。脚本不从网络下载。环境里还没有 `APP_DB_PATH` 时，启动脚本会把它设为 `D:\Du_Test\football\current\app_latest.db`，后台接口读取这份正式库。环境里还没有 `APP_DB_LABEL` 时保持 `live`，响应里的 `meta.db` 仍是 live。
 - 双击 `stop.bat`：不弹出任何提示，直接关闭这两个窗口和其中的服务进程，并释放 8787 和 5173 端口。
