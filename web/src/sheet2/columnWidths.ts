@@ -8,8 +8,8 @@ export const COLUMN_WIDTHS = {
   'base.jcNo': 80, // 编号
   'base.kickoff': 100, // 开赛时间
   'base.league': 90, // 赛事
-  'base.home': 100, // 主队
-  'base.away': 100, // 客队
+  'base.home': 120, // 主队
+  'base.away': 120, // 客队
   'base.score': 60, // 比分
   'base.goals': 60, // 总进球
   'base.outcome': 48, // 赛果
