@@ -23,6 +23,8 @@ import type { MatchListItem } from '../api/types'
 import { PICK_COLUMNS, formatMarketCell, hasEstimatedStake } from '../api/pickFormat'
 import { buildDailyMessage, countBetMatches, type MessageMatch } from '../api/dailyMessageTemplate'
 import { HelpTip, LabelWithHelp } from '../components/HelpTip'
+import { DisplayLeague, DisplayTeam } from '../components/DisplayName'
+import { matchLabels } from '../names/matchLabels'
 
 const PICK_TIPS: Record<string, string> = {
   ah: '亚盘按雷速体育的规则显示：+ 表示所下注的一方让球，- 表示所下注的一方受让。\nx 后面的数字是下注份数；份数后面带 * 表示冻结预测没有记录份数，份数是按方案规则推算的，复制出去的消息不带 *。\n不下注显示「-」。',
@@ -122,12 +124,15 @@ export default function MatchListPage() {
     {
       title: '联赛',
       width: 96,
-      render: (_, row) => row.match.competition?.name ?? '—',
+      render: (_, row) => {
+        const labels = matchLabels(row.match)
+        return <DisplayLeague name={labels.league} title={labels.leagueTitle} />
+      },
     },
     {
       title: '主队',
       align: 'right',
-      render: (_, row) => <Text strong>{row.match.teams.home}</Text>,
+      render: (_, row) => <DisplayTeam label={matchLabels(row.match).home} strong />,
     },
     {
       title: '',
@@ -141,7 +146,7 @@ export default function MatchListPage() {
     },
     {
       title: '客队',
-      render: (_, row) => <Text strong>{row.match.teams.away}</Text>,
+      render: (_, row) => <DisplayTeam label={matchLabels(row.match).away} strong />,
     },
     {
       title: <LabelWithHelp label="开赛时间" tip="北京时间。分钟未知时只显示到小时。" />,
@@ -199,11 +204,13 @@ export default function MatchListPage() {
 
   const messageMatches: MessageMatch[] = items.map((row) => {
     const ms = row.match.kickoff_at ? new Date(row.match.kickoff_at).getTime() : NaN
+    // 预览和复制出去的文字使用与表格相同的赛事简称和队名常用中文名。
+    const labels = matchLabels(row.match)
     return {
       jcId: row.match.jc?.id,
-      league: row.match.competition?.name,
-      home: row.match.teams.home,
-      away: row.match.teams.away,
+      league: labels.league,
+      home: labels.home.text ?? row.match.teams.home,
+      away: labels.away.text ?? row.match.teams.away,
       kickoffText: formatKickoff(row),
       kickoffMs: Number.isNaN(ms) ? null : ms,
       picks: row.picks,

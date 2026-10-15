@@ -11,6 +11,7 @@
  * Updated on 2026-10-14 from the finalised standard approved by 分析师:
  * odds-data/research/name-standard-2026-10-14/competitions.csv (with README.md); every alias in its aliases column maps to its canonical name.
  * Copied by hand into this file on 2026-10-14. When the backend API returns standard names, delete this table and read the API field instead.
+ * The data sheet, the schedule page, and the match detail header all import this function, so a league keeps one short name.
  * A league with no record shows its source name unchanged.
  */
 const LEAGUE_DISPLAY: Record<string, string> = {

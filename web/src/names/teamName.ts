@@ -10,6 +10,7 @@
  * and the aliases appear in the hover. Teams that cannot be identified keep their source name and get a 待确认 marker (see PENDING_TEAMS).
  * 济州SK FC is an alias of 济州SK (one team), per 分析师 on 2026-10-14; teams.csv did not yet list it when copied.
  * Copied by hand into this file on 2026-10-14. When the backend API returns standard names, delete this table and read the API field instead.
+ * The data sheet, the schedule page, and the match detail header all import these functions, so a team keeps one common name.
  * PAUN古比斯 is listed in the merge_pending_aliases column, not as an alias, so it keeps its source name until the user approves the merge;
  * teams in the KuPS group and teams with no record show the source name unchanged;
  * they are listed in web/docs/team-names-pending.csv.

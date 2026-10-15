@@ -1,17 +1,9 @@
-import { isTeamPending, teamAliasTip, teamCommon } from './teamName'
-import { leagueShort } from './leagueShort'
+import { isTeamPending, teamAliasTip, teamCommon } from '../names/teamName'
+import { leagueShort } from '../names/leagueShort'
 import type { ColDef, ColGroupDef, ICellRendererParams } from 'ag-grid-community'
 import { Tag, Tooltip } from 'antd'
 import type { ReactNode } from 'react'
-
-/** Small marker next to a team that is not yet identified; the hover says 待确认. */
-function PendingMark() {
-  return (
-    <Tooltip title="待确认">
-      <span className="team-pending-mark" style={{ marginLeft: 2, fontSize: 10, color: '#faad14', cursor: 'help', verticalAlign: 'super' }}>*</span>
-    </Tooltip>
-  )
-}
+import { TeamPendingMark } from '../components/TeamPendingMark'
 import { formatPick } from '../api/pickFormat'
 import { alignClass, w, type WidthKey } from './columnWidths'
 import {
@@ -122,10 +114,10 @@ function baseChildren(): Col[] {
       cellRenderer: (p: P) => <span title={p.data?.match.league ?? undefined}>{p.value}</span> },
     { colId: 'home', headerName: '主队', width: w('base.home'), pinned: 'left', valueGetter: (p) => teamCommon(p.data?.match.home_team, p.data?.match.home_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league)) ?? '-',
       // The cell shows the common name; hovering lists the other names of the same team.
-      cellRenderer: (p: P) => <span title={teamAliasTip(p.data?.match.home_team, p.data?.match.home_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league))}>{p.value}{isTeamPending(p.data?.match.home_team, p.data?.match.home_team_canonical, p.data?.match.home_team_pending_confirm) && <PendingMark />}</span> },
+      cellRenderer: (p: P) => <span title={teamAliasTip(p.data?.match.home_team, p.data?.match.home_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league))}>{p.value}{isTeamPending(p.data?.match.home_team, p.data?.match.home_team_canonical, p.data?.match.home_team_pending_confirm) && <TeamPendingMark />}</span> },
     { colId: 'away', headerName: '客队', width: w('base.away'), pinned: 'left', valueGetter: (p) => teamCommon(p.data?.match.away_team, p.data?.match.away_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league)) ?? '-',
       // The cell shows the common name; hovering lists the other names of the same team.
-      cellRenderer: (p: P) => <span title={teamAliasTip(p.data?.match.away_team, p.data?.match.away_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league))}>{p.value}{isTeamPending(p.data?.match.away_team, p.data?.match.away_team_canonical, p.data?.match.away_team_pending_confirm) && <PendingMark />}</span> },
+      cellRenderer: (p: P) => <span title={teamAliasTip(p.data?.match.away_team, p.data?.match.away_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league))}>{p.value}{isTeamPending(p.data?.match.away_team, p.data?.match.away_team_canonical, p.data?.match.away_team_pending_confirm) && <TeamPendingMark />}</span> },
     {
       colId: 'score', headerName: '比分', width: w('base.score'), pinned: 'left',
       cellRenderer: (p: P) => {

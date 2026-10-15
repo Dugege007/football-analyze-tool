@@ -16,6 +16,11 @@ export interface Match {
   kickoff_at?: string | null
   kickoff_minute_known?: boolean
   teams: { home: string; away: string }
+  /**
+   * 主队、客队是否还认不出来。
+   * 列表和详情接口都会返回；为 true 时队名旁显示待确认星号。
+   */
+  teams_pending_confirm?: { home?: boolean | null; away?: boolean | null } | null
   ids?: Record<string, unknown>
 }
 

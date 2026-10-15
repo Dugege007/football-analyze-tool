@@ -29,6 +29,8 @@ import { LEAK_SUSPECT_TAG, labelDataSource, labelSettleBook, readLedgerNote, rea
 import { DEFAULT_STRATEGY, STRATEGY_WHITELIST } from '../api/strategies'
 import OddsWaterTimelineChart from '../components/OddsWaterTimelineChart'
 import { HelpTip, LabelWithHelp } from '../components/HelpTip'
+import { DisplayLeague, DisplayTeam } from '../components/DisplayName'
+import { matchLabels } from '../names/matchLabels'
 import { isCollectorEmpty } from '../sheet/types'
 import { apiBase } from '../api/dataSource'
 import { formatPopularityDiff } from '../api/popularity'
@@ -175,6 +177,7 @@ export default function MatchDetailPage() {
   }
 
   const { match, stats } = detail
+  const labels = matchLabels(match)
   const h2h = (stats.h2h ?? {}) as Record<string, unknown>
   const h2hLast6 = (h2h.last6 ?? {}) as Record<string, number>
   const recent = (stats.recent ?? {}) as Record<string, unknown>
@@ -195,7 +198,7 @@ export default function MatchDetailPage() {
                 </Link>
               ),
             },
-            { title: match.jc?.id ?? match.teams.home },
+            { title: match.jc?.id ?? labels.home.text ?? match.teams.home },
           ]}
         />
         <Tag color={source === 'api' ? 'success' : 'warning'}>
@@ -206,11 +209,13 @@ export default function MatchDetailPage() {
       <div>
         <Space align="center" wrap>
           {match.jc && <Tag color="geekblue">{match.jc.id}</Tag>}
-          <Tag>{match.competition?.name ?? '—'}</Tag>
+          <Tag>
+            <DisplayLeague name={labels.league} title={labels.leagueTitle} />
+          </Tag>
           <Tag>{match.scope === 'jingcai' ? '竞彩' : '扩展'}</Tag>
         </Space>
         <Title level={3} style={{ marginTop: 8, marginBottom: 4 }}>
-          {match.teams.home} vs {match.teams.away}
+          <DisplayTeam label={labels.home} /> vs <DisplayTeam label={labels.away} />
         </Title>
         <Text type="secondary">
           竞彩日 {match.date}
