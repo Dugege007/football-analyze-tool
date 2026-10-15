@@ -19,6 +19,7 @@ REASON_ZH: dict[str, str] = {
     "book_not_open": "机构还没开出这个盘",
     "no_source": "这家机构这个盘种没有可用来源",
     "not_captured": "时刻已过但没有采到，补数也没补到",
+    "invalid_line_step": "临盘不是 0.25 的整数倍，不能按四分之一盘结算",
     "suspect_truncated": "初盘疑似被截断，不可信",
     "too_few_books": "参与平均的机构少于两家",
     "deviation_too_large": "盘口偏离多数盘口三档及以上，已剔除",

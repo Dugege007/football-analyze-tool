@@ -107,7 +107,7 @@ def test_table_nested_top_level_zh_and_not_on_sale(tmp_path, monkeypatch):
 # 2026-10-14：接口可能返回的原因代码都必须有中文说明
 API_REASON_CODES = (
     # 盘口格子、平均格子、剔除原因
-    "not_due", "book_not_open", "no_source", "not_captured", "suspect_truncated", "too_few_books",
+    "not_due", "book_not_open", "no_source", "not_captured", "invalid_line_step", "suspect_truncated", "too_few_books",
     "deviation_too_large", "conversion_failed",
     # 竞彩格子与赛果
     "collector_empty", "legacy_home_only", "jc_1x2_incomplete", "jc_not_on_sale", "probe_not_sporttery_official",
@@ -145,7 +145,7 @@ def test_source_literal_reasons_registered():
     pat = re.compile(r'''["'](\w*reason)["']\s*\]?\s*[:=]\s*["']([a-z0-9_;]+)["']''')
     status_values = {"ok", "insufficient", "unavailable", "pending"}
     missing = []
-    for f in ("table_matches.py", "avg_cells.py", "open_status.py", "avg_conversion.py"):
+    for f in ("table_matches.py", "avg_cells.py", "open_status.py", "avg_conversion.py", "market_settle.py"):
         for line in (root / f).read_text(encoding="utf-8").splitlines():
             for m in pat.finditer(line):
                 v = m.group(2)
