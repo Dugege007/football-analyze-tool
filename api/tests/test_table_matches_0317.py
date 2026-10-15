@@ -156,6 +156,14 @@ def test_hl_v02_config_and_real_only_baseline_counts(table):
                 assert c["return_rate_baseline_n"] == exp, (which, b, p, it["match_id"])
                 if c["return_rate"] is not None and c["baseline_method"] == "empirical":
                     assert exp >= 20
-    if which == "live":  # 现网皇冠/威廉全为档位中点 → 不进样本
-        assert all(it["ah"][b][p]["return_rate_baseline_n"] == 0
-                   for it in items for b in ("crown", "william") for p in ("open", "mid", "close"))
+    if which == "live":
+        # 并库前正式库的皇冠、威廉全为档位中点，基准样本数恒为 0；并库后正式库里皇冠和威廉有少量真实水位
+        # （皇冠开盘 21 场、中盘和临盘各 1 场，威廉开盘 20 场），其余仍是档位中点。
+        # 档位中点永远不进样本：每一格第一个真实水位所在竞彩日（含当天）之前的格子，样本数必须仍是 0。
+        for b in ("crown", "william"):
+            for p in ("open", "mid", "close"):
+                actual_days = [it["match"]["jingcai_date"] for it in items
+                               if it["ah"][b][p]["water_source"] == "actual" and it["ah"][b][p]["return_rate"] is not None]
+                first_actual = min(actual_days) if actual_days else "9999-12-31"
+                assert all(it["ah"][b][p]["return_rate_baseline_n"] == 0
+                           for it in items if it["match"]["jingcai_date"] <= first_actual), (b, p)
