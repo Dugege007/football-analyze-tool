@@ -84,7 +84,8 @@ def test_due_schedule():
     assert not R.due(m, None, ko + dt.timedelta(hours=6, minutes=1))
 
 
-def test_check_db_path_refuses_production(tmp_path):
+def test_check_db_path_refuses_production(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "FORMAL_MERGED", False)  # 旧语义：未合并时拒写正式库
     with pytest.raises(SystemExit):
         R.check_db_path(R.PROD_DB)
     with pytest.raises(SystemExit):
@@ -290,3 +291,8 @@ def test_sporttery_import_dry_run_records_nothing(tmp_path):
     assert r["dry_run"] and not r["ok"] and R.refresh_records(out) == []
     r = R.import_sporttery_bundle(_bundle(tmp_path, now), tmp_path / "cache", out, now, dry_run=True)
     assert r["ok"] and not (tmp_path / "cache").exists() and R.refresh_records(out) == []
+
+
+def test_check_db_path_allows_production_after_merge(monkeypatch):
+    monkeypatch.setattr(R, "FORMAL_MERGED", True)  # 合并后模式：正式库是唯一库
+    assert R.check_db_path(R.PROD_DB)
