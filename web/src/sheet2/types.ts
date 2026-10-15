@@ -128,10 +128,21 @@ export interface ResultReason {
   missing_reason_zh?: string | null
 }
 
+/** 亚盘、大小球相对参考侧的五态。欧盘赛果不使用这套五态，字段留空。 */
+export type MarketSettleCode = 'win' | 'win_half' | 'push' | 'lose_half' | 'lose'
+
+/** 机构赛果单格共用字段。输赢由接口算好，页面只读这些字段。 */
+interface BookMarketCell extends ResultReason {
+  cell_status?: CellStatus | null
+  /** 接口写好的短文案，例如「主+0.25」「2.25大」「胜 1.11」「走水」。 */
+  display_text?: string | null
+  settle_code?: MarketSettleCode | null
+}
+
 export interface ByBookResult {
-  ah?: ({ line: number | null; side: 'home' | 'away' | null; push: boolean; cell_status?: CellStatus } & ResultReason) | null
-  ou?: ({ line: number | null; side: 'over' | 'under' | null; push: boolean; cell_status?: CellStatus } & ResultReason) | null
-  x1x2?: ({ side: 'home' | 'draw' | 'away' | null; odds: number | null; cell_status?: CellStatus } & ResultReason) | null
+  ah?: ({ line: number | null; side: 'home' | 'away' | null; push: boolean } & BookMarketCell) | null
+  ou?: ({ line: number | null; side: 'over' | 'under' | null; push: boolean } & BookMarketCell) | null
+  x1x2?: ({ side: 'home' | 'draw' | 'away' | null; odds: number | null } & BookMarketCell) | null
 }
 
 export type SettleCode = 'win' | 'win_half' | 'push' | 'lose_half' | 'lose' | 'no_bet'

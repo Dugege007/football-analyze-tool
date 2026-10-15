@@ -1,5 +1,6 @@
+import { formatPick } from '../api/pickFormat'
 import { formatHandicap } from '../sheet/handicap'
-import type { AhCell, CellStatus, MoveDir, Move, OuCell, Phase, Phased, X1x2Cell } from './types'
+import type { AhCell, ByBookResult, CellStatus, MoveDir, Move, OuCell, Phase, Phased, X1x2Cell } from './types'
 
 /** 亚盘 line 主队让球为正（与现有接口、formatHandicap 一致）；显示时让球方带 +。 */
 export const ahLineText = (line: number | null | undefined): string => formatHandicap(line)
@@ -67,6 +68,79 @@ export function resultCellReason(cell: {
 }
 
 export const fmtNum = (v: number | null | undefined): string => (v == null ? '-' : String(Number(v.toFixed(2))))
+
+export type BookMarket = 'ah' | 'ou' | 'x1x2'
+export type BookMarketTone = 'orange' | 'blue' | 'plain'
+
+/** 机构赛果格的展示决定。dash 对应页面「-」；status 只用于接口已确认缺失的格子。 */
+export type BookMarketResultView =
+  | { kind: 'dash' }
+  | { kind: 'status'; status: 'unavailable' | 'insufficient'; reason: string | null; reasonZh: string | null }
+  | { kind: 'text'; text: string; tone: BookMarketTone }
+
+interface BookCell {
+  line?: number | null
+  side?: string | null
+  push?: boolean | null
+  odds?: number | null
+  display_text?: string | null
+  cell_status?: CellStatus | null
+  null_reason?: string | null
+  null_reason_zh?: string | null
+  cell_status_reason?: string | null
+  cell_status_reason_zh?: string | null
+  missing_reason?: string | null
+  missing_reason_zh?: string | null
+}
+
+/** 短文案优先。没有短文案时，只按接口已经给出的 side、line、odds 做与现页面相同的格式化，不另算输赢。 */
+function bookCellText(market: BookMarket, cell: BookCell): string | null {
+  const written = cleanText(cell.display_text)
+  if (written) return written
+  if (cell.push) return '走水'
+  if (market === 'ah') {
+    if (cell.side !== 'home' && cell.side !== 'away') return null
+    return formatPick({ market: 'ah', side: cell.side === 'home' ? '主' : '客', line: cell.line ?? null })
+  }
+  if (market === 'ou') {
+    if (cell.side !== 'over' && cell.side !== 'under') return null
+    return formatPick({ market: 'ou', side: cell.side === 'over' ? '大' : '小', line: cell.line ?? null })
+  }
+  if (cell.side !== 'home' && cell.side !== 'draw' && cell.side !== 'away') return null
+  const label = cell.side === 'home' ? '胜' : cell.side === 'draw' ? '平' : '负'
+  return `${label} ${fmtNum(cell.odds)}`
+}
+
+function bookCellTone(cell: BookCell): BookMarketTone {
+  if (cell.push) return 'plain'
+  if (cell.side === 'home' || cell.side === 'over') return 'orange'
+  if (cell.side === 'away' || cell.side === 'under') return 'blue'
+  return 'plain'
+}
+
+/**
+ * 亚盘赛果、大小赛果、欧盘赛果只读 result.by_book。
+ * 整段为空、某一格缺失、状态为空，或状态为 pending 时，页面显示「-」。
+ * 只有 cell_status 为 unavailable 或 insufficient 时显示「无法获取」，并带上该格的悬停原因。
+ */
+export function bookMarketResultView(
+  byBook: Partial<Record<string, ByBookResult>> | null | undefined,
+  book: string,
+  market: BookMarket,
+): BookMarketResultView {
+  if (!byBook) return { kind: 'dash' }
+  const cell = byBook[book]?.[market]
+  if (!cell) return { kind: 'dash' }
+  const status = cell.cell_status
+  if (status === 'unavailable' || status === 'insufficient') {
+    const reason = resultCellReason(cell)
+    return { kind: 'status', status, reason: reason.reason, reasonZh: reason.reasonZh }
+  }
+  if (status === 'pending') return { kind: 'dash' }
+  const text = bookCellText(market, cell)
+  if (!text) return { kind: 'dash' }
+  return { kind: 'text', text, tone: bookCellTone(cell) }
+}
 
 /** 格子状态：接口没给 cell_status 时一律按「无法获取」（草案第 8 节）。 */
 export function statusOf(c: { cell_status?: CellStatus | null; avg_detail?: { averaged_count?: number | null } | null } | null | undefined): CellStatus {

@@ -13,6 +13,7 @@ import {
   ahMove,
   bjTime,
   sourceText,
+  bookMarketResultView,
   fmtNum,
   oddsCellReason,
   ouMove,
@@ -346,6 +347,12 @@ function oddsGroup(book: Book, market: Market, phase: Phase, first: boolean): Co
   })
 }
 
+/**
+ * 亚盘赛果、大小赛果、欧盘赛果只读接口 result.by_book。
+ * 未完赛、整段 by_book 为空、格子缺失或状态为 pending 时显示「-」。
+ * 只有该格 cell_status 为 unavailable 或 insufficient 时显示「无法获取」。
+ * 状态为 ok 时优先显示 display_text；没有短文案才按接口已给的 side、line、odds 格式化。
+ */
 function resultCol(book: Book, market: Market, first: boolean): ColDef<Row> {
   const label = market === 'ah' ? '亚盘赛果' : market === 'ou' ? '大小赛果' : '欧盘赛果'
   return {
@@ -358,26 +365,12 @@ function resultCol(book: Book, market: Market, first: boolean): ColDef<Row> {
       const r = p.data
       if (voidOf(r)) return <VoidText r={r} />
       if (!r || !finished(r)) return '-'
-      const bb = r.result?.by_book
-      if (!bb) return <StatusText st="unavailable" />
-      const x = bb[book]?.[market]
-      if (!x) return <StatusText st="unavailable" />
-      if (market === 'ah') {
-        const a = x as { line: number | null; side: 'home' | 'away' | null; push: boolean; cell_status?: CellStatus }
-        if (a.push) return '走水'
-        if (!a.side) return <ResultStatus cell={a} />
-        const side = a.side === 'home' ? '主' : '客'
-        return <span className={a.side === 'home' ? 't-orange' : 't-blue'}>{formatPick({ market: 'ah', side, line: a.line })}</span>
-      }
-      if (market === 'ou') {
-        const o = x as { line: number | null; side: 'over' | 'under' | null; push: boolean; cell_status?: CellStatus }
-        if (o.push) return '走水'
-        if (!o.side) return <ResultStatus cell={o} />
-        return <span className={o.side === 'over' ? 't-orange' : 't-blue'}>{formatPick({ market: 'ou', side: o.side === 'over' ? '大' : '小', line: o.line })}</span>
-      }
-      const e = x as { side: 'home' | 'draw' | 'away' | null; odds: number | null; cell_status?: CellStatus }
-      if (!e.side) return <ResultStatus cell={e} />
-      return wdlSpan(e.side, e.odds)
+      const view = bookMarketResultView(r.result?.by_book, book, market)
+      if (view.kind === 'dash') return '-'
+      if (view.kind === 'status') return <StatusText st={view.status} reason={view.reason} reasonZh={view.reasonZh} />
+      if (view.tone === 'orange') return <span className="t-orange">{view.text}</span>
+      if (view.tone === 'blue') return <span className="t-blue">{view.text}</span>
+      return view.text
     },
   }
 }

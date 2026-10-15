@@ -157,6 +157,7 @@ export function mapApiRow(it: Raw): Row {
           away_goals: r.away_goals ?? null,
           total_goals: r.total_goals ?? null,
           outcome_1x2: r.outcome_1x2 ?? null,
+          // 机构赛果整段照接口原样保留。整段为空时页面显示「-」，这里不改成无法获取，也不用临盘重算。
           by_book: r.by_book ?? null,
           jc: mapJcResult(r.jc),
         }
