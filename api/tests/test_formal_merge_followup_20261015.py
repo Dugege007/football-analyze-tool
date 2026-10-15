@@ -100,3 +100,20 @@ def test_manual_open_earliest_quote_ignores_5df_rows():
     _, none_left = tm._ts_quotes(only_5df, 1, "macau", "asian", as_of,
                                  row_filter=lambda r: not tm.is_5df_macau_row(r))
     assert none_left is None
+
+
+def test_whole_formal_table_output_never_contains_a_batch_name(monkeypatch):
+    """Every source string in the full table output, including the averaging detail, is free of batch names."""
+    from fastapi.testclient import TestClient
+    import app.db as adb
+    from app.main import app
+    live_db = ROOT / "data" / "app.db"
+    if not live_db.exists():
+        pytest.skip("this checkout has no formal database copy")
+    monkeypatch.setattr(adb, "DB_PATH", live_db)
+    monkeypatch.setattr(adb, "DB_LABEL", "live")
+    monkeypatch.setattr(adb, "READONLY", True)
+    body = TestClient(app).get("/table/matches", params={
+        "date_from": "2000-01-01", "date_to": "2099-12-31", "scope": "all", "limit": 1000}).json()
+    assert len(body["items"]) > 0
+    assert "gapfill" not in json.dumps(body)
