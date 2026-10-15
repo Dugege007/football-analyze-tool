@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""把 v2d3 的 kickoff_at + kickoff_minute_known(+kickoff_hour) 一次性导入现网。
+"""【已作废或仅归档用】本脚本的数据来源是已归档的 v2d3 副本，用途是把开赛分钟一次性导入旧现网；研究库已并入正式库，该导入已经完成，不得在正式库上再次运行。保留原逻辑仅供归档查阅。
+
+把 v2d3 的 kickoff_at + kickoff_minute_known(+kickoff_hour) 一次性导入现网。
 
 拍板（足球分析师 2026-10-07）：
 - 仅写 matches 开赛字段；不写 odds_asian / odds_snapshot / 澳门水位 / 1X2

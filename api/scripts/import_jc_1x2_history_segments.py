@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Import the Jingcai win draw loss odds history from 5DollarFootballAPI (bookmaker chinasportslottery,
+"""【已作废或仅归档用】本脚本只允许写已归档的 v2d3 研究副本；研究库已并入正式库，不得在正式库上运行。保留原逻辑仅供归档查阅。
+
+Import the Jingcai win draw loss odds history from 5DollarFootballAPI (bookmaker chinasportslottery,
 market 1x2) into odds_timeline_seg as book=jc, market=euro_1x2 (analyst correction, 2026-10-10).
 
 Input: the raw files of the full-match backfill queue,
