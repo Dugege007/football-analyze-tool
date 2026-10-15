@@ -2,7 +2,7 @@ import { LabelWithHelp } from '../components/HelpTip'
 import { useState } from 'react'
 import { Button, Card, Empty, InputNumber, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import { getValidationRun, type ValidationRunDetail } from '../api/client'
-import { apiBase, DB_SOURCE_LABEL, type DbSource } from '../api/dataSource'
+import { apiBase } from '../api/dataSource'
 import {
   LEAK_SUSPECT_TAG,
   formatRoi,
@@ -27,8 +27,8 @@ function num(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null
 }
 
-/** 只读查看已有验证记录（GET /strategies/runs/{编号}）；不新建任何记录，副本模式下也可用 */
-export default function RunViewer({ source }: { source: DbSource }) {
+/** 只读查看已有验证记录（GET /strategies/runs/{编号}）；不新建任何记录 */
+export default function RunViewer() {
   const [runId, setRunId] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [runs, setRuns] = useState<ValidationRunDetail[]>([])
@@ -37,7 +37,7 @@ export default function RunViewer({ source }: { source: DbSource }) {
     if (runId == null) return
     setLoading(true)
     try {
-      const r = await getValidationRun(runId, apiBase(source))
+      const r = await getValidationRun(runId, apiBase)
       setRuns((prev) => [r, ...prev.filter((x) => x.id !== r.id)].slice(0, 8))
     } catch (e) {
       message.error(e instanceof Error ? e.message : '读取失败')
@@ -52,7 +52,7 @@ export default function RunViewer({ source }: { source: DbSource }) {
       title={
         <LabelWithHelp
           label="查看已有验证记录"
-          tip={`只读取已有的验证记录，不新建记录。当前数据源：${DB_SOURCE_LABEL[source]}。`}
+          tip="只读取已有的验证记录，不新建记录。"
         />
       }
     >

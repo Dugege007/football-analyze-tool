@@ -197,8 +197,7 @@ npm run dev
 
 把 `web/.env.example` 复制为 `web/.env.local`，然后修改：
 
-- `VITE_API_BASE`：后端接口地址，默认 `http://127.0.0.1:8787`。如果后端换了端口，请同步修改这里。
-- `VITE_API_REPLICA_BASE`：可选的只读副本实例地址，默认 `http://127.0.0.1:8788`。没有副本实例时不需要修改。
+- `VITE_API_BASE`：正式库接口地址，默认 `http://127.0.0.1:8787`。如果后端换了端口，请同步修改这里。页面只连接这一份库。
 - `VITE_DEV_PORT`：网页界面开发服务器端口，默认 5173。
 
 如果你让浏览器直接访问后端接口（不经过网页界面开发服务器的转发），需要在仓库根目录的 `.env` 中用 `APP_CORS_ORIGINS` 列出允许访问的网页地址。跨源资源共享（Cross-Origin Resource Sharing，简称 CORS）默认只允许 `http://127.0.0.1:5173` 和 `http://localhost:5173`。

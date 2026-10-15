@@ -37,7 +37,7 @@ export interface Presence {
   x1x2DrawAway: Record<AhBook, boolean>
   x1x2Rr: Record<AhBook, boolean>
   kelly: Record<AhBook, boolean>
-  /** 0.3.18：凯利有值的阶段（副本只有初盘有凯利，现网暂无） */
+  /** 0.3.18：凯利有值的阶段 */
   kellyPhases: Record<AhBook, ('open' | 'close')[]>
   /** 欧赔接口收盘价（api_closing，参考） */
   closingRef: Record<AhBook, boolean>
@@ -84,7 +84,7 @@ export function computePresence(rows: SheetRow[]): Presence {
     jcPresent: rows.some((r) => r.jcPresent),
     jcHhadPresent: rows.some((r) => r.jcHhadPresent),
     confidence: any((r) => r.confidence),
-    // 0.3.22：任一阶段 available 且有线/水 → 出并列列（副本亮、现网全 false 则藏）
+    // 0.3.22：任一阶段 available 且有线/水 → 出并列列（全无则藏）
     macau5df: rows.some(
       (r) =>
         r.ahMacau5df != null &&

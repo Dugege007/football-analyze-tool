@@ -217,7 +217,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 export async function listStrategies(base = '/api'): Promise<WithSource<{ items: StrategyDef[] }>> {
   const live = await tryFetch<{ items: StrategyDef[] }>('/strategies', base)
   if (live) return { data: live, source: 'api' }
-  throw new Error(`无法读取方案列表（请确认${base === '/api' ? ' 8787' : '副本实例'} 已启动）`)
+  throw new Error('无法读取方案列表（请确认 8787 已启动）')
 }
 
 export async function listStrategyTemplates(): Promise<
@@ -442,7 +442,7 @@ export async function compareStrategies(
   return postJson<CompareResponse>('/strategies/compare', body)
 }
 
-/** 只读：按编号读已有验证记录（GET，不新建任何记录）；base 为 /api 或 /api-replica */
+/** 只读：按编号读已有验证记录（GET，不新建任何记录） */
 export interface ValidationRunDetail {
   id: number
   strategy_def_id?: number | null
