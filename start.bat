@@ -10,6 +10,12 @@ if not exist "web\node_modules" (
   echo 第一次运行，正在安装网页依赖……
   pushd web & call npm install --no-fund --no-audit & popd
 )
+rem 启动前同步正式库。校验和相同则跳过解压；同步失败不阻止后面的启动。
+echo 正在核对正式库校验和……
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\sync_formal_db.ps1"
+if errorlevel 1 echo 正式库同步没有完成，将使用现有数据库继续启动。
+if not defined APP_DB_PATH set "APP_DB_PATH=D:\Du_Test\football\current\app_latest.db"
+if not defined APP_DB_LABEL set "APP_DB_LABEL=live"
 start "足球分析工具-后台接口" /min cmd /k "cd /d "%~dp0api" && ..\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8787"
 start "足球分析工具-网页界面" /min cmd /k "cd /d "%~dp0web" && npm run dev"
 echo 正在等待服务启动……
