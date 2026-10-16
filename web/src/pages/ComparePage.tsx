@@ -220,7 +220,8 @@ export default function ComparePage() {
       const body: Parameters<typeof compareStrategies>[0] = {
         strategy_ids: selectedIds,
         scope: 'jingcai',
-        settle_book: 'macau_close',
+        // 不传 settle_book，沿用接口缺省：平博临盘优先，没有再用澳门。
+        // 这次对比不会改写已经冻结的预测行。那些行在比赛详情和数据表里仍显示各自的结算盘。
         shadow: true,
         auto_validate: autoValidate,
         include_stack: includeStack,
@@ -889,7 +890,14 @@ export default function ComparePage() {
           result ? (
             <Space size={8} wrap>
               <Tag>范围 {labelScope(result.scope)}</Tag>
-              <Tag>结算 {labelSettleBook(result.settle_book)}</Tag>
+              <span>
+                <Tag>结算 {labelSettleBook(result.settle_book)}</Tag>
+                <HelpTip
+                  tip={
+                    '没有在请求里写明结算盘时，平博临盘优先，没有再用澳门。\n这一口径用于本次对比，不会改写已经冻结的预测。比赛详情和数据表仍显示每一行自己的结算盘，旧方案可能仍是澳门临盘。'
+                  }
+                />
+              </span>
               {result.settlement_version ? (
                 <Tag>
                   结算版本 {labelSettlementVersion(result.settlement_version)}

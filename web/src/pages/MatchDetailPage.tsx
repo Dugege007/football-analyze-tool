@@ -350,7 +350,14 @@ export default function MatchDetailPage() {
       </Card>
 
       <Card
-        title={<LabelWithHelp label="预测结论" tip="仅供参考，不保证输赢。默认按澳门临盘结算口径展示。" />}
+        title={
+          <LabelWithHelp
+            label="预测结论"
+            tip={
+              '仅供参考，不保证输赢。\n没有写明结算盘时，平博临盘优先，没有再用澳门。\n下面的结算盘口是这一行自己的记录。已经冻结的预测可能仍是澳门临盘，和没有写明时的默认口径不是一回事。'
+            }
+          />
+        }
         size="small"
         extra={
           <Space wrap>

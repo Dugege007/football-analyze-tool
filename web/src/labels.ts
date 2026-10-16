@@ -65,11 +65,14 @@ export function labelDataSource(source: 'api' | 'mock'): string {
   return source === 'api' ? '已连本地接口' : '假数据'
 }
 
-/** 结算盘口展示：常见值译中文，其余原样 */
+/** 结算盘口展示：常见值译中文，其余原样。缺省令牌与 docs/schema/v1_9-settle-book-pinnacle-then-macau.md 一致。 */
 export function labelSettleBook(book: string | null | undefined): string {
   if (!book) return '—'
   const map: Record<string, string> = {
-    macau_close: '澳门收盘',
+    pinnacle_then_macau: '平博临盘优先，没有再用澳门',
+    'pinnacle_close>macau_close': '平博临盘优先，没有再用澳门',
+    pinnacle_close: '平博临盘',
+    macau_close: '澳门临盘',
     macau_open: '澳门初盘',
     macau_mid: '澳门中盘',
   }

@@ -540,13 +540,12 @@ export function predCols(book: Book, blocks: PredBlock[]): ColGroupDef<Row> {
         if (!r.settlement_by_book) return <StatusText st="unavailable" />
         const s = r.settlement_by_book[book]?.ah
         if (!s) return <StatusText st="unavailable" />
-        // 是否标「按澳门结算」只看该玩法结算项的 fallback_book：亚盘、大小在多家平均下退回澳门时标注；
-        // 欧盘多家平均有平均值时按多家平均结算，后端返回 fallback_book=false，不标注。
+        // 是否标出实际机构，只看该玩法结算项的 fallback_book。机构名取 settled_with，页面不自行判断该用哪一家。
         return (
           <>
             {SETTLE_TEXT[s.code]}
             {s.fallback_book && (
-              <Tooltip title={`所选机构没有临盘，按${BOOK_NAME[s.settled_with as Book] ?? s.settled_with}临盘结算`}>
+              <Tooltip title={`实际按${BOOK_NAME[s.settled_with as Book] ?? s.settled_with}临盘结算`}>
                 <Tag className="fallback-tag" bordered={false}>
                   {BOOK_NAME[s.settled_with as Book] ?? s.settled_with}
                 </Tag>

@@ -184,7 +184,11 @@ export default function SheetPage() {
           <Space size={4}>
             <Typography.Text>结算机构</Typography.Text>
             <Select<Book> value={predBook} onChange={setPredBook} style={{ width: 120 }} options={BOOKS.map((b) => ({ value: b, label: BOOK_NAME[b] }))} />
-            <HelpTip tip={'只改变结算用的盘口和水位，预测方向不变。\n所选机构没有临盘时按澳门临盘结算，结果格标「按澳门结算」。'} />
+            <HelpTip
+              tip={
+                '只改变结算用的盘口和水位，预测方向不变。\n没有写明结算盘时，平博临盘优先，没有再用澳门。结果格只在接口标明回退时标出实际机构。\n已经冻结的预测仍读该行自己的结算盘。旧方案可能仍是澳门临盘，不要把上面的默认口径当成这些行的结算盘。'
+              }
+            />
           </Space>
         ) : (
           lockedBook && <Tag>结算机构：{BOOK_NAME[lockedBook]}</Tag>
