@@ -569,6 +569,7 @@ def insert_match(conn: sqlite3.Connection, item: dict, batch_id: int, *, write_p
             (match_id, (pred or {}).get("strategy") or "CFFXDJ_5_V3"),
         )
         if pred:
+            from app.settle_book import DEFAULT_SETTLE_BOOK
             conn.execute(
                 """
                 INSERT INTO predictions (
@@ -579,7 +580,7 @@ def insert_match(conn: sqlite3.Connection, item: dict, batch_id: int, *, write_p
                     match_id,
                     pred.get("strategy") or "CFFXDJ_5_V3",
                     pred["direction"],
-                    pred.get("settle_book") or "macau_close",
+                    pred.get("settle_book") or DEFAULT_SETTLE_BOOK,
                     json.dumps(pred.get("rationale") or [], ensure_ascii=False),
                     pred.get("confidence"),
                 ),

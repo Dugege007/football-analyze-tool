@@ -1,6 +1,8 @@
 """M5 回测引擎（纯函数，无 DB）：简化亚盘结算 + 资金曲线注额 + 多方案 stack。
 
 口径（settlement_version；默认 SETTLEMENT_VERSION）：
+- 结算盘（与水位版本正交）：未指定时 DEFAULT_SETTLE_BOOK，平博临盘优先，缺平博再用澳门临盘；
+  显式 macau_close 等单庄不回退。逐注 settled_with / fallback_book 由调用方写入注单。
 - 亚盘：主队视角 handicap；四分盘拆半；赢付 stake×water，输全损。
 - 水位（juice_source；v1.7 起库里只存真实水位，不再做档位映射）：
   * 默认 ah_v4_water_midpoint：macau → 仓库固定口径 0.95（fixed_macau）；
@@ -23,9 +25,12 @@ import math
 from datetime import date
 from typing import Any
 
-SETTLEMENT_VERSION = "ah_v4_water_midpoint"  # 默认：macau 固定 0.95（日用 / V3 对照）
+from app.settle_book import DEFAULT_SETTLE_BOOK, SETTLEMENT_BOOK_VERSION, SETTLE_BOOK_PRIORITY
+
+SETTLEMENT_VERSION = "ah_v4_water_midpoint"  # 默认水位：macau 固定 0.95（日用 / V3 对照）
 SETTLEMENT_MACAU_ACTUAL = "ah_v4_macau_actual_or_095"  # 可选：macau actual 或回落 0.95
 KNOWN_SETTLEMENT_VERSIONS = frozenset({SETTLEMENT_VERSION, SETTLEMENT_MACAU_ACTUAL})
+# 结算盘默认与上面的水位版本正交。未指定时见 DEFAULT_SETTLE_BOOK（平博临盘优先，缺则澳门）。
 
 NO_BET_DIRECTIONS = ("不下注", "skip", "none", "")
 HOME_DIRECTIONS = ("主", "home", "H")
@@ -209,8 +214,10 @@ def simulate(
         side = normalize_side(b.get("direction"))
         units_req = resolve_units(b.get("stake_rule") or {}, b.get("pred_stake")) if side else 0
         e = {**b, "side": side, "units_req": units_req, "units": units_req, "reasons": []}
+        # 逐注结算庄：优先级回测时一场是平博、一场可能退回澳门，不能用整次 run 的单一 book。
+        eff_book = e.get("settled_with") or rules.get("book", "macau")
         cens = (b.get("censored_home") if side == "主" else b.get("censored_away")) if side else None
-        e["water_censored"] = bool(cens) if (side and rules.get("book", "macau") != "macau") else False
+        e["water_censored"] = bool(cens) if (side and eff_book != "macau") else False
         if e["water_censored"]:
             e["reasons"].append("water_censored")
             if rules.get("exclude_censored"):
@@ -283,10 +290,11 @@ def simulate(
 
         # settle
         for e in group:
+            juice_book = e.get("settled_with") or book
             juice, src, jr = resolve_juice(
                 e.get("home_water") if e["side"] == "主" else e.get("away_water"),
                 float(e.get("fallback_juice") or 0.95),
-                book=book, water_src=e.get("water_src"),
+                book=juice_book, water_src=e.get("water_src"),
                 settlement_version=rules.get("settlement_version"),
             )
             e["juice_used"], e["juice_source"] = (juice, src) if e["side"] else (None, None)

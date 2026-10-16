@@ -133,7 +133,7 @@ CREATE TABLE IF NOT EXISTS league_aliases (
 
 - **每一个策略版本**、每一次对某场某玩法的预测，写入 DB（亚盘可走既有 `predictions`；多玩法走 `prediction_legs`）。
 - 唯一性：`prediction_legs` 已约定 `UNIQUE (match_id, market, strategy)`；同策略覆盖写入或版本化 —— **版本字符串是否含 git/tag TODO**。
-- 字段要点（见 `v1_1_prediction_legs.sql`）：`market`（`ah|ou|1x2|jc_hhad`）、`side`、`line`、`stake`（份，可空）、`settle_book`（默认 `macau_close`）、`rationale_json`、`gap_json`（缺字段禁止硬编）、`produced_at`。
+- 字段要点（见 `v1_1_prediction_legs.sql`）：`market`（`ah|ou|1x2|jc_hhad`）、`side`、`line`、`stake`（份，可空）、`settle_book`（2026-10-16 起缺省 `pinnacle_then_macau`，见 `v1_9-settle-book-pinnacle-then-macau.md`；已写入的 `macau_close` 不改）、`rationale_json`、`gap_json`（缺字段禁止硬编）、`produced_at`。
 - 发消息**不替代**入库；先入库再派单（或同事务）。便于回测对比。
 
 ### 4.2 日用消息范围（当前）

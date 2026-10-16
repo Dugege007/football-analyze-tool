@@ -100,7 +100,7 @@ components:
       properties:
         run_label: { type: string, nullable: true }
         scope: { type: string, default: jingcai }
-        settle_book: { type: string, default: macau_close }
+        settle_book: { type: string, default: pinnacle_then_macau, description: "缺省平博临盘优先，没有平博临盘再用澳门临盘。显式 macau_close 只走澳门。见 v1_9。" }
         shadow: { type: boolean, default: true }
         params:
           type: object
@@ -298,7 +298,7 @@ components:
         strategy_ids: { type: array, items: { type: integer } }
         strategy_keys: { type: array, items: { type: string } }
         scope: { type: string, default: jingcai }
-        settle_book: { type: string, default: macau_close }
+        settle_book: { type: string, default: pinnacle_then_macau, description: "缺省平博临盘优先，没有平博临盘再用澳门临盘。显式 macau_close 只走澳门。见 v1_9。" }
         shadow: { type: boolean, default: true }
         params: { type: object, additionalProperties: true }
         auto_validate: { type: boolean, default: true }

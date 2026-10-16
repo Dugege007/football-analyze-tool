@@ -8,6 +8,8 @@
 
 **主对比两边必须同一 `settlement_version`（默认固定 0.95）；真实水位只做同注单灵敏度副表，不当选边主裁判。**
 
+结算盘缺省自 2026-10-16 起改为平博临盘优先（`pinnacle_then_macau`），与水位版本分开。下文 curl 里写明的 `settle_book=macau_close` 仍然只走澳门。见 `v1_9-settle-book-pinnacle-then-macau.md`。
+
 ## 2. `settlement_version`
 
 | 值 | 用途 | macau 水位 |

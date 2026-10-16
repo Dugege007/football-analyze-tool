@@ -13,8 +13,9 @@
   （赛前 8h/1h，as-of）；live = 即时盘口（include_live 控制）；last_prematch = 开赛前最后一条。
 - 高亮/返还率/凯利：docs/schema/v2_0-data-table-highlight-rules.md（hl_v0）。
   后端只算返还率、按公司滚动中位数基准、凯利；高亮判定在前端。
-- 结算：复用 app.backtest（settle_pnl / resolve_juice），不改默认 settlement_version，
-  盘口取 odds_asian(settle_book) —— 与 /strategies/{id}/validate 同一取数。
+- 结算：复用 app.backtest（settle_pnl / resolve_juice），不改默认 settlement_version（水位）。
+  盘口取 odds_asian：行内 settle_book 优先（冻结的 macau_close 仍只走澳门）；为空则平博临盘优先、缺则澳门。
+  与 /strategies/{id}/validate 同一套解析。不改 market_settle。
 - 防泄漏：比赛未结束（无完整比分或 as_of < 开赛+3h）不返回 result / settlement；
   返还率基准只用竞彩日严格早于本场竞彩日的数据。
 
@@ -33,6 +34,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import backtest as bt
+from app import settle_book as sb
 from app import collection_schedule as cs
 from app import db as app_db
 from app import kickoff_drift as kd
@@ -2177,6 +2179,10 @@ Result.model_rebuild()
 class Settlement(_M_):
     settlement_version: str
     settle_book: str
+    # 实际用到的庄（pinnacle / macau）。没有可结算临盘的 no_bet 等为 null。
+    settled_with: Optional[str] = None
+    # 发生回退时为实际改用的庄（当前为 macau）；未回退为 null。
+    fallback_book: Optional[str] = None
     line: Optional[float] = None
     side: Optional[str] = None
     juice: Optional[float] = None
@@ -2396,8 +2402,9 @@ def _settle(pred: sqlite3.Row | None, res: dict | None, d: _Data, mpk: int,
         return None, "no_prediction"
     if res is None:
         return None, "result_hidden"
-    settle_book = pred["settle_book"] or "macau_close"
-    book, phase = _M()._parse_settle_book(settle_book)
+    # 行内已写死的 settle_book 原样使用（不改库）。空值才走默认：平博临盘优先，缺则澳门。
+    stored = pred["settle_book"] if "settle_book" in pred.keys() else None
+    settle_book = (str(stored).strip() if stored else "") or sb.DEFAULT_SETTLE_BOOK
     direction = (pred["direction"] or "").strip()
     units = None
     src = None
@@ -2406,6 +2413,7 @@ def _settle(pred: sqlite3.Row | None, res: dict | None, d: _Data, mpk: int,
     else:
         units, src = int(_M().DEFAULT_STAKE_RULE["default_units"]), "default_units"
     base = {"settlement_version": settlement_version, "settle_book": settle_book,
+            "settled_with": None, "fallback_book": None,
             "line": None, "side": None, "juice": None, "juice_source": None, "juice_reason": None,
             "stake_units": None, "stake_units_source": None}
     if direction in bt.NO_BET_DIRECTIONS:
@@ -2413,16 +2421,21 @@ def _settle(pred: sqlite3.Row | None, res: dict | None, d: _Data, mpk: int,
     side = bt.normalize_side(direction)
     if side is None:
         return None, "bad_direction"
-    oa = d.legacy_asian.get((mpk, book, phase))  # 与 _load_strategy_bets 同源：odds_asian(settle_book)
-    if oa is None or oa["handicap"] is None:
+    # 与 _load_strategy_bets 同源：odds_asian。显式 macau_close 不读平博。
+    resolved = sb.resolve_settle_quote(
+        lambda book, phase: d.legacy_asian.get((mpk, book, phase)),
+        settle_book,
+    )
+    if resolved.handicap is None:
         return None, "no_settle_line"
-    water = oa["home_water"] if side == "主" else oa["away_water"]
-    juice, jsrc, jreason = bt.resolve_juice(water, FALLBACK_JUICE, book=book,
-                                            water_src=oa["water_src"],
+    water = resolved.home_water if side == "主" else resolved.away_water
+    juice, jsrc, jreason = bt.resolve_juice(water, FALLBACK_JUICE, book=resolved.settled_with or "macau",
+                                            water_src=resolved.water_src,
                                             settlement_version=settlement_version)
     code, pnl = bt.settle_pnl(int(res["home_goals"]), int(res["away_goals"]),
-                              float(oa["handicap"]), side, float(units), juice)
-    return {**base, "line": float(oa["handicap"]), "side": side, "juice": _r(juice, 4),
+                              float(resolved.handicap), side, float(units), juice)
+    return {**base, "settled_with": resolved.settled_with, "fallback_book": resolved.fallback_book,
+            "line": float(resolved.handicap), "side": side, "juice": _r(juice, 4),
             "juice_source": jsrc, "juice_reason": jreason, "stake_units": units,
             "stake_units_source": src, "code": code,
             "pnl_units": round(pnl, 6), "source": "backend"}, None

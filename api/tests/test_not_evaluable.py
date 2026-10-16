@@ -46,7 +46,10 @@ NEW_KEYS = {"n_not_evaluable", "n_not_evaluable_by_reason", "n_not_evaluable_by_
             "not_evaluable_items", "by_odds_source", "odds_source_split",
             "by_open_basis", "open_basis_split",
             "by_close_basis", "close_basis_split",  # 0.3.18 C
-            "n_postpone_pending", "n_void_postponed", "postpone_items", "postpone_void_hours"}  # 0.3.19
+            "n_postpone_pending", "n_void_postponed", "postpone_items", "postpone_void_hours",  # 0.3.19
+            # 2026-10-16 结算盘优先级回显；显式 macau_close 的盈亏与行指纹不因此改变
+            "settle_book_priority", "settlement_book_version",
+            "settled_with_counts", "n_settle_book_fallback"}
 PROD_DB = ROOT / "data" / "app.db"
 V2D3_DB = ROOT / "data" / "v2d3" / "app.db"
 

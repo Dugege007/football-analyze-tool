@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import connect
 from app import backtest as bt
+from app import settle_book as sb
 from app import shadow_evaluable as shadow_ev  # N5/N5-PIN 不可评估记账
 from app import collection_schedule
 from app import leak_suspect as _leak  # 0.3.20
@@ -566,17 +567,23 @@ def formal_prediction_picks(conn: sqlite3.Connection, match_db_id: int) -> list[
     """该场正式方案冻结预测的各玩法方向（只读，直接取冻结记录，不重算）。
 
     亚盘来自 predictions 表；其他玩法来自 prediction_legs 表（仅正式方案、status=active）。
-    亚盘的 line 取结算盘口（settle_book=macau_close 时为澳门临盘），库内约定是主队视角：
+    亚盘的 line 取该行结算盘：行内已写 settle_book 则只走该庄（冻结的 macau_close 仍是澳门临盘）；
+    行内为空时用默认优先级（平博临盘，缺则澳门临盘）。库内约定是主队视角：
     主队让球为正数，主队受让为负数。stake_estimated=True 表示份数是推算值。
     """
     formal = set(formal_strategies_for_match(conn, match_db_id))
     out: list[dict] = []
     if not formal:
         return out
-    close = conn.execute(
-        "SELECT handicap FROM odds_asian WHERE match_id = ? AND book = 'macau' AND phase = 'close'",
-        (match_db_id,),
-    ).fetchone()
+    pred_cols = {r[1] for r in conn.execute("PRAGMA table_info(predictions)")}
+    has_settle_book = "settle_book" in pred_cols
+    close_quotes = {
+        (r["book"], r["phase"]): r
+        for r in conn.execute(
+            "SELECT book, phase, handicap FROM odds_asian WHERE match_id = ? AND phase = 'close'",
+            (match_db_id,),
+        )
+    }
     for p in conn.execute(
         "SELECT * FROM predictions WHERE match_id = ? ORDER BY strategy", (match_db_id,)
     ).fetchall():
@@ -587,9 +594,14 @@ def formal_prediction_picks(conn: sqlite3.Connection, match_db_id: int) -> list[
         if p["direction"] != "不下注" and (stake is None or stake <= 0):
             stake = estimate_stake_from_rationale(loads_json(p["rationale_json"]) or [])
             estimated = stake is not None
+        token = p["settle_book"] if has_settle_book else None
+        line = sb.resolve_settle_quote(
+            lambda book, phase, _q=close_quotes: _q.get((book, phase)),
+            token,
+        ).handicap
         out.append({
             "market": "ah", "strategy": p["strategy"], "side": p["direction"],
-            "line": close["handicap"] if close else None, "line_text": None,
+            "line": line, "line_text": None,
             "stake": stake, "stake_estimated": estimated,
         })
     for leg in conn.execute(
@@ -1342,7 +1354,7 @@ STATE_MACHINE_TEMPLATES = {None, "null", "simple_gate"}
 
 STRATEGY_CONFIG_TEMPLATES: dict[str, dict[str, Any]] = {
     "default": {
-        "settle_book": "macau_close",
+        "settle_book": sb.DEFAULT_SETTLE_BOOK,
         "juice": 0.95,
         "vote": {"members": [], "threshold": 3},
         "gates": [],
@@ -1352,7 +1364,7 @@ STRATEGY_CONFIG_TEMPLATES: dict[str, dict[str, Any]] = {
         "extras": {},
     },
     "simple_gate": {
-        "settle_book": "macau_close",
+        "settle_book": sb.DEFAULT_SETTLE_BOOK,
         "juice": 0.95,
         "vote": {"members": [], "threshold": 3},
         "gates": [],
@@ -1393,7 +1405,7 @@ def normalize_strategy_config(raw: dict[str, Any] | None) -> dict[str, Any]:
         extras["state_machine_unknown"] = sm
         sm = None
     out["state_machine"] = sm
-    out.setdefault("settle_book", "macau_close")
+    out.setdefault("settle_book", sb.DEFAULT_SETTLE_BOOK)
     out.setdefault("juice", 0.95)
     out.setdefault("vote", {"members": [], "threshold": 3})
     out.setdefault("gates", [])
@@ -1514,6 +1526,9 @@ def _attach_ledger_metrics(summary: dict[str, Any] | None) -> dict[str, Any] | N
         "n_eligible←n/sample_count；hits←signal_count（有方向触发）；"
         "coverage=hits/n_eligible（无 eligible→null）；multi_hit_count 本包恒 null",
     )
+    # 旧缓存摘要没有结算盘优先级字段时按已存 settle_book 补上，不回写数据库。
+    if summary.get("settle_book") is not None and "settle_book_priority" not in summary:
+        summary.update(sb.policy_fields(str(summary["settle_book"])))
     return summary
 
 
@@ -1534,6 +1549,7 @@ def _validation_run_row(row: sqlite3.Row, *, reused: bool | None = None) -> dict
     }
     if reused is not None:
         out["reused"] = reused
+    out.update(sb.policy_fields(row["settle_book"]))
     # 顶层回显 data_rev 等时 summary 已含三键
     return out
 
@@ -1606,13 +1622,17 @@ class ComposeRequest(BaseModel):
 
 
 def _parse_settle_book(settle_book: str) -> tuple[str, str]:
-    """macau_close → (macau, close). Unknown forms fall back to (macau, close)."""
-    s = (settle_book or "macau_close").strip().lower()
-    if "_" in s:
-        book, phase = s.rsplit("_", 1)
-        if book and phase:
-            return book, phase
-    return "macau", "close"
+    """单一结算盘：macau_close → (macau, close)。
+
+    无法识别的形态仍回落 (macau, close)，与旧实现一致。
+    默认优先级令牌没有单一庄，调用方应改用 settle_book.resolve_settle_quote。
+    """
+    spec = sb.parse_settle_spec(settle_book)
+    if spec.priority:
+        raise ValueError(
+            f"settle_book {settle_book!r} 是优先级，没有单一 book/phase"
+        )
+    return spec.book or "macau", spec.phase or "close"
 
 
 DEFAULT_STAKE_RULE = {"default_units": 1, "use_prediction_stake": True, "below_min": "raise"}
@@ -1685,7 +1705,7 @@ def _backtest_rules(
     conn: sqlite3.Connection,
     stake_rule: dict[str, Any],
     *,
-    settle_book: str = "macau_close",
+    settle_book: str = sb.DEFAULT_SETTLE_BOOK,
     exclude_censored: bool = False,
     initial_override: Any = None,
 ) -> dict[str, Any]:
@@ -1700,7 +1720,9 @@ def _backtest_rules(
     if _is_number(initial_override) and initial_override > 0:
         initial, initial_source = float(initial_override), "params:initial_bankroll"
     frac = stake_rule.get("unit_fraction")
-    book, _phase = _parse_settle_book(settle_book)
+    spec = sb.parse_settle_spec(settle_book)
+    # 优先级没有单一庄。资金规则用平博代表「非澳门」，截断剔除只在逐注 settled_with 不是澳门时生效。
+    book = "pinnacle" if spec.priority else (spec.book or "macau")
     return {
         "initial_bankroll": initial,
         "initial_source": initial_source,
@@ -1747,6 +1769,39 @@ def _match_special(conn: sqlite3.Connection) -> dict[int, dict[str, Any]]:
     return out
 
 
+def _load_asian_quotes(
+    conn: sqlite3.Connection, match_ids: list[int], settle_book: str,
+) -> dict[tuple[int, str, str], sqlite3.Row]:
+    """按结算盘需要的庄与阶段读取 odds_asian。唯一键 (match_id, book, phase)，与原先单庄 JOIN 同口径。"""
+    if not match_ids:
+        return {}
+    spec = sb.parse_settle_spec(settle_book)
+    if spec.priority:
+        books = [book for _token, book, _phase in sb.priority_steps()]
+        phases = ["close"]
+    else:
+        books = [spec.book or "macau"]
+        phases = [spec.phase or "close"]
+    out: dict[tuple[int, str, str], sqlite3.Row] = {}
+    # SQLite 默认变量上限 999；分块避免大赛季一次绑定过多。
+    step = 400
+    for offset in range(0, len(match_ids), step):
+        chunk = match_ids[offset:offset + step]
+        id_ph = ",".join("?" * len(chunk))
+        book_ph = ",".join("?" * len(books))
+        phase_ph = ",".join("?" * len(phases))
+        sql = f"""
+            SELECT match_id, book, phase, handicap, home_water, away_water, water_src,
+                   json_extract(extras_json, '$.censored.home') AS censored_home,
+                   json_extract(extras_json, '$.censored.away') AS censored_away
+            FROM odds_asian
+            WHERE match_id IN ({id_ph}) AND book IN ({book_ph}) AND phase IN ({phase_ph})
+        """
+        for row in conn.execute(sql, [*chunk, *books, *phases]):
+            out[(int(row["match_id"]), row["book"], row["phase"])] = row
+    return out
+
+
 def _load_strategy_bets(
     conn: sqlite3.Connection,
     *,
@@ -1757,15 +1812,15 @@ def _load_strategy_bets(
     fallback_juice: float,
     not_evaluable_out: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """not_evaluable_out：传入 shadow_ev.new_tally() 收集不可评估场（不进 bets/n_eligible，不进 skipped）。"""
-    book, phase = _parse_settle_book(settle_book)
+    """not_evaluable_out：传入 shadow_ev.new_tally() 收集不可评估场（不进 bets/n_eligible，不进 skipped）。
+
+    结算盘来自本次请求的 settle_book，不改 predictions 行。默认优先级按场选择平博或澳门临盘。
+    """
+    spec = sb.parse_settle_spec(settle_book)
     _special = _match_special(conn)
     sql = """
         SELECT p.match_id, p.direction, p.stake, p.rationale_json,
                r.home_goals, r.away_goals,
-               oa.handicap, oa.home_water, oa.away_water, oa.water_src,
-               json_extract(oa.extras_json, '$.censored.home') AS censored_home,
-               json_extract(oa.extras_json, '$.censored.away') AS censored_away,
                m.jingcai_date, m.jc_no, m.match_uid, m.jc_id, m.kickoff_at,
                COALESCE(th.name_zh_canonical, m.home_team) AS home_name,
                COALESCE(ta.name_zh_canonical, m.away_team) AS away_name
@@ -1774,22 +1829,26 @@ def _load_strategy_bets(
         LEFT JOIN teams th ON th.id = m.home_team_id
         LEFT JOIN teams ta ON ta.id = m.away_team_id
         LEFT JOIN results r ON r.match_id = p.match_id
-        LEFT JOIN odds_asian oa
-          ON oa.match_id = p.match_id AND oa.book = ? AND oa.phase = ?
         WHERE p.strategy = ?
     """
-    args: list[Any] = [book, phase, strategy_key]
+    args: list[Any] = [strategy_key]
     if scope and scope != "all":
         sql += " AND m.scope = ?"
         args.append(scope)
     sql += " ORDER BY m.jingcai_date, m.jc_no, p.match_id"
+    rows = conn.execute(sql, args).fetchall()
+    quotes = _load_asian_quotes(conn, [int(r["match_id"]) for r in rows], settle_book)
     bets: list[dict[str, Any]] = []
     skipped = {"no_result": 0, "no_odds": 0, "bad_direction": 0}
-    for r in conn.execute(sql, args).fetchall():
+    for r in rows:
         if r["home_goals"] is None or r["away_goals"] is None:
             skipped["no_result"] += 1
             continue
-        if r["handicap"] is None:
+        resolved = sb.resolve_settle_quote(
+            lambda book, phase, _mid=int(r["match_id"]), _q=quotes: _q.get((_mid, book, phase)),
+            spec.token,
+        )
+        if resolved.handicap is None:
             skipped["no_odds"] += 1
             continue
         # 0.3.19：人工复核场 → 不可评估（reason=manual_review）；推迟待核 / 推迟作废 → 单独计数
@@ -1844,12 +1903,14 @@ def _load_strategy_bets(
             "stake_rule": stake_rule,
             "home_goals": r["home_goals"],
             "away_goals": r["away_goals"],
-            "handicap": float(r["handicap"]),
-            "home_water": r["home_water"],
-            "away_water": r["away_water"],
-            "water_src": r["water_src"],
-            "censored_home": bool(r["censored_home"]),
-            "censored_away": bool(r["censored_away"]),
+            "handicap": float(resolved.handicap),
+            "home_water": resolved.home_water,
+            "away_water": resolved.away_water,
+            "water_src": resolved.water_src,
+            "censored_home": resolved.censored_home,
+            "censored_away": resolved.censored_away,
+            "settled_with": resolved.settled_with,
+            "fallback_book": resolved.fallback_book,
             "fallback_juice": fallback_juice,
             "filter_hit": bool(snap.get("filter_hit") or snap.get("skip_v3")),
             "feature_snapshot": snap,
@@ -1873,7 +1934,18 @@ def _resolve_settlement_version(params: dict[str, Any] | None) -> str:
     return ver
 
 
-def _juice_note_for(book: str, settlement_version: str, exclude_censored: bool) -> str:
+def _juice_note_for(book: str, settlement_version: str, exclude_censored: bool, *,
+                    priority: bool = False) -> str:
+    if priority:
+        note = (
+            "默认结算盘 pinnacle_close > macau_close：有平博临盘按平博真实水位结算"
+            "（juice_source=actual 或 tier_midpoint）；缺平博退回澳门临盘，"
+            "澳门水位仍为仓库固定口径 0.95（juice_source=fixed_macau）。"
+            "显式 settle_book=macau_close 只走澳门，不回退。"
+        )
+        if exclude_censored:
+            note += " exclude_censored=true 只剔除非澳门庄的截断侧。"
+        return note
     if settlement_version == bt.SETTLEMENT_MACAU_ACTUAL and book == "macau":
         return (
             "灵敏度口径 ah_v4_macau_actual_or_095：water_src=actual 且水位∈(0,2] → juice_source=actual；"
@@ -1915,6 +1987,7 @@ def _prepare_strategy(
                             exclude_censored=bool(ex),
                             initial_override=params.get("initial_bankroll"))
     rules = {**rules, "settlement_version": settlement_version}
+    policy = sb.policy_fields(settle_book)
     data_rev, data_rev_source = _resolve_data_rev(conn, params, def_row["strategy_key"])
     fallback = float(cfg.get("juice") or 0.95)
     not_evaluable = shadow_ev.new_tally()
@@ -1933,7 +2006,8 @@ def _prepare_strategy(
             "deprecations": deprecations,
             "settlement_version": settlement_version,
             "not_evaluable": not_evaluable,
-            "cfg_extras": dict(cfg.get("extras") or {})}
+            "cfg_extras": dict(cfg.get("extras") or {}),
+            **policy}
 
 
 def _fp_extra(prep: dict[str, Any]) -> dict[str, Any]:
@@ -1945,6 +2019,11 @@ def _fp_extra(prep: dict[str, Any]) -> dict[str, Any]:
     # 0.3.19 钩子：澳门推迟作废时限写死后才进指纹（null = 不生效，旧指纹不变）
     if _cs.POSTPONE_VOID_HOURS is not None:
         fp["postpone_void_hours"] = _cs.POSTPONE_VOID_HOURS
+    # 仅优先级结算盘进入指纹。显式 macau_close 的 extra 与改前一致，旧 run 仍可复用。
+    if prep.get("settlement_book_version"):
+        fp["settlement_book_version"] = prep["settlement_book_version"]
+    if prep.get("settle_book_priority"):
+        fp["settle_book_priority"] = list(prep["settle_book_priority"])
     return fp
 
 
@@ -1971,6 +2050,7 @@ def _single_summary(prep: dict[str, Any], sim: dict[str, Any], *, settle_book: s
         "juice": prep["fallback_juice"],
         "juice_note": _juice_note_for(
             prep["rules"]["book"], s_ver, bool(prep["rules"].get("exclude_censored")),
+            priority=sb.is_priority(settle_book),
         ),
         "settlement_note": (
             "亚盘 settle_book 线；水位见 juice_note；"
@@ -1994,6 +2074,17 @@ def _single_summary(prep: dict[str, Any], sim: dict[str, Any], *, settle_book: s
         "scope": scope,
         "linked_prediction_batch": params.get("linked_prediction_batch"),
     })
+    s.update(sb.policy_fields(settle_book))
+    counts: dict[str, int] = {}
+    n_book_fallback = 0
+    for entry in sim["entries"]:
+        used = entry.get("settled_with")
+        if used:
+            counts[str(used)] = counts.get(str(used), 0) + 1
+        if entry.get("fallback_book"):
+            n_book_fallback += 1
+    s["settled_with_counts"] = counts or None
+    s["n_settle_book_fallback"] = n_book_fallback
     s.update(shadow_ev.summary_fields(prep.get("not_evaluable")))
     # 分账（接入细则 6 + 初盘口径）：by_odds_source{live,hist,unknown} / by_open_basis{first_tick,api_opening,unknown}
     # 各桶单独模拟+summarize；顶层不变
@@ -2001,6 +2092,18 @@ def _single_summary(prep: dict[str, Any], sim: dict[str, Any], *, settle_book: s
         s, prep["bets"], prep.get("not_evaluable"), rules=prep["rules"],
         strategy_order=[strategy_key], ledger_hit_mode=hit_mode, finalize=_attach_ledger_metrics)
     return _attach_ledger_metrics(s)
+
+
+def _fill_resolution_metrics(metrics: Any, settle_book: str | None) -> Any:
+    """旧缓存没有逐注结算庄时，单庄 run 按 settle_book 补 settled_with。优先级无法事后猜测，不改原 metrics。"""
+    if not isinstance(metrics, dict) or "settled_with" in metrics:
+        return metrics
+    spec = sb.parse_settle_spec(settle_book)
+    if spec.priority or not spec.book:
+        return metrics
+    metrics["settled_with"] = spec.book
+    metrics["fallback_book"] = None
+    return metrics
 
 
 def _cache_rows_from_entries(
@@ -2030,13 +2133,21 @@ def _cache_rows_from_entries(
             "settle_code": e.get("settle_code"),
             "reasons": e.get("reasons") or [],
             "settlement": s_ver,
+            "settled_with": e.get("settled_with"),
+            "fallback_book": e.get("fallback_book"),
         }
-        fp = _sha256_hex(_canonical_json({
+        fp_payload = {
             "match_id": e["match_id"], "market": "ah", "side": e.get("side"),
             "line": e.get("handicap"), "settle_book": settle_book,
             "juice": e.get("juice_used"), "amount": e.get("amount"),
             "settlement": s_ver,
-        }))
+        }
+        # 单庄指纹与改前一致，旧 macau_close / crown_close 回归基线仍可对上。
+        # 优先级逐注庄不同，必须写进指纹，避免两场盘口碰巧相同却复用错行。
+        if sb.is_priority(settle_book):
+            fp_payload["settled_with"] = e.get("settled_with")
+            fp_payload["fallback_book"] = e.get("fallback_book")
+        fp = _sha256_hex(_canonical_json(fp_payload))
         out.append({
             "match_id": e["match_id"], "market": "ah", "side": e.get("side"),
             "line": e.get("handicap"), "stake_units": e.get("units", 0),
@@ -2123,7 +2234,13 @@ def _validate_or_reuse(
 class ValidateRequest(BaseModel):
     run_label: str | None = None
     scope: str = "jingcai"
-    settle_book: str = "macau_close"
+    settle_book: str = Field(
+        sb.DEFAULT_SETTLE_BOOK,
+        description=(
+            "结算盘。缺省 pinnacle_then_macau：平博临盘优先，没有平博临盘再用澳门临盘。"
+            "显式 macau_close 只走澳门，不回退。不改 predictions 行内已写入的 settle_book。"
+        ),
+    )
     shadow: bool = True
     params: dict[str, Any] = Field(default_factory=dict)
     settlement_version: str | None = Field(
@@ -2151,7 +2268,13 @@ class CompareRequest(BaseModel):
     strategy_ids: list[int] = Field(default_factory=list, description="strategy_defs.id 列表")
     strategy_keys: list[str] = Field(default_factory=list, description="按 key 取最新 version")
     scope: str = "jingcai"
-    settle_book: str = "macau_close"
+    settle_book: str = Field(
+        sb.DEFAULT_SETTLE_BOOK,
+        description=(
+            "结算盘。缺省 pinnacle_then_macau：平博临盘优先，没有平博临盘再用澳门临盘。"
+            "显式 macau_close 只走澳门。各方案共用这一结算盘。"
+        ),
+    )
     shadow: bool = True
     params: dict[str, Any] = Field(default_factory=dict)
     auto_validate: bool = Field(True, description="无匹配 run 时触发 validate")
@@ -2421,6 +2544,18 @@ def _compute_stack(
         "per_strategy": per_strategy,
     })
     _attach_ledger_metrics(summary)
+    summary["settle_book"] = body.settle_book
+    summary.update(sb.policy_fields(body.settle_book))
+    _counts: dict[str, int] = {}
+    _n_book_fallback = 0
+    for _e in entries:
+        _used = _e.get("settled_with")
+        if _used:
+            _counts[str(_used)] = _counts.get(str(_used), 0) + 1
+        if _e.get("fallback_book"):
+            _n_book_fallback += 1
+    summary["settled_with_counts"] = _counts or None
+    summary["n_settle_book_fallback"] = _n_book_fallback
     # stack：hits=各腿有方向的 entry 数（非去重场次）；multi_hit 仍 null（冲突见 conflict_count）
     s_ver = (rules or {}).get("settlement_version") or bt.SETTLEMENT_VERSION
     return {
@@ -2507,6 +2642,7 @@ def compare_strategies(body: CompareRequest) -> dict:
         out: dict[str, Any] = {
             "scope": body.scope,
             "settle_book": body.settle_book,
+            **sb.policy_fields(body.settle_book),
             "params": params,
             "stake_mode": body.stake_mode,
             "settlement_version": primary_sv,
@@ -2628,6 +2764,7 @@ def start_strategy_validate(
         out["data_rev"] = prep["data_rev"]
         out["data_rev_source"] = prep["data_rev_source"]
         out["settlement_version"] = prep.get("settlement_version") or params["settlement_version"]
+        out.update(sb.policy_fields(req.settle_book))
         return out
     finally:
         conn.close()
@@ -2659,7 +2796,7 @@ def get_strategy_run_cache(
     conn = get_conn()
     try:
         run = conn.execute(
-            "SELECT id FROM strategy_validation_runs WHERE id = ?", (run_id,)
+            "SELECT id, settle_book FROM strategy_validation_runs WHERE id = ?", (run_id,)
         ).fetchone()
         if not run:
             raise HTTPException(404, "run not found")
@@ -2674,6 +2811,7 @@ def get_strategy_run_cache(
         ).fetchall()
         items = []
         for r in rows:
+            metrics = _fill_resolution_metrics(_loads_obj(r["metrics_json"], None), run["settle_book"])
             items.append(
                 {
                     "id": r["id"],
@@ -2685,7 +2823,9 @@ def get_strategy_run_cache(
                     "stake_units": r["stake_units"],
                     "result_code": r["result_code"],
                     "pnl_units": r["pnl_units"],
-                    "metrics": _loads_obj(r["metrics_json"], None),
+                    "settled_with": metrics.get("settled_with") if isinstance(metrics, dict) else None,
+                    "fallback_book": metrics.get("fallback_book") if isinstance(metrics, dict) else None,
+                    "metrics": metrics,
                     "row_fingerprint": r["row_fingerprint"],
                 }
             )

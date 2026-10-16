@@ -68,7 +68,9 @@ def _ids(p: Path) -> dict[str, int]:
 
 
 def _validate(client, def_id: int) -> dict:
-    r = client.post(f"/strategies/{def_id}/validate", json={"scope": "all", "shadow": True})
+    # 本用例锁定推迟记账。结算盘仍显式澳门，不跟默认的平博优先缠在一起。
+    r = client.post(f"/strategies/{def_id}/validate",
+                    json={"scope": "all", "shadow": True, "settle_book": "macau_close"})
     assert r.status_code == 202, r.text
     run = client.get(f"/strategies/runs/{r.json()['id']}").json()
     s = run.get("summary") or {}

@@ -34,7 +34,7 @@ M3 空占位 run（`summary.placeholder=true` 且 cache 0 行）：同指纹再�
 ### 输入
 
 - `strategy_defs` 的 `strategy_key` → 对齐 `predictions.strategy`
-- `settle_book`（默认 `macau_close`）→ `odds_asian.book` + `phase`（`macau` + `close`）
+- `settle_book`（2026-10-16 起缺省 `pinnacle_then_macau`：平博临盘优先，缺则澳门；显式 `macau_close` 仍只走澳门。见 `v1_9-settle-book-pinnacle-then-macau.md`）→ `odds_asian` 对应庄的 close 亚盘
 - `config.juice`（默认 `0.95`）；有水位则优先用该侧 water，缺水位用 juice
 - `scope` 过滤 `matches.scope`（默认 `jingcai`）
 - `params.shadow` 等进 fingerprint；可选 `linked_prediction_batch` 仅记入 summary（尚无独立 batch 列）

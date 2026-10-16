@@ -457,7 +457,7 @@ WHERE market = 'asian' AND channel = 'rule'
 |---|---|
 | `predictions` / legs | 增加可选 `odds_channel`（默认 `rule`）；消息预览注明通道 |
 | validate / compare 指纹 | `extra.odds_channel`；切换通道 → 新指纹，不误复用 |
-| 结算 | 默认仍 `macau_close` + 固定 0.95；新增可选 `settle_book`+`channel=actual`+真实澳门水位对照口径（**不改 V3 默认**） |
+| 结算 | 当时约定仍 `macau_close` + 固定 0.95。2026-10-16 起未指定的结算盘改平博临盘优先（`v1_9`）；已写入的 V3 `settle_book` 不改行。水位默认仍固定 0.95 |
 | 对比页 | 通道切换 + 可选「rule vs actual」双曲线；冲突表不变 |
 | `/matches/{id}/odds` | 增加 `channel`、`timeline`（摘要）、`stale_gap`；`?raw=true` 仍回旧 JSON |
 
@@ -469,7 +469,7 @@ WHERE market = 'asian' AND channel = 'rule'
 2. **回填快照**：从现有 `odds_asian` / euro / jc 生成 `odds_snapshot`（`channel=rule`，`source=legacy_import`）。  
 3. **双写**：新采集 → snapshot + timeline，并同步写旧表（过渡）。  
 4. **回退**：停 worker；`DROP` 新表或整库恢复备份；旧表未改则 V3 行为不变。  
-5. **禁止**：用死区压缩结果覆盖 `odds_asian`；禁止改 V3 默认 `settle_book` / 固定 0.95。
+5. **禁止**：用死区压缩结果覆盖 `odds_asian`；禁止改写已冻结 V3 行内 `settle_book` / 固定 0.95 水位。接口缺省结算盘见 `v1_9`（不批量改预测行）。
 
 ---
 
