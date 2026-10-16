@@ -56,7 +56,7 @@ REASON_ZH: dict[str, str] = {
     "post_match_only": "只有赛后数据，不能使用",
     "empty_from_source": "来源返回为空",
     "not_collected": "还没有采集",
-    # 预期进球六列（数据表预测标签的基本面，2026-10-16）
+    # 预期进球六列（数据表基本面，2026-10-16；页面由 PR #11 承接）
     "no_bsd_mapping": "本场没有对应的 BSD 赛事编号",
     "no_bsd_coverage": "BSD 没有这场比赛的预期进球",
     "full_side_missing": "这一侧的全场预期进球没有返回",

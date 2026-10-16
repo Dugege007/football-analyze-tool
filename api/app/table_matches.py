@@ -2210,7 +2210,7 @@ class TableRow(_M_):
     hidden_reason: Optional[str] = None
     settlement: Optional[Settlement] = None
     settlement_hidden_reason: Optional[str] = None
-    # 预测标签的基本面。预期进球六列各自一个外壳，库和接口保留完整精度。
+    # 基本面预期进球六列各自一个外壳。展示由 PR #11 承接，本接口只返回外壳。
     fundamentals: Optional[dict] = None
 
 
