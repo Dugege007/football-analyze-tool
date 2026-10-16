@@ -5,7 +5,7 @@ import os
 import hashlib
 import json
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import math
 import re
 from typing import Any, Literal
@@ -667,6 +667,70 @@ def list_matches(
                 }
             )
         return {"date": date, "scope": scope, "items": items}
+    finally:
+        conn.close()
+
+
+_JINGCAI_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# extended 是分析师口径的别名；matches.scope 列值仍是 extra，与 GET /matches 一致。
+_MATCH_LIST_SCOPE_DB = {
+    "jingcai": "jingcai",
+    "extra": "extra",
+    "extended": "extra",
+}
+
+
+def _parse_jingcai_day(value: str, name: str) -> str:
+    """校验竞彩日闭区间端点，必须是合法的 YYYY-MM-DD。"""
+    if not isinstance(value, str) or _JINGCAI_DAY_RE.fullmatch(value) is None:
+        raise HTTPException(status_code=400, detail=f"bad {name}={value!r}; want YYYY-MM-DD")
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"bad {name}={value!r}; want YYYY-MM-DD")
+    return value
+
+
+# 必须注册在 /matches/{match_id} 之前，否则 path「dates」会被当成 match_id。
+@app.get("/matches/dates")
+def list_match_dates(
+    date_from: str = Query(..., alias="from", description="竞彩日起 YYYY-MM-DD（含）"),
+    date_to: str = Query(..., alias="to", description="竞彩日止 YYYY-MM-DD（含）"),
+    scope: str = Query(
+        "jingcai",
+        pattern="^(jingcai|extra|extended|all)$",
+        description="jingcai｜extra｜extended（extra 的别名）｜all；过滤 matches.scope，与 GET /matches 同列",
+    ),
+) -> dict:
+    """日历置灰：闭区间内至少有一条 matches 行的竞彩日。不读赔率、预测或赛果。"""
+    start = _parse_jingcai_day(date_from, "from")
+    end = _parse_jingcai_day(date_to, "to")
+    if start > end:
+        raise HTTPException(status_code=400, detail="from > to")
+    conn = get_conn()
+    try:
+        if scope == "all":
+            rows = conn.execute(
+                """
+                SELECT DISTINCT jingcai_date
+                FROM matches
+                WHERE jingcai_date >= ? AND jingcai_date <= ?
+                ORDER BY jingcai_date
+                """,
+                (start, end),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT jingcai_date
+                FROM matches
+                WHERE jingcai_date >= ? AND jingcai_date <= ?
+                  AND scope = ?
+                ORDER BY jingcai_date
+                """,
+                (start, end, _MATCH_LIST_SCOPE_DB[scope]),
+            ).fetchall()
+        return {"dates": [row["jingcai_date"] for row in rows]}
     finally:
         conn.close()
 
