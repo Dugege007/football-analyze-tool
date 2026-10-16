@@ -2148,7 +2148,7 @@ class Result(_M_):
     score: Optional[str] = None
     wdl: Optional[str] = None
     outcome_1x2: Optional[str] = None  # 完场胜平负：home | draw | away。未完赛为空。
-    by_book: Optional[dict] = None  # 五家机构的机构赛果。未完赛整段为空，不写成五家都无法获取。
+    by_book: Optional[dict] = None  # 五家机构与多家平均的机构赛果。未完赛整段为空，不写成各格都无法获取。
     jc: Optional["JcResult"] = None  # 2026-10-14：竞彩胜平负（had）与让球胜平负（hhad）的赛果和临盘赔率
 
 
@@ -2724,12 +2724,23 @@ def attach_market_result(result: dict | None, res_hidden: str | None, jc_1x2: Op
     return payload
 
 
-def _market_by_book(match_pk: int, stored: dict, computed: dict, extra_time_blocked: set[int]) -> dict:
-    """已完赛时组装五家机构。加时比分未核实则整场无法获取；有落库行就不再现算。"""
+def _market_by_book(match_pk: int, stored: dict, computed: dict, extra_time_blocked: set[int],
+                    avg_ready: set[int] | None = None) -> dict:
+    """已完赛时组装五家机构与多家平均。加时比分未核实则整场无法获取。
+
+    五家机构有落库行就不再现算。多家平均三行尚未落库时，只现算平均这一家，不改写已经落库的其他机构，也不写回数据库。
+    """
     if match_pk in extra_time_blocked:
         return msettle.unavailable_by_book("extra_time_unverified")
     if match_pk in stored:
-        return stored[match_pk]
+        base = stored[match_pk]
+        if avg_ready is not None and match_pk not in avg_ready:
+            fresh = computed.get(match_pk)
+            if isinstance(fresh, dict) and msettle.AVG_BOOK in fresh:
+                merged = dict(base)
+                merged[msettle.AVG_BOOK] = fresh[msettle.AVG_BOOK]
+                return merged
+        return base
     return computed.get(match_pk) or msettle.unavailable_by_book("not_captured")
 
 
@@ -2908,7 +2919,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
         "SELECT * FROM predictions WHERE strategy = ?", (strategy,))}
     results = {r["match_id"]: r for r in conn.execute("SELECT * FROM results")}
     special_status = load_result_special_status(conn)
-    # 机构赛果只服务本页已完赛、且没有特殊标记的场次。有表则读表；没有行才在内存里算，接口本身不写库。
+    # 机构赛果只服务本页已完赛、且没有特殊标记的场次。有表则读表；整场没有行，或只有五家机构、还没有多家平均三行时，在内存里补算，接口本身不写库。
     extra_time_blocked = msettle.load_extra_time_unverified(conn)
     settle_scores: dict[int, tuple[int, int]] = {}
     for mid in page_ids:
@@ -2919,8 +2930,14 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             continue
         settle_scores[mid] = (int(res_row_page["home_goals"]), int(res_row_page["away_goals"]))
     stored_by_book = msettle.load_by_book(conn, list(settle_scores))
+    avg_ready = msettle.load_match_ids_with_avg_rows(conn, list(settle_scores))
     missing_scores = {mid: pair for mid, pair in settle_scores.items() if mid not in stored_by_book}
+    avg_only_scores = {
+        mid: pair for mid, pair in settle_scores.items()
+        if mid in stored_by_book and mid not in avg_ready
+    }
     computed_by_book = msettle.compute_by_book_many(conn, missing_scores)
+    computed_by_book.update(msettle.compute_by_book_many(conn, avg_only_scores, books=(msettle.AVG_BOOK,)))
 
     items: list[dict] = []
     trunc_table = osx.load_quantile_table()  # None when the analyst has not supplied the table
@@ -3187,7 +3204,8 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 outcome=(msettle.outcome_1x2(int(result["home_goals"]), int(result["away_goals"]))
                          if result is not None and result.get("home_goals") is not None
                          and result.get("away_goals") is not None else None),
-                by_book=(_market_by_book(mpk, stored_by_book, computed_by_book, extra_time_blocked)
+                by_book=(_market_by_book(
+                             mpk, stored_by_book, computed_by_book, extra_time_blocked, avg_ready)
                          if result is not None and result.get("status") == "finished"
                          and result.get("home_goals") is not None and mpk not in special_status else None),
             ),
