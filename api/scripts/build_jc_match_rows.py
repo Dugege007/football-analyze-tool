@@ -97,8 +97,8 @@ sys.path.insert(0, str(ROOT))
 from app import collection_schedule as cs  # noqa: E402
 
 TZ = timezone(timedelta(hours=8))
-REPLICA_DB = ROOT / "data" / "v2d3" / "app.db"
-PROD_DB = (ROOT / "data" / "app.db").resolve()
+REPLICA_DB = _V2D3_DB  # 来自路径配置：合并后=正式库 app.db；未合并=V2D3_DB_PATH/默认 data/v2d3/app.db
+PROD_DB = _APP_DB.resolve()  # APP_DB_PATH（与 live_capture 同口径）
 PLAN_DIR = Path(str(_ODDS_DATA_DIR / "5dollar/live/plan"))
 LOG_DIR = ROOT / "logs"
 LOG = LOG_DIR / "jc_match_rows.jsonl"
