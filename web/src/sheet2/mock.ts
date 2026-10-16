@@ -2,7 +2,8 @@
  * 第 1 期模拟数据：字段名照后端草案。覆盖各种 cell_status、升降（含主让加深、受让方变化）、预警三档、
  * 比赛中、未开始、取消、推迟，以及无临盘退回澳门结算的情况。
  */
-import { REAL_BOOKS, type AvgDetail, type AhCell, type Book, type ByBookResult, type OuCell, type Phase, type Phased, type Row, type SettleItem, type X1x2Cell } from './types'
+import { REAL_BOOKS, type AvgDetail, type AhCell, type Book, type ByBookResult, type FundNumberCell, type OuCell, type Phase, type Phased, type Row, type SettleItem, type X1x2Cell } from './types'
+import { emptyFundNumber, emptyFundamentals } from './xg'
 
 const pend = { cell_status: 'pending' as const, cell_status_reason: 'not_due' }
 const unav = (r = 'not_captured') => ({ cell_status: 'unavailable' as const, cell_status_reason: r })
@@ -260,6 +261,7 @@ function build(s: Spec): Row {
     jc_hhad: jch,
     result,
     settlement_by_book: settle,
+    fundamentals: emptyFundamentals(),
     _mock: true,
   }
 }
@@ -270,6 +272,28 @@ function jcDate(s: Spec): string {
   return `2026-10-${d}`
 }
 
+function fundOk(value: number, quality: string | null = 'measured', extra: Partial<FundNumberCell> = {}): FundNumberCell {
+  return { ...emptyFundNumber(), value, status: 'ok', quality, ...extra }
+}
+
+/** 模拟场只放接口形状的样例，下半场数值是写死的，不是全场减上半场。 */
+function withSampleXg(row: Row): Row {
+  if (row.match.jc_id === '三001') {
+    row.fundamentals = {
+      xg_ft_home: fundOk(1.574),
+      xg_ft_away: fundOk(0.9),
+      xg_ht_home: fundOk(0.726, 'estimated'),
+      xg_ht_away: fundOk(0.41),
+      xg_2h_home: fundOk(0.91, 'derived'),
+      xg_2h_away: fundOk(0.49, 'derived', { reason_zh: '半场统计不完整，由接口标明为推导' }),
+    }
+  } else if (row.match.jc_id === '三002') {
+    const missing = { ...emptyFundNumber(), status: 'unavailable' as const, reason: 'no_bsd_mapping', reason_zh: '没有 BSD 赛事映射' }
+    row.fundamentals = { ...emptyFundamentals(), xg_ft_home: missing, xg_ft_away: { ...missing } }
+  }
+  return row
+}
+
 export function mockRows(): Row[] {
-  return SPECS.map(build)
+  return SPECS.map((spec) => withSampleXg(build(spec)))
 }

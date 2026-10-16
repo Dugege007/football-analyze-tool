@@ -145,6 +145,30 @@ export interface ByBookResult {
   x1x2?: ({ side: 'home' | 'draw' | 'away' | null; odds: number | null } & BookMarketCell) | null
 }
 
+/** 基本面单项外壳的状态。与盘口格子的 cell_status 不是同一套。 */
+export type FundStatus = 'ok' | 'not_filled' | 'unavailable' | 'not_defined'
+
+/**
+ * 基本面数值外壳。value 保留接口原数，页面展示时再格式化。
+ * quality 取 measured、estimated、derived 等；estimated、derived 为等价布尔标记。
+ */
+export interface FundNumberCell {
+  value: number | null
+  status: FundStatus
+  source: string | null
+  as_of: string | null
+  reason: string | null
+  reason_zh: string | null
+  quality: string | null
+  estimated: boolean | null
+  derived: boolean | null
+}
+
+/** 基本面 xG 六键，顺序即表上的列顺序。下半场只读 xg_2h_*，不由全场减上半场得到。 */
+export const XG_KEYS = ['xg_ft_home', 'xg_ft_away', 'xg_ht_home', 'xg_ht_away', 'xg_2h_home', 'xg_2h_away'] as const
+export type XgKey = (typeof XG_KEYS)[number]
+export type Fundamentals = Record<XgKey, FundNumberCell>
+
 export type SettleCode = 'win' | 'win_half' | 'push' | 'lose_half' | 'lose' | 'no_bet'
 export interface SettleItem {
   code: SettleCode
@@ -193,6 +217,8 @@ export interface Row {
     } | null
   } | null
   settlement_by_book: Partial<Record<Book, { ah: SettleItem | null; ou: SettleItem | null; x1x2: SettleItem | null; jc: SettleItem | null } | null>> | null
+  /** 基本面。接口尚未返回 fundamentals 时六列均为 not_filled，页面显示「-」。 */
+  fundamentals: Fundamentals
   /** 前端标记：这一行哪些部分来自模拟数据 */
   _mock?: boolean
 }
