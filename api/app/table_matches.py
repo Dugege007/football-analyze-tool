@@ -44,6 +44,7 @@ from app import open_status as osx  # opening status and source fields (user rul
 from app import avg_cells  # 多家平均三格（接口约定第 3 版第 7 节）
 from app import alert_baseline as alb  # 预警档位按每格抓取时刻固定基准（2026-10-14）
 from app import market_settle as msettle  # 机构赛果：只读 market_settle，不改预测结算
+from app import xg_obs  # 预期进球六列：只读 stats_obs，不在接口里做减法
 
 router = APIRouter(tags=["table"])
 
@@ -2209,6 +2210,8 @@ class TableRow(_M_):
     hidden_reason: Optional[str] = None
     settlement: Optional[Settlement] = None
     settlement_hidden_reason: Optional[str] = None
+    # 预测标签的基本面。预期进球六列各自一个外壳，库和接口保留完整精度。
+    fundamentals: Optional[dict] = None
 
 
 class DbMeta(_M_):
@@ -2795,8 +2798,11 @@ def _flat_row(item: dict) -> dict:
                     cell.setdefault(k, None)
                 mv = cell.get("move") if isinstance(cell.get("move"), dict) else {}
                 cell["move"] = {k: mv.get(k) for k in mv_keys}
+    fundamentals = src.pop("fundamentals", None)
     flat = {**{k: v for k, v in match.items()}, **flatten({k: v for k, v in src.items() if k != "match_id"})}
     flat.update(avg_details)
+    # 六个列名与嵌套键相同：xg_ft_home 等是完整精度数值，不是四舍五入后的两位小数字符串。
+    flat.update(xg_obs.flat_columns(fundamentals))
     # 中文说明列按平铺后的原因列重新生成，保证每行列集合一致（原因列本身已由上面的模板保证一致）
     flat = {k: v for k, v in flat.items() if not k.endswith("reason_zh")}
     for k in [k for k in flat if k.endswith("reason") and (flat[k] is None or isinstance(flat[k], str))]:
@@ -2938,6 +2944,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
     }
     computed_by_book = msettle.compute_by_book_many(conn, missing_scores)
     computed_by_book.update(msettle.compute_by_book_many(conn, avg_only_scores, books=(msettle.AVG_BOOK,)))
+    xg_context = xg_obs.load_match_context(conn, page_ids)
 
     items: list[dict] = []
     trunc_table = osx.load_quantile_table()  # None when the analyst has not supplied the table
@@ -3213,6 +3220,11 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             "hidden_reason": res_hidden,  # 前端名：赛果/结算为空的原因（= result_hidden_reason）
             "settlement": settlement,
             "settlement_hidden_reason": set_hidden,
+            "fundamentals": xg_obs.shells_for_match(
+                finished=(result is not None and result.get("status") == "finished"
+                          and result.get("home_goals") is not None),
+                **xg_context.for_match(mpk),
+            ),
         })
 
     # 2026-10-14：竞彩未开售胜平负的场次改原因代码；所有原因代码同时返回中文说明（前端不再维护对照表）
@@ -3254,6 +3266,16 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 "snapshot_projection_jc_spf_hhad": "skipped (local collector empty)",
                 "stats_obs": "as_of+source; manual_seed tagged; constituent gate kickoff+3h≤T_decision",
                 "injury_known_empty": "only when source explicitly empty; never for missing fetch",
+            },
+            "xg_fundamentals": {
+                "keys": list(xg_obs.COLUMN_KEYS),
+                "storage": "stats_obs 一行 kind=xg。库和接口保留供应商的完整精度，不在后端四舍五入到两位小数。",
+                "display": "两位小数只在前端展示时保留。",
+                "second_half": "优先使用 BSD 的 second_half。没有独立下半场时，写入前用全场减去上半场，质量为 derived。接口不再做减法。",
+                "no_mapping": "完赛且映射表已建、但本场没有 BSD 赛事编号时，reason=no_bsd_mapping。",
+                "unfinished": "未完赛六列都是 not_filled。",
+                "queue": "xg_fetch_queue 与盘口补数队列分开，免费额度每天 7500 次（协调世界时重置）。",
+                "hook": "赛果入库 apply 把新完赛场次放进队列；同一进程的 tick 在有令牌时拉取。可选的第二次拉取排在三小时之后。",
             },
             "macau_5df": {  # 0.3.22
                 "path": "ah.macau.{open|mid|close}",
