@@ -21,6 +21,7 @@ import result_ingest as ingest  # noqa: E402
 
 T1 = "2026-10-15T16:00:00+08:00"
 T2 = "2026-10-15T17:00:00+08:00"
+ROWS = len(ms.BOOKS) * len(ms.MARKETS)
 
 
 def _full_db(tmp_path) -> sqlite3.Connection:
@@ -137,7 +138,7 @@ def _ingest_db(tmp_path) -> str:
 
 
 def test_final_result_insert_writes_market_settle_and_leaves_missing_books(tmp_path):
-    """完场比分新写入 results 之后，同一场立即出现十五行；缺临盘的机构保持无法获取。"""
+    """完场比分新写入 results 之后，同一场立即出现十八行；缺临盘的机构保持无法获取。"""
     path = _ingest_db(tmp_path)
     now = ingest.dt.datetime(2026, 10, 14, 16, 0, tzinfo=ingest.TZ)
     decision = {
@@ -158,11 +159,11 @@ def test_final_result_insert_writes_market_settle_and_leaves_missing_books(tmp_p
     )
     assert result["inserted"] == 1
     assert result["market_settle"]["eligible_matches"] == 1
-    assert result["market_settle"]["rows"] == 15
+    assert result["market_settle"]["rows"] == ROWS
 
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
-    assert _count(conn, 1) == 15
+    assert _count(conn, 1) == ROWS
     assert _count(conn, 2) == 0
     macau = _row(conn, 1, "macau", "ah")
     crown = _row(conn, 1, "crown", "ah")
@@ -196,7 +197,7 @@ def test_result_ingest_second_apply_does_not_duplicate_rows(tmp_path):
     assert again["inserted"] == 0
     assert again["market_settle"] is None
     conn = sqlite3.connect(path)
-    assert conn.execute("SELECT COUNT(*) FROM market_settle").fetchone()[0] == 15
+    assert conn.execute("SELECT COUNT(*) FROM market_settle").fetchone()[0] == ROWS
     assert conn.execute(
         "SELECT COUNT(*) FROM market_settle WHERE match_id=1 AND book='macau' AND market='ah'"
     ).fetchone()[0] == 1
@@ -232,7 +233,7 @@ def test_import_then_close_correction_overwrites_the_same_key(tmp_path):
     assert first["cell_status"] == "ok"
     assert first["line"] == 0.25
     assert first["settle_code"] == ms.settle_asian(2, 1, 0.25)["settle_code"]
-    assert _count(conn, match_id) == 15
+    assert _count(conn, match_id) == ROWS
     crown = _row(conn, match_id, "crown", "ah")
     assert crown["cell_status"] == "unavailable" and crown["line"] is None
     # 只有主胜的旧欧盘不能单独结算。
@@ -250,7 +251,7 @@ def test_import_then_close_correction_overwrites_the_same_key(tmp_path):
     assert second["id"] == first["id"]
     assert second["line"] == 1.75
     assert second["settle_code"] == ms.settle_asian(2, 1, 1.75)["settle_code"]
-    assert _count(conn, match_id) == 15
+    assert _count(conn, match_id) == ROWS
     conn.close()
 
 
@@ -271,7 +272,7 @@ def test_totals_and_euro_close_updates_overwrite_and_stay_idempotent(tmp_path):
     conn.commit()
     summary = ms.refresh_after_results_written(conn, [match_id], now=T1)
     conn.commit()
-    assert summary["rows"] == 15
+    assert summary["rows"] == ROWS
     assert _row(conn, match_id, "macau", "ou")["cell_status"] == "unavailable"
     assert _row(conn, match_id, "pinnacle", "x1x2")["null_reason"] == "not_captured"
 
@@ -325,7 +326,7 @@ def test_totals_and_euro_close_updates_overwrite_and_stay_idempotent(tmp_path):
     assert updated["line"] == 3.25
     assert updated["settle_code"] == ms.settle_totals(3, 3.25)["settle_code"]
     assert updated["computed_at"] == T2
-    assert _count(conn, match_id) == 15
+    assert _count(conn, match_id) == ROWS
 
     before = [
         tuple(row)
@@ -388,9 +389,9 @@ def test_refresh_does_not_open_another_database_or_enable_dual_write(tmp_path, m
 
     monkeypatch.setattr(sqlite3, "connect", refuse_new_connection)
     summary = ms.refresh_after_results_written(conn, [match_id], now=T1)
-    assert summary["rows"] == 15
+    assert summary["rows"] == ROWS
     assert os.environ.get("DUAL_WRITE_ODDS_ASIAN", "0") not in ("1", "true", "yes", "on")
-    assert _count(conn, match_id) == 15
+    assert _count(conn, match_id) == ROWS
     conn.close()
 
 

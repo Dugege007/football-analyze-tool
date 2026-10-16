@@ -4,13 +4,21 @@
 默认只统计、不创建表、不写任何行。必须同时给出数据库路径和 --apply 才会落库。
 写正式库之前，还要先备份，并设置环境变量 FORMAL_DB_BACKUP_DONE=1。
 本脚本不会打开双写，也不会修改预测结算。
-完场入库和临盘写入成功后，会调用同一套 apply_backfill 做单场覆盖。本脚本仍是离线全量或指定场次的入口。
+完场入库和临盘写入成功后，会调用同一套 apply_backfill 做单场覆盖，其中包含多家平均。
+本脚本仍是离线全量或指定场次的入口。
+
+多家平均（book 为 avg）的亚洲让球盘、大小球、欧盘胜平负各一行，与五家机构使用同一条命令。
+只给已经完场的历史场次补写多家平均三行时，加上 --book avg。
+平均临盘算不出来时仍然写入这三行，格子状态为无法获取，不留空键，也不用某一家机构顶替。
+合入前不要对正式库执行 --apply。
 
 用法：
   python api/scripts/backfill_market_settle.py --db /path/to/copy.db
   python api/scripts/backfill_market_settle.py --db /path/to/copy.db --apply
   python api/scripts/backfill_market_settle.py --db /path/to/copy.db --jingcai-date 2026-10-15 --apply
   python api/scripts/backfill_market_settle.py --db /path/to/copy.db --match-id 12 --apply
+  python api/scripts/backfill_market_settle.py --db /path/to/copy.db --book avg
+  python api/scripts/backfill_market_settle.py --db /path/to/copy.db --book avg --apply
 """
 from __future__ import annotations
 
@@ -24,7 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.formal_db import guard_write_target  # noqa: E402
-from app.market_settle import apply_backfill, plan_backfill  # noqa: E402
+from app.market_settle import BOOKS, apply_backfill, plan_backfill  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -35,6 +43,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apply", action="store_true", help="真正创建表并覆盖写入。缺省时不写库。")
     parser.add_argument("--jingcai-date", default=None, help="只处理这一个竞彩日，格式 YYYY-MM-DD。")
     parser.add_argument("--match-id", action="append", type=int, default=None, help="只处理这些 match_id，可重复传入。")
+    parser.add_argument(
+        "--book",
+        action="append",
+        default=None,
+        metavar="BOOK",
+        help=(
+            "只回填列出的机构。多家平均请写 avg，可以重复传入。"
+            "不传这个参数时，五家机构与多家平均一起写入。"
+            f"允许的值：{'、'.join(BOOKS)}。"
+        ),
+    )
     args = parser.parse_args(argv)
 
     path = guard_write_target(args.db, writing=bool(args.apply))
@@ -49,13 +68,21 @@ def main(argv: list[str] | None = None) -> int:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:
-        if args.apply:
-            summary = apply_backfill(conn, match_ids=args.match_id, jingcai_date=args.jingcai_date)
-            conn.commit()
-        else:
-            summary = plan_backfill(conn, match_ids=args.match_id, jingcai_date=args.jingcai_date)["summary"]
-            summary["dry_run"] = True
-            summary["note"] = "这次没有写数据库。确认统计后再加上 --apply。"
+        try:
+            if args.apply:
+                summary = apply_backfill(
+                    conn, match_ids=args.match_id, jingcai_date=args.jingcai_date, books=args.book,
+                )
+                conn.commit()
+            else:
+                summary = plan_backfill(
+                    conn, match_ids=args.match_id, jingcai_date=args.jingcai_date, books=args.book,
+                )["summary"]
+                summary["dry_run"] = True
+                summary["note"] = "这次没有写数据库。确认统计后再加上 --apply。"
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 2
     finally:
         conn.close()
 
