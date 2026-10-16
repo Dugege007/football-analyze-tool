@@ -173,10 +173,12 @@ item
 - 兜底绝对阈值由前端按 `baseline_method=fixed_fallback` 套用 `config.return_rate_fallback`，后端不做高亮。
 - 凯利见 §4.2。凯利只按同一阶段（open/mid/close）、同一时间点的各家报价算。
 
-## 7. 每场结算（复用现有逻辑，不改默认）
+## 7. 每场结算（复用现有逻辑）
 
-- 取数与 `/strategies/{id}/validate`（`_load_strategy_bets`）同源：`odds_asian` 的 `settle_book`（V3 = `macau_close`）盘口与水位；**不读快照**。
-- 计算：`backtest.resolve_juice` + `backtest.settle_pnl`；`settlement_version` 缺省 = 现网默认 **`ah_v4_water_midpoint`**（澳门固定 …，`juice_source=fixed_macau`）；可选 `ah_v4_macau_actual_or_0…`（现网澳门无水位 → 全部 `fallback` …，`juice_reason=water_missing`）。
+- 取数与 `/strategies/{id}/validate`（`_load_strategy_bets`）同源：`odds_asian` 亚盘临盘与水位；**不读快照**，也不读 `market_settle`。
+- 结算盘：行内 `predictions.settle_book` 优先。已冻结的 `macau_close`（含 CFFXDJ_5_V3）仍只走澳门，**不改行**。行内为空时缺省 `pinnacle_then_macau`（平博临盘优先，缺则澳门）。见 `v1_9-settle-book-pinnacle-then-macau.md`。
+- `settlement.settled_with` 为实际庄（`pinnacle` / `macau`）。`settlement.fallback_book` 在退回澳门时为 `macau`，否则 `null`。
+- 计算：`backtest.resolve_juice` + `backtest.settle_pnl`；水位 `settlement_version` 缺省 = 现网默认 **`ah_v4_water_midpoint`**（澳门固定 0.95，`juice_source=fixed_macau`；平博用库内水位）；可选 `ah_v4_macau_actual_or_095`（澳门无真实水位 → `fallback`，`juice_reason=water_missing`）。
 - 份数：`predictions.stake` 有值用之（`stake_units_source=prediction`），否则按 `DEFAULT_STAKE_RULE.default_units=…`（`default_units`）。现网 V3 … 场 `stake` 全空 → 全部按 … 份。
 - `pnl_units` = 份数 × (赢权重 × juice − 输权重)，**单位是「份」**，与资金曲线无关（金额依赖逐日资金曲线，属于 validate/compare，不在逐行表里给）。
 - `code`：`win | win_half | push | lose_half | lose | no_bet`（与 `backtest.settle_code` 同值、与前端 `SettleCode` 同名；方向「不下注」= `no_bet`，pnl …）；`source="backend"`。前端估算结算可弃用。
@@ -1514,6 +1516,8 @@ N5 快照强制 `rho_global` / `rho_league` / `rho_league_se` + 指纹 `rho=glob
  "settlement": {
   "settlement_version": "ah_v4_water_midpoint",
   "settle_book": "macau_close",
+  "settled_with": "macau",
+  "fallback_book": null,
   "line": 0.0,
   "side": "主",
   "juice": 0.95,

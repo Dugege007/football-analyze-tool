@@ -2087,6 +2087,30 @@
             "type": "string",
             "title": "Settle Book"
           },
+          "settled_with": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settled With",
+            "description": "实际用到的庄，如 pinnacle 或 macau。未结算时为 null。"
+          },
+          "fallback_book": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback Book",
+            "description": "发生回退时为 macau；未回退为 null。"
+          },
           "line": {
             "anyOf": [
               {

@@ -23,7 +23,7 @@ M4 及以前的旧 run 保留在库，但指纹不同，**不会被 M5 误复用
 ## 2. 验证精算口径（单方案 validate）
 
 ### 2.1 结算（亚盘）
-- 盘口：`settle_book`（默认 `macau_close` → `odds_asian.book=macau, phase=close`）主队视角 handicap；四分盘拆半。
+- 盘口：`settle_book`（2026-10-16 起缺省 `pinnacle_then_macau`，见 `v1_9-settle-book-pinnacle-then-macau.md`；显式 `macau_close` 仍为澳门 close）主队视角 handicap；四分盘拆半。
 - 赢付 `stake × water`，输全损，半赢/半输按半注；走盘 0。
 - **水位（0.3.6 口径，见 §8.1）**：`juice_source ∈ fixed_macau | tier_mapped | actual | fallback`。
   - `macau_*`：**仓库固定口径 0.95**（macau 不补采水位，这是口径不是缺陷）→ `fixed_macau`。
