@@ -23,6 +23,7 @@ import {
 import { AgGridReact } from 'ag-grid-react'
 import { AG_GRID_LOCALE_CN } from '@ag-grid-community/locale'
 import { HelpTip } from '../components/HelpTip'
+import { renderJingcaiDateCell, useMatchDateMarks } from '../components/useMatchDateMarks'
 import { DEFAULT_STRATEGY } from '../api/strategies'
 import { apiBooks, loadRows, type DataMode } from '../sheet2/load'
 import { ALL_SHEET_TABS, BOOK_TABS, buildSheetColumns, CMP_MARKET, OVERVIEW_TABS, type SheetTabId } from '../sheet2/tabColumns'
@@ -141,6 +142,8 @@ export default function SheetPage() {
 
   const showBookSelect = tab === 'predict' || tab === 'fundamentals' || !!cmpMarket
   const mockCount = rows.filter((r) => r._mock).length
+  // 数据表只看竞彩场，不跟赛程页的范围切换。
+  const matchDates = useMatchDateMarks('jingcai')
 
   return (
     <div className="sheet2">
@@ -148,7 +151,24 @@ export default function SheetPage() {
         <Typography.Title level={4} style={{ margin: 0 }}>
           数据表
         </Typography.Title>
-        <RangePicker value={range} onChange={(v) => v?.[0] && v[1] && setRange([v[0], v[1]])} allowClear={false} disabled={mode === 'mock'} />
+        <RangePicker
+          value={range}
+          onChange={(v) => v?.[0] && v[1] && setRange([v[0], v[1]])}
+          allowClear={false}
+          disabled={mode === 'mock'}
+          onOpenChange={(open) => {
+            if (open) matchDates.syncAnchor(range[0], 2)
+          }}
+          onPanelChange={(values, modes) => {
+            const anchor = values[0] ?? values[1]
+            if (anchor && modes.includes('date')) matchDates.syncAnchor(anchor, 2)
+          }}
+          onPickerValueChange={(values, info) => {
+            const anchor = info.range === 'end' ? values[1] : values[0]
+            if (anchor && info.mode.includes('date')) matchDates.syncAnchor(anchor, 2)
+          }}
+          cellRender={(current, info) => renderJingcaiDateCell(current, info, matchDates.markOf)}
+        />
         <Space size={4}>
           <Typography.Text>数据</Typography.Text>
           <Segmented<DataMode>
