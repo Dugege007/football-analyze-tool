@@ -1,7 +1,8 @@
 /**
  * 数据表页（/sheet）第 1 期：按用户 2026-10-14 修订的《数据表页面意见》重做。
- * 两组共 11 个标签；字段名照后端《数据表接口字段约定（第 1 期）》；接口没提供的字段显示「无法获取」。
- * 页面不写解释性文字，说明放在小问号里（web/UI-GUIDELINES.md）。
+ * 数据概览：预测、基本面、三项对照。机构数据：多家平均、五家机构、竞彩。
+ * 字段名照后端《数据表接口字段约定（第 1 期）》；盘口格子缺字段显示「无法获取」。
+ * 基本面 xG 缺字段显示「-」。页面不写解释性文字，说明放在小问号里（web/UI-GUIDELINES.md）。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -23,8 +24,8 @@ import { AgGridReact } from 'ag-grid-react'
 import { AG_GRID_LOCALE_CN } from '@ag-grid-community/locale'
 import { HelpTip } from '../components/HelpTip'
 import { DEFAULT_STRATEGY } from '../api/strategies'
-import { baseCols, bookCols, jcCols, predCols, type Market } from '../sheet2/columns'
 import { apiBooks, loadRows, type DataMode } from '../sheet2/load'
+import { ALL_SHEET_TABS, BOOK_TABS, buildSheetColumns, CMP_MARKET, OVERVIEW_TABS, type SheetTabId } from '../sheet2/tabColumns'
 import { BOOKS, BOOK_NAME, type Book, type Row } from '../sheet2/types'
 import '../sheet2/sheet2.css'
 
@@ -40,25 +41,9 @@ ModuleRegistry.registerModules([
 
 const { RangePicker } = DatePicker
 
-type TabId = 'predict' | 'avg' | 'cmp_ah' | 'cmp_ou' | 'cmp_x1x2' | 'macau' | 'crown' | 'pinnacle' | 'william' | 'bet365' | 'jc'
-const OVERVIEW: { value: TabId; label: string }[] = [
-  { value: 'predict', label: '预测' },
-  { value: 'avg', label: '多家平均' },
-  { value: 'cmp_ah', label: '亚盘对照' },
-  { value: 'cmp_ou', label: '大小对照' },
-  { value: 'cmp_x1x2', label: '欧赔对照' },
-]
-const BOOK_TABS: { value: TabId; label: string }[] = [
-  { value: 'macau', label: '澳门' },
-  { value: 'crown', label: '皇冠' },
-  { value: 'pinnacle', label: '平博' },
-  { value: 'william', label: '威廉' },
-  { value: 'bet365', label: 'Bet365' },
-  { value: 'jc', label: '竞彩' },
-]
-const ALL_TABS = [...OVERVIEW, ...BOOK_TABS].map((t) => t.value)
-const CMP_MARKET: Partial<Record<TabId, Market>> = { cmp_ah: 'ah', cmp_ou: 'ou', cmp_x1x2: 'x1x2' }
-const CMP_BOOKS: Book[] = ['avg', 'macau', 'crown', 'pinnacle', 'william', 'bet365']
+type TabId = SheetTabId
+const OVERVIEW = OVERVIEW_TABS
+const ALL_TABS: TabId[] = ALL_SHEET_TABS
 
 /** 按接口顶层 books 排机构列；接口没给时用默认顺序。多家平均固定在最前（第 1 期已定），其余按接口顺序。 */
 function orderBooks(def: Book[]): Book[] {
@@ -145,24 +130,16 @@ export default function SheetPage() {
     void load()
   }, [load])
 
-  const lockedBook: Book | null = tab === 'avg' ? 'avg' : (['macau', 'crown', 'pinnacle', 'william', 'bet365'] as string[]).includes(tab) ? (tab as Book) : null
+  const lockedBook: Book | null = (['avg', 'macau', 'crown', 'pinnacle', 'william', 'bet365'] as string[]).includes(tab) ? (tab as Book) : null
   const settleBook: Book = lockedBook ?? predBook
   const cmpMarket = CMP_MARKET[tab]
   const ro = cmpMarket ? !!resultOnly[tab] : false
 
   const columnDefs = useMemo(() => {
-    const cols = [...baseCols()]
-    if (tab === 'predict') cols.push(predCols(settleBook, ['ah', 'ou', 'x1x2', 'jc']))
-    else if (tab === 'jc') cols.push(predCols(settleBook, ['jc']), jcCols())
-    else if (cmpMarket) {
-      cols.push(predCols(settleBook, [cmpMarket]))
-      for (const b of orderBooks(CMP_BOOKS)) cols.push(bookCols(b, [cmpMarket], ro))
-      if (cmpMarket === 'x1x2') cols.push(jcCols(true, true))
-    } else if (lockedBook) cols.push(predCols(lockedBook, ['ah', 'ou', 'x1x2', 'jc']), bookCols(lockedBook))
-    return withHeaderTips(cols)
-  }, [tab, settleBook, cmpMarket, ro, lockedBook, rows])
+    return withHeaderTips(buildSheetColumns({ tab, settleBook, resultOnly: ro, orderBooks }))
+  }, [tab, settleBook, ro, rows])
 
-  const showBookSelect = tab === 'predict' || !!cmpMarket
+  const showBookSelect = tab === 'predict' || tab === 'fundamentals' || !!cmpMarket
   const mockCount = rows.filter((r) => r._mock).length
 
   return (
@@ -183,7 +160,7 @@ export default function SheetPage() {
               { value: 'both', label: '接口+模拟' },
             ]}
           />
-          <HelpTip tip={'第 1 期调试用。\n接口：只用批量接口的数据，接口还没提供的字段显示「无法获取」。\n模拟：只用前端模拟数据。\n接口+模拟：两者都列出。'} />
+          <HelpTip tip={'第 1 期调试用。\n接口：只用批量接口的数据。盘口格子缺字段显示「无法获取」；基本面缺字段显示「-」。\n模拟：只用前端模拟数据。\n接口+模拟：两者都列出。'} />
         </Space>
         <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>
           刷新

@@ -38,6 +38,8 @@ export const COLUMN_WIDTHS = {
   'jc.had.odds': 48, // 胜平负临、中、初盘的胜、平、负
   'jc.hhad.goal': 48, // 让球胜平负临、中、初盘的让球
   'jc.hhad.odds': 48, // 让球胜平负临、中、初盘的胜、平、负
+  // 基本面 xG 六列共用。每一列宽度都是 60，不另写死像素。
+  'fund.xg': 60, // 全场主队xG、全场客队xG、上半场主队xG、上半场客队xG、下半场主队xG、下半场客队xG
 } as const
 
 export type WidthKey = keyof typeof COLUMN_WIDTHS
@@ -80,6 +82,7 @@ export const COLUMN_ALIGN: Record<WidthKey, Align | Record<string, Align>> = {
   'jc.had.odds': { 胜: 'right', 平: 'center', 负: 'left' },
   'jc.hhad.goal': 'center',
   'jc.hhad.odds': { 胜: 'right', 平: 'center', 负: 'left' },
+  'fund.xg': 'center',
 }
 
 /** 取对齐的样式类名（al-left / al-center / al-right）；sub 为共用 key 时的小标题 */

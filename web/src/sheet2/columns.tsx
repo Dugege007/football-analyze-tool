@@ -22,7 +22,8 @@ import {
   statusOf,
   x1x2Move,
 } from './format'
-import { BOOK_NAME, PHASES, PHASE_NAME, type Phased, type X1x2Cell, type AvgDetail, type Book, type CellStatus, type Move, type MoveDir, type Phase, type ResultReason, type Row } from './types'
+import { BOOK_NAME, PHASES, PHASE_NAME, type Phased, type X1x2Cell, type AvgDetail, type Book, type CellStatus, type FundNumberCell, type Move, type MoveDir, type Phase, type ResultReason, type Row } from './types'
+import { XG_COLUMNS, xgCellView } from './xg'
 
 export type Market = 'ah' | 'ou' | 'x1x2'
 type Col = ColDef<Row> | ColGroupDef<Row>
@@ -471,6 +472,37 @@ export function jcCols(resultOnly = false, onlyHad = false): ColGroupDef<Row> {
     }
   }
   return { groupId: 'book.jc', headerName: '竞彩', headerClass: SEC, children }
+}
+
+// ───────────── 基本面列 ─────────────
+function XgText({ cell }: { cell: FundNumberCell | null | undefined }) {
+  const view = xgCellView(cell)
+  if (view.kind === 'dash') return view.text
+  if (view.kind === 'unavailable') return <StatusText st="unavailable" reason={view.reason} reasonZh={view.reasonZh} />
+  if (!view.mark) return view.text
+  const el = <span className={view.className}>{view.text}</span>
+  return view.tip ? <Tooltip title={view.tip}>{el}</Tooltip> : el
+}
+
+/**
+ * 基本面数据组。目前只亮 xG 六列，放在组末（近况、交锋、排名、人气、伤停、天气尚未亮列）。
+ * 只挂在「基本面」标签，预测标签和机构标签不使用本组。
+ */
+export function fundCols(): ColGroupDef<Row> {
+  const children = XG_COLUMNS.map((col, i) =>
+    withAlign(
+      {
+        colId: `fund.${col.key}`,
+        headerName: col.header,
+        width: w('fund.xg'),
+        headerClass: i === 0 ? SEC : undefined,
+        cellClass: i === 0 ? SEC : undefined,
+        cellRenderer: (p: P) => <XgText cell={p.data?.fundamentals?.[col.key]} />,
+      },
+      'fund.xg',
+    ),
+  )
+  return { groupId: 'fund', headerName: '基本面', headerClass: SEC, children }
 }
 
 // ───────────── 预测列 ─────────────

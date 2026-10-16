@@ -5,6 +5,7 @@
 import { apiBase } from '../api/dataSource'
 import { mockRows } from './mock'
 import type { AhCell, OuCell, CellStatus, JcHhadCell, MatchStatus, Phase, Phased, Row, X1x2Cell } from './types'
+import { mapFundamentals } from './xg'
 
 export type DataMode = 'api' | 'mock' | 'both'
 
@@ -163,6 +164,7 @@ export function mapApiRow(it: Raw): Row {
         }
       : null,
     settlement_by_book: it.settlement_by_book ?? null,
+    fundamentals: mapFundamentals(it.fundamentals),
   }
 }
 
