@@ -70,6 +70,7 @@ MIGRATION_PATHS = [
     SCHEMA_DIR / "v1_7_water_tier_midpoint.sql",  # DDL；数据换算见 scripts/migrate_v1_7_water.py
     SCHEMA_DIR / "v2_0_odds_timeline.sql",  # D1：timeline/snapshot/fetch_blob；数据见 scripts/import_odds_timeline_probe.py
     SCHEMA_DIR / "v2_1_market_settle.sql",  # 机构赛果表；回填写库见 scripts/backfill_market_settle.py，默认不执行
+    SCHEMA_DIR / "v2_0_xg_obs.sql",  # 预期进球观测、BSD 赛事映射和拉取队列；现网补表见 scripts/ensure_xg_obs_schema.py，默认不写
 ]
 
 

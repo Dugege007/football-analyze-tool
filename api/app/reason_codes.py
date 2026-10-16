@@ -56,6 +56,13 @@ REASON_ZH: dict[str, str] = {
     "post_match_only": "只有赛后数据，不能使用",
     "empty_from_source": "来源返回为空",
     "not_collected": "还没有采集",
+    # 预期进球六列（数据表基本面，2026-10-16；页面由 PR #11 承接）
+    "no_bsd_mapping": "本场没有对应的 BSD 赛事编号",
+    "no_bsd_coverage": "BSD 没有这场比赛的预期进球",
+    "full_side_missing": "这一侧的全场预期进球没有返回",
+    "half_side_missing": "这一侧的上半场预期进球没有返回",
+    "second_half_inputs_missing": "全场或上半场这一侧没有数值，不能得出下半场预期进球",
+    "derived_from_full_minus_half": "由全场减上半场得出",
     # 2026-10-14 补登记：基本面合同核对清单与第一期合同 7.7 节
     "source_not_covered": "来源不收录这场比赛",
     "no_standings": "这项赛事没有积分榜",

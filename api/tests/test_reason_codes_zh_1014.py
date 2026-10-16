@@ -126,6 +126,8 @@ API_REASON_CODES = (
     "no_team_id", "extra_time_unverified", "post_match_only", "empty_from_source", "not_collected",
     "source_not_covered", "no_standings", "no_pinnacle_1x2", "injury_list_empty_unconfirmed",
     "home_not_due", "away_not_due",
+    "no_bsd_mapping", "no_bsd_coverage", "full_side_missing", "half_side_missing",
+    "second_half_inputs_missing", "derived_from_full_minus_half",
     # 影子策略不可评估子原因
     "fit_not_converged", "real_water_lt_3", "stale_tick",
 )
@@ -145,7 +147,7 @@ def test_source_literal_reasons_registered():
     pat = re.compile(r'''["'](\w*reason)["']\s*\]?\s*[:=]\s*["']([a-z0-9_;]+)["']''')
     status_values = {"ok", "insufficient", "unavailable", "pending"}
     missing = []
-    for f in ("table_matches.py", "avg_cells.py", "open_status.py", "avg_conversion.py", "market_settle.py"):
+    for f in ("table_matches.py", "avg_cells.py", "open_status.py", "avg_conversion.py", "market_settle.py", "xg_obs.py"):
         for line in (root / f).read_text(encoding="utf-8").splitlines():
             for m in pat.finditer(line):
                 v = m.group(2)

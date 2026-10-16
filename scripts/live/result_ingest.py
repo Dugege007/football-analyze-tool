@@ -13,6 +13,7 @@
 写库规则：
 - 只插入 results 里缺失的行，不覆盖已有的行。
 - 新插入的完场比分提交前，用与 backfill_market_settle 相同的单场重算写入 market_settle。只写当前这个库，不打开双写，不计算竞彩赛果。
+- 同一事务里把新完赛场次放进预期进球队列 xg_fetch_queue。tick 在本轮赛果处理之后，如果环境里有 BSD 令牌，就按队列拉取一次；没有令牌则保持未填写。第二次拉取排在三小时之后，仍由这个 tick 带走，不另起守护进程。这个队列与盘口补数无关。
 - 两个来源都有比分且不一致：不写，标记 score_conflict。
 - 竞彩退款：标记 refund；5DF 推迟、取消、腰斩：标记 postponed、cancelled、abandoned；这些都不进可结算赛果。
 - 每次有内容要写之前，先用 sqlite backup 备份到 /workspace/backups/v2d3-before-result-ingest-<时间戳>/app.db。
@@ -382,9 +383,36 @@ def apply(db: str, decisions: list[tuple[dict, dict]], backup_root: Path, batch_
                             (m["id"], f, json.dumps(det, ensure_ascii=False), iso(now), iso(now)))
             if inserted_ids:
                 res["market_settle"] = _refresh_market_settle(con, inserted_ids, now)
+                res["xg_queue"] = _enqueue_xg_after_results(con, inserted_ids, now)
     finally:
         con.close()
     return res
+
+
+def _enqueue_xg_after_results(con: sqlite3.Connection, match_ids: list[int], now: dt.datetime) -> dict:
+    """新写入的完赛场次进入预期进球队列。这里只入队，不请求 BSD。"""
+    api_root = Path(__file__).resolve().parents[2] / "api"
+    if str(api_root) not in sys.path:
+        sys.path.insert(0, str(api_root))
+    from app.xg_obs import enqueue_finished_matches
+
+    return enqueue_finished_matches(con, match_ids, now)
+
+
+def pull_xg_after_tick(db: str, now: dt.datetime) -> dict:
+    """赛果这一轮结束之后拉取已到期的预期进球。没有令牌时不改队列。"""
+    api_root = Path(__file__).resolve().parents[2] / "api"
+    if str(api_root) not in sys.path:
+        sys.path.insert(0, str(api_root))
+    from app.xg_obs import pull_due_expected_goals
+
+    con = sqlite3.connect(db, timeout=60)
+    try:
+        report = pull_due_expected_goals(con, now, limit=20, sleep_seconds=0)
+        con.commit()
+        return report
+    finally:
+        con.close()
 
 
 def _s(t):
@@ -466,6 +494,11 @@ def tick(args, st: State, cl: FiveDF | None, now: dt.datetime, log) -> dict:
             st.d["cutoff_flagged"][str(m["id"])] = iso(now)
         if r["backup"]:
             prune_backups(Path(args.backup_root))
+    try:
+        out["xg"] = pull_xg_after_tick(db, now)
+    except Exception as exc:
+        out["xg"] = {"error": str(exc)}
+        log(f"预期进球拉取没有完成：{exc}")
     st.save()
     return out
 

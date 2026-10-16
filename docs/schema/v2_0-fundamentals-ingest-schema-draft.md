@@ -100,6 +100,8 @@ ALTER TABLE stats ADD COLUMN xg_scope TEXT;  -- prematch_model|postmatch_actual
 
 本阶段：**只写 `stats_obs.kind='xg'`**。
 
+2026-10-16 起，数据表六列的载荷、精度和下半场减法以 [`v2_0-xg-six-columns.md`](./v2_0-xg-six-columns.md) 为准。库和接口保留完整精度；两位小数只在前端展示。下半场优先用 BSD 的独立字段，没有时在写入前用全场减去上半场。
+
 ### 2.3 `payload_json` 最小约定
 
 | kind | payload 关键键 |
