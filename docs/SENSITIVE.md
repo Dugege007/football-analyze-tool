@@ -66,12 +66,12 @@
 | 验证 | `curl -s -H "X-Auth-Token: $FOOTBALL_DATA_ORG_API_KEY" https://api.football-data.org/v4/competitions/PL` |
 | 常见失败 | `403` 当前账户无权访问该赛事；`429` 请求过于频繁 |
 
-## 6. BSD（Bzzoiro Sports Data）—— xG / 伤停（可选，v0 代码未直接调用）
+## 6. BSD（Bzzoiro Sports Data）—— xG / 伤停（可选）
 
 | 项 | 说明 |
 |---|---|
 | 申请 | <https://sports.bzzoiro.com> 注册 |
-| 变量 | `BSD_BZZOIRO_API_KEY`（请求头 `Authorization: Token <key>`） |
+| 变量 | `BSD_BZZOIRO_API_KEY`（请求头 `Authorization: Token <key>`）。`scripts/backfill/bsd_event_map_build.py` 在线拉赛程时读取 |
 | 相关文档 | `docs/schema/v2_0-fundamentals-ingest-schema-draft.md` |
 | 验证 | `curl -s -H "Authorization: Token $BSD_BZZOIRO_API_KEY" "https://sports.bzzoiro.com/api/v2/"` |
 
