@@ -9,7 +9,7 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "check:licenses": "node scripts/check-licenses.mjs",
-    "test": "node scripts/test-pick-format.mjs && node scripts/test-reason-hover.mjs && node scripts/test-popularity-diff.mjs && node scripts/test-book-result.mjs && node scripts/test-xg-columns.mjs && node scripts/test-match-dates.mjs"
+    "test": "node scripts/test-pick-format.mjs && node scripts/test-reason-hover.mjs && node scripts/test-popularity-diff.mjs && node scripts/test-book-result.mjs && node scripts/test-xg-columns.mjs && node scripts/test-match-dates.mjs && node scripts/test-sheet-range.mjs"
   },
   "dependencies": {
     "@ag-grid-community/locale": "^36.2.0",

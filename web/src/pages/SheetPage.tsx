@@ -26,6 +26,7 @@ import { HelpTip } from '../components/HelpTip'
 import { renderJingcaiDateCell, useMatchDateMarks } from '../components/useMatchDateMarks'
 import { DEFAULT_STRATEGY } from '../api/strategies'
 import { apiBooks, loadRows, type DataMode } from '../sheet2/load'
+import { SHEET_RANGE_PRESETS, currentInstantMs, matchingSheetRangePresets, sheetRangePreset, type SheetRangePresetId } from '../sheet2/dateRangePresets'
 import { ALL_SHEET_TABS, BOOK_TABS, buildSheetColumns, CMP_MARKET, OVERVIEW_TABS, type SheetTabId } from '../sheet2/tabColumns'
 import { BOOKS, BOOK_NAME, type Book, type Row } from '../sheet2/types'
 import '../sheet2/sheet2.css'
@@ -79,10 +80,13 @@ export default function SheetPage() {
   }
   const modeParam = sp.get('data') as DataMode | null
   const [mode, setMode] = useState<DataMode>(modeParam === 'api' || modeParam === 'mock' || modeParam === 'both' ? modeParam : 'api')
+  const [clockMs, setClockMs] = useState(() => Date.now())
   const [range, setRange] = useState<[Dayjs, Dayjs]>(() => {
-    // 网址可带 from、to（YYYY-MM-DD）指定日期范围，便于核对和截图
+    // 网址可带 from、to（YYYY-MM-DD）指定日期范围，便于核对和截图。缺省与「近7日」相同，按北京时间取今天往前共 7 天。
     const f = sp.get('from'), t = sp.get('to')
-    return f && t && dayjs(f).isValid() && dayjs(t).isValid() ? [dayjs(f), dayjs(t)] : [dayjs().subtract(6, 'day'), dayjs()]
+    if (f && t && dayjs(f).isValid() && dayjs(t).isValid()) return [dayjs(f), dayjs(t)]
+    const last7 = sheetRangePreset('last7', Date.now())
+    return [dayjs(last7.from), dayjs(last7.to)]
   })
   const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(false)
@@ -130,6 +134,10 @@ export default function SheetPage() {
   useEffect(() => {
     void load()
   }, [load])
+  useEffect(() => {
+    const timer = setInterval(() => setClockMs(currentInstantMs()), 60 * 1000)
+    return () => clearInterval(timer)
+  }, [])
 
   const lockedBook: Book | null = (['avg', 'macau', 'crown', 'pinnacle', 'william', 'bet365'] as string[]).includes(tab) ? (tab as Book) : null
   const settleBook: Book = lockedBook ?? predBook
@@ -144,6 +152,17 @@ export default function SheetPage() {
   const mockCount = rows.filter((r) => r._mock).length
   // 数据表只看竞彩场，不跟赛程页的范围切换。
   const matchDates = useMatchDateMarks('jingcai')
+  // 手动选的范围和快捷按钮都只改这一处，加载效果跟着 range 走。
+  const applyRange = (nextFrom: Dayjs, nextTo: Dayjs) => {
+    setRange([nextFrom, nextTo])
+  }
+  const applyPreset = (id: SheetRangePresetId) => {
+    const at = currentInstantMs()
+    setClockMs(at)
+    const picked = sheetRangePreset(id, at)
+    applyRange(dayjs(picked.from), dayjs(picked.to))
+  }
+  const activePresetIds = matchingSheetRangePresets(range[0].format('YYYY-MM-DD'), range[1].format('YYYY-MM-DD'), clockMs)
 
   return (
     <div className="sheet2">
@@ -153,7 +172,7 @@ export default function SheetPage() {
         </Typography.Title>
         <RangePicker
           value={range}
-          onChange={(v) => v?.[0] && v[1] && setRange([v[0], v[1]])}
+          onChange={(v) => v?.[0] && v[1] && applyRange(v[0], v[1])}
           allowClear={false}
           disabled={mode === 'mock'}
           onOpenChange={(open) => {
@@ -169,6 +188,18 @@ export default function SheetPage() {
           }}
           cellRender={(current, info) => renderJingcaiDateCell(current, info, matchDates.markOf)}
         />
+        <Space.Compact>
+          {SHEET_RANGE_PRESETS.map((preset) => (
+            <Button
+              key={preset.id}
+              type={activePresetIds.includes(preset.id) ? 'primary' : 'default'}
+              disabled={mode === 'mock'}
+              onClick={() => applyPreset(preset.id)}
+            >
+              {preset.label}
+            </Button>
+          ))}
+        </Space.Compact>
         <Space size={4}>
           <Typography.Text>数据</Typography.Text>
           <Segmented<DataMode>
