@@ -40,6 +40,33 @@ export async function listMatches(
   }
 }
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+
+export interface MatchDatesResponse {
+  dates: string[]
+}
+
+/**
+ * 读取闭区间内至少有一条比赛记录的竞彩日。
+ * 只请求 GET /matches/dates，契约见 docs/schema/v2_0-matches-dates-api.md。
+ * 响应不是 { dates: string[] } 时返回 null。调用方不得把失败当成整月没有比赛。
+ */
+export async function listMatchDates(
+  from: string,
+  to: string,
+  scope: string = 'jingcai',
+): Promise<string[] | null> {
+  const query = new URLSearchParams({ from, to, scope })
+  const live = await tryFetch<MatchDatesResponse>(`/matches/dates?${query.toString()}`)
+  if (!live || !Array.isArray(live.dates)) return null
+  const dates: string[] = []
+  for (const item of live.dates) {
+    if (typeof item !== 'string' || !ISO_DATE.test(item)) return null
+    dates.push(item)
+  }
+  return dates
+}
+
 export async function getMatch(id: string, base = '/api'): Promise<WithSource<MatchDetail>> {
   const live = await tryFetch<MatchDetail>(`/matches/${encodeURIComponent(id)}`, base)
   if (live) return { data: live, source: 'api' }

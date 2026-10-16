@@ -16,3 +16,17 @@ body {
 a {
   color: inherit;
 }
+
+/*
+ * 当月没有比赛的竞彩日：文字比普通当月日期淡，数字下方加虚线，仍然可以点。
+ * 只作用在当月格子上。上月、下月露出的格子继续用组件自带的更淡灰色，两种灰不要画成一样。
+ * 已经选中的起止日保持组件自己的实色，避免虚线盖住选中状态。
+ */
+.ant-picker-dropdown .ant-picker-cell-in-view:not(.ant-picker-cell-selected):not(.ant-picker-cell-range-start):not(.ant-picker-cell-range-end) .ant-picker-cell-inner.picker-day-no-data {
+  color: rgba(0, 0, 0, 0.45);
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-color: rgba(0, 0, 0, 0.38);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 1px;
+}

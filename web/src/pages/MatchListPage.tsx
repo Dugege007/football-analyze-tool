@@ -17,6 +17,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import dayjs, { type Dayjs } from 'dayjs'
 import { listMatches, type DataSource } from '../api/client'
+import { renderJingcaiDateCell, useMatchDateMarks } from '../components/useMatchDateMarks'
 import { labelDataSource } from '../labels'
 import { formatScore } from '../api/formatScore'
 import type { MatchListItem } from '../api/types'
@@ -79,6 +80,7 @@ export default function MatchListPage() {
     () => typeof localStorage !== 'undefined' && localStorage.getItem(SHOW_PICKS_KEY) === '1',
   )
   const [now, setNow] = useState(() => Date.now())
+  const matchDates = useMatchDateMarks(scope)
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 60 * 1000)
@@ -252,6 +254,16 @@ export default function MatchListPage() {
           value={date}
           onChange={(d) => d && setDate(d)}
           allowClear={false}
+          onOpenChange={(open) => {
+            if (open) matchDates.syncAnchor(date, 1)
+          }}
+          onPanelChange={(value, mode) => {
+            if (mode === 'date') matchDates.syncAnchor(value, 1)
+          }}
+          onPickerValueChange={(value, info) => {
+            if (info.mode === 'date') matchDates.syncAnchor(value, 1)
+          }}
+          cellRender={(current, info) => renderJingcaiDateCell(current, info, matchDates.markOf)}
         />
         <Button onClick={() => setDate((d) => d.add(1, 'day'))}>下一日</Button>
         <Button onClick={() => setDate(currentJingcaiDate())}>今日</Button>
