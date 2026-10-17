@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS alias_pool_entry (
   candidate_basis   TEXT, -- 依据类别：standard_file、alias_table、loose_key、affix、manual。
   status            TEXT NOT NULL DEFAULT 'pending'
                     CHECK (status IN ('pending', 'confirmed', 'rejected', 'ambiguous')),
-  manual_reason     TEXT, -- 必须人工处理的原因：gender、age_group、same_name_other_team、reserve_team、multi_candidate、auto_revoked、other。
+  manual_reason     TEXT, -- 必须人工处理的原因。包括 gender、age_group、age_u22、same_name_other_team、reserve_team、multi_candidate、auto_revoked、other。U22 记为 age_u22，表示年龄段，不是二队。
   confirmed_id      INTEGER, -- 确认后的标准名编号。自动映射确认时也会填写。
   confirmed_by      TEXT, -- 确认人。自动映射填写 auto。
   confirmed_at      TEXT, -- 确认时间，北京时间的国际标准化组织 8601 文本。
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS alias_mapping_audit (
   alias_row_table     TEXT, -- 本次新写入的别名表名：team_aliases 或 league_aliases。没有新写入时为空。
   alias_row_id        INTEGER, -- 本次新写入的别名行编号。撤销时只删除这里指向的行，不删除原来就已经存在的别名。
   before_json         TEXT NOT NULL, -- 动作之前的池状态、别名行和受影响场次的三个身份编号。
-  after_json          TEXT NOT NULL, -- 动作之后的池状态、别名行和受影响场次的三个身份编号。
+  after_json          TEXT NOT NULL, -- 动作之后的池状态、别名行和受影响场次的三个身份编号。若某一列因已被改过而跳过，这里用完整句子写明原因。
   actor               TEXT NOT NULL, -- 操作人。自动映射填写 auto，撤销填写调用方给出的人名。
   batch_id            TEXT, -- 批量确认或回溯的批次号。单条自动映射和单条撤销不填写。
   revoked_by_audit_id INTEGER REFERENCES alias_mapping_audit (id), -- 若本行已被撤销，指向那条撤销记录。

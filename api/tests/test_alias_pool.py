@@ -1,8 +1,8 @@
 """待定池核心库的内存数据库测试。
 
 覆盖重复上报不增加次数、规范化键与球队待确认模块一致、歧义标记不自动映射、
-宽松键对应两个标准名时不自动映射、撤销后不再自动映射，以及建表语句可以重复执行。
-测试不打开正式库。
+宽松键对应两个标准名时不自动映射、唯一别名宽松键会自动映射、撤销后不再自动映射，
+以及建表语句可以重复执行。正式库写入保护用临时文件验证，不打开仓库里的正式库。
 """
 from __future__ import annotations
 
@@ -11,10 +11,13 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app import alias_pool  # noqa: E402
+from app import formal_db  # noqa: E402
 from app import team_pending  # noqa: E402
 from app.db import MIGRATION_PATHS  # noqa: E402
 
@@ -151,15 +154,28 @@ def test_ambiguity_markers_are_detected_and_plain_names_are_not():
     assert alias_pool.detect_ambiguity("切尔西 Ladies") == "gender"
     assert alias_pool.detect_ambiguity("曼联U21") == "age_group"
     assert alias_pool.detect_ambiguity("曼联 U-21") == "age_group"
+    assert alias_pool.detect_ambiguity("曼联U22") == "age_u22"
+    assert alias_pool.detect_ambiguity("曼联 U-22") == "age_u22"
+    assert alias_pool.detect_ambiguity("曼联U24") == "age_group"
     assert alias_pool.detect_ambiguity("曼联青年队") == "age_group"
+    assert alias_pool.detect_ambiguity("Sub-20") == "age_group"
     assert alias_pool.detect_ambiguity("巴萨B队") == "reserve_team"
     assert alias_pool.detect_ambiguity("巴萨B 队") == "reserve_team"
+    assert alias_pool.detect_ambiguity("Barcelona B") == "reserve_team"
+    assert alias_pool.detect_ambiguity("Castilla") == "reserve_team"
+    assert alias_pool.detect_ambiguity("Real Madrid Castilla") == "reserve_team"
     assert alias_pool.detect_ambiguity("多特蒙德II") == "reserve_team"
     assert alias_pool.detect_ambiguity("多特蒙德 II") == "reserve_team"
     assert alias_pool.detect_ambiguity("曼联2") == "reserve_team"
     assert alias_pool.detect_ambiguity("青年Reserves") == "age_group"
     assert alias_pool.detect_ambiguity("阿赫利") == "same_name_other_team"
+    assert alias_pool.detect_ambiguity("沙特阿赫利") == "same_name_other_team"
     assert alias_pool.detect_ambiguity("韩国") == "same_name_other_team"
+    assert alias_pool.detect_ambiguity("大韩民国") == "same_name_other_team"
+    assert alias_pool.detect_ambiguity("Al Ahly") == "same_name_other_team"
+    assert alias_pool.detect_ambiguity("Al Ahli") == "same_name_other_team"
+    assert alias_pool.detect_ambiguity("Al-Ahli") == "same_name_other_team"
+    assert alias_pool.detect_ambiguity("曼联 w") == "gender"
     assert alias_pool.detect_ambiguity("曼联") is None
     assert alias_pool.detect_ambiguity("Brescia") is None
     assert alias_pool.detect_ambiguity("VIII") is None
@@ -222,8 +238,12 @@ def test_ambiguity_markers_never_auto_map(monkeypatch):
     samples = [
         ("拜仁慕尼黑女足", "gender"),
         ("曼联U21", "age_group"),
+        ("曼联U22", "age_u22"),
         ("巴萨B队", "reserve_team"),
+        ("Barcelona B", "reserve_team"),
         ("多特蒙德II", "reserve_team"),
+        ("Sub-20", "age_group"),
+        ("沙特阿赫利", "same_name_other_team"),
     ]
     for name, reason in samples:
         _team(conn, name)
@@ -358,7 +378,10 @@ def test_loose_alias_of_another_team_does_not_auto_map(monkeypatch):
 
 
 def test_alias_loose_key_without_same_canonical_loose_key_stays_hint(monkeypatch):
-    """只有别名的宽松键相同、标准名本身的宽松键不同时，只作候选，不自动映射。"""
+    """别名的宽松键相同，且该别名只指向一个标准名时，按等级 2 自动映射。
+
+    标准名本身的宽松键可以不同。别名指向多个标准名，或赛事没有交集时，不在这个用例里自动映射。
+    """
     monkeypatch.setattr(alias_pool, "now_beijing_text", _Clock())
     conn = _connect()
     team_id = _team(conn, "曼彻斯特联")
@@ -367,11 +390,18 @@ def test_alias_loose_key_without_same_canonical_loose_key_stays_hint(monkeypatch
         (team_id,),
     )
     result = alias_pool.pool_observe(conn, "team", "曼 联", "unit_test", "alias-only-loose")
-    assert result["action"] == "pooled"
-    assert result["status"] == "pending"
-    assert result["candidate_id"] == team_id
-    assert result["candidate_basis"] == "alias_table"
-    assert _audit_count(conn) == 0
+    assert result["action"] == "auto"
+    assert result["criterion"] == "loose_key_equal"
+    assert result["confidence"] == "level2_equal_after_cleaning"
+    assert result["standard_id"] == team_id
+    assert result["alias_inserted"] is True
+    assert "曼彻斯特联" in result["message"]
+    stored = conn.execute(
+        "SELECT team_id, source FROM team_aliases WHERE alias = '曼 联'"
+    ).fetchone()
+    assert stored["team_id"] == team_id
+    assert stored["source"] == "auto:loose_key_equal"
+    assert _audit_count(conn) == 1
 
 
 def test_prefix_difference_and_competition_mismatch_stay_in_pool(monkeypatch):
@@ -476,6 +506,174 @@ def test_revoke_stops_later_automatic_mapping(monkeypatch):
     assert _predictions(conn) == frozen
 
 
+def test_revoke_skips_identity_column_changed_after_mapping(monkeypatch):
+    """映射写入的编号若随后被改过，撤销时不覆盖该列，并在撤销审计里写明跳过原因。
+
+    映射没有改过的列也保持现状，即使映射之后被人改过，也不会被撤销改回去。
+    """
+    monkeypatch.setattr(alias_pool, "now_beijing_text", _Clock())
+    conn = _connect()
+    frozen = _predictions(conn)
+    milan = _team(conn, "AC米兰")
+    other = _team(conn, "国际米兰")
+    conn.execute(
+        "INSERT INTO matches (id, home_team, away_team, competition_name, away_team_id) VALUES (7, 'AC 米兰', '客队', '欧冠', 9)"
+    )
+    mapped = alias_pool.pool_observe(conn, "team", "AC 米兰", "unit_test", "matches.id=7#home_team")
+    assert mapped["action"] == "auto"
+    assert conn.execute("SELECT home_team_id FROM matches WHERE id = 7").fetchone()[0] == milan
+    conn.execute("UPDATE matches SET home_team_id = ?, away_team_id = 10 WHERE id = 7", (other,))
+    revoked = alias_pool.revoke_mapping(conn, mapped["audit_id"], "测试人员")
+    assert revoked["matches_restored"] == 0
+    assert revoked["alias_deleted"] is True
+    row = conn.execute("SELECT home_team_id, away_team_id, league_id FROM matches WHERE id = 7").fetchone()
+    assert row["home_team_id"] == other
+    assert row["away_team_id"] == 10
+    assert row["league_id"] is None
+    audit = conn.execute(
+        "SELECT mode, before_json, after_json FROM alias_mapping_audit WHERE id = ?",
+        (revoked["audit_id"],),
+    ).fetchone()
+    assert audit["mode"] == "revoke"
+    before_payload = json.loads(audit["before_json"])
+    payload = json.loads(audit["after_json"])
+    assert before_payload["matches"][0]["home_team_id"] == other
+    assert before_payload["matches"][0]["away_team_id"] == 10
+    assert payload["matches"][0]["home_team_id"] == other
+    assert payload["matches"][0]["away_team_id"] == 10
+    assert payload["skip_reason"]
+    assert "主队编号" in payload["skip_reason"]
+    assert "跳过" in payload["skip_reason"]
+    assert "改过" in payload["skip_reason"]
+    assert "客队编号" not in payload["skip_reason"]
+    assert _audit_count(conn) == 2
+    assert _predictions(conn) == frozen
+
+
+def test_revoke_direct_auto_mapping_creates_pool_entry_and_sighting(monkeypatch):
+    """直接自动映射、从未入池的名称，撤销后要有待定池记录和一条出现记录，不能只写禁止自动名单。"""
+    monkeypatch.setattr(alias_pool, "now_beijing_text", _Clock())
+    conn = _connect()
+    frozen = _predictions(conn)
+    _team(conn, "AC米兰")
+    mapped = alias_pool.pool_observe(conn, "team", "AC 米兰", "unit_test", "direct-auto")
+    assert mapped["action"] == "auto"
+    assert mapped["entry_id"] is None
+    assert conn.execute("SELECT COUNT(*) FROM alias_pool_entry").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM alias_pool_sighting").fetchone()[0] == 0
+    revoked = alias_pool.revoke_mapping(conn, mapped["audit_id"], "测试人员")
+    assert revoked["pool_created"] is True
+    assert revoked["manual_reason"] == "auto_revoked"
+    entry = conn.execute("SELECT * FROM alias_pool_entry").fetchone()
+    assert entry["status"] == "ambiguous"
+    assert entry["manual_reason"] == "auto_revoked"
+    assert entry["seen_count"] == 1
+    assert entry["norm_key"] == alias_pool.norm_key("AC 米兰")
+    assert entry["first_source"] == "unit_test"
+    assert entry["first_source_ref"] == "direct-auto"
+    assert "撤销" in entry["candidate_reason"]
+    assert "AC米兰" in entry["candidate_reason"]
+    sighting = conn.execute("SELECT source, source_ref, context_json FROM alias_pool_sighting").fetchone()
+    assert sighting["source"] == "unit_test"
+    assert sighting["source_ref"] == "direct-auto"
+    assert json.loads(sighting["context_json"]) == {}
+    assert conn.execute("SELECT COUNT(*) FROM alias_pool_sighting").fetchone()[0] == 1
+    block = conn.execute("SELECT reason FROM alias_auto_block").fetchone()
+    assert block["reason"] == "auto_revoked"
+    assert conn.execute("SELECT COUNT(*) FROM alias_pool_entry").fetchone()[0] == 1
+    assert _predictions(conn) == frozen
+
+
+def test_alias_loose_key_hit_auto_maps_when_alias_points_to_one_standard(monkeypatch):
+    """宽松键命中唯一别名时自动映射。别名指向多个标准名，或赛事没有交集时，仍然进入待定池。"""
+    monkeypatch.setattr(alias_pool, "now_beijing_text", _Clock())
+    conn = _connect()
+    united = _team(conn, "曼彻斯特联")
+    conn.execute(
+        "INSERT INTO team_aliases (alias, team_id, source) VALUES ('曼联', ?, 'seed')",
+        (united,),
+    )
+    conn.execute("INSERT INTO matches (id, home_team, competition_name) VALUES (21, '曼·联', '英超')")
+    hit = alias_pool.pool_observe(conn, "team", "曼·联", "unit_test", "matches.id=21#home_team")
+    assert hit["action"] == "auto"
+    assert hit["criterion"] == "loose_key_equal"
+    assert hit["confidence"] == "level2_equal_after_cleaning"
+    assert hit["standard_id"] == united
+    assert hit["alias_inserted"] is True
+    assert hit["match_updated"] is True
+    assert conn.execute("SELECT home_team_id FROM matches WHERE id = 21").fetchone()[0] == united
+
+    gunners = _team(conn, "阿森纳")
+    ajax = _team(conn, "阿贾克斯")
+    conn.execute("INSERT INTO team_aliases (alias, team_id, source) VALUES ('枪手', ?, 'seed')", (gunners,))
+    conn.execute("INSERT INTO team_aliases (alias, team_id, source) VALUES ('枪 手', ?, 'seed')", (ajax,))
+    split = alias_pool.pool_observe(conn, "team", "枪·手", "unit_test", "alias-split")
+    assert split["action"] == "pooled"
+    assert split["status"] == "ambiguous"
+    assert split["manual_reason"] == "multi_candidate"
+    assert conn.execute("SELECT COUNT(*) FROM team_aliases WHERE alias = '枪·手'").fetchone()[0] == 0
+
+    city = _team(conn, "曼彻斯特城")
+    conn.execute("INSERT INTO team_aliases (alias, team_id, source) VALUES ('曼城', ?, 'seed')", (city,))
+    conn.execute(
+        "INSERT INTO matches (id, home_team, competition_name, home_team_id) VALUES (30, '曼城', '英格兰超级联赛', ?)",
+        (city,),
+    )
+    conn.execute("INSERT INTO matches (id, home_team, competition_name) VALUES (22, '曼 城', '欧洲冠军联赛')")
+    mismatch = alias_pool.pool_observe(
+        conn,
+        "team",
+        "曼 城",
+        "unit_test",
+        "matches.id=22#home_team",
+        {"competition_name": "欧洲冠军联赛"},
+    )
+    assert mismatch["action"] == "pooled"
+    assert mismatch["status"] == "pending"
+    assert mismatch["manual_reason"] is None
+    assert mismatch["candidate_id"] == city
+    assert "赛事" in mismatch["candidate_reason"]
+    assert conn.execute("SELECT home_team_id FROM matches WHERE id = 22").fetchone()[0] is None
+
+
+def test_formal_database_write_requires_backup_acknowledgement(monkeypatch, tmp_path):
+    """写入入口先经过正式库保护。没有备份确认时拒绝写正式库，已归档副本即使已备份也拒绝。"""
+    database = (tmp_path / "formal.db").resolve()
+    conn = sqlite3.connect(str(database))
+    try:
+        monkeypatch.setattr(formal_db, "FORMAL_DB_PATH", database)
+        monkeypatch.delenv(formal_db.BACKUP_ENV, raising=False)
+        with pytest.raises(SystemExit) as refused:
+            alias_pool.ensure_schema(conn)
+        assert "备份" in str(refused.value)
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'alias_pool_entry'"
+            ).fetchone()[0]
+            == 0
+        )
+        monkeypatch.setenv(formal_db.BACKUP_ENV, "1")
+        alias_pool.ensure_schema(conn)
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'alias_pool_entry'"
+            ).fetchone()[0]
+            == 1
+        )
+        monkeypatch.delenv(formal_db.BACKUP_ENV, raising=False)
+        with pytest.raises(SystemExit) as observe_refused:
+            alias_pool.pool_observe(conn, "team", "科特布斯", "unit_test", "formal-observe")
+        assert "备份" in str(observe_refused.value)
+        assert conn.execute("SELECT COUNT(*) FROM alias_pool_entry").fetchone()[0] == 0
+        monkeypatch.setattr(formal_db, "ARCHIVED_V2D3_PATH", database)
+        monkeypatch.setenv(formal_db.BACKUP_ENV, "1")
+        with pytest.raises(SystemExit) as archived:
+            alias_pool.revoke_mapping(conn, 1, "测试人员")
+        assert "只读归档" in str(archived.value)
+    finally:
+        conn.close()
+
+
 def test_competition_level2_updates_league_id_only(monkeypatch):
     """赛事名走同一套判据，只回填赛事编号。"""
     monkeypatch.setattr(alias_pool, "now_beijing_text", _Clock())
@@ -538,6 +736,8 @@ def test_schema_can_be_applied_repeatedly_without_dropping_rows():
     assert "msvcrt" not in source
     assert "sqlite3.connect" not in source
     assert "data/app.db" not in source
+    assert "guard_write_target" in source
+    assert "FORMAL_DB_BACKUP_DONE" in source
 
 
 def test_empty_name_is_skipped_and_beijing_time_uses_offset():

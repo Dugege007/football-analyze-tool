@@ -5,7 +5,9 @@
 撤销也写在这张审计表里，用 mode 区分自动、人工和撤销。
 
 分析师已经确定的规则如下。
-等级 1（已知别名或标准名的规范化键完全相等）和等级 2（宽松键完全相等）都会自动生效，并且可以撤销。
+等级 1 是规范化键与已知别名或标准名完全相等，会自动生效，并且可以撤销。
+等级 2 在两种情况下自动生效。一种是宽松键与唯一标准名完全相等。另一种是宽松键与已有别名的宽松键相同，并且这些别名只指向同一个标准名。
+别名指向多个标准名，或者来源赛事与该球队已有赛事没有交集时，仍然进入待定池。
 同名不同队不给别名表增加赛事列，也不修改任何已有表的结构。身份编号无法唯一确定时保持为空，交给人工处理。
 映射只填写身份编号和别名，不修改已经冻结的预测。审计表用 effective_at 记录映射生效时间。
 审计保持一张表。所有新表的时间都使用北京时间的国际标准化组织 8601 文本，并带有 +08:00。
@@ -20,11 +22,14 @@ revoke_mapping(conn, audit_id, actor) 撤销一条自动映射或人工映射。
 
 建表方式如下。
 建表语句在 docs/schema/alias_pool.sql。导入本模块不会打开正式库，也不会把该文件注册进自动迁移。
-调用方打开自己的连接后执行 ensure_schema。未经备份和批准，不得把正式库连接传进来。
+调用方打开自己的连接后执行 ensure_schema。写入前会先经过 formal_db.guard_write_target。
+写正式库时必须已经设置环境变量 FORMAL_DB_BACKUP_DONE=1。已归档的研究副本一律拒绝写入。
 
 回滚方式如下。
 按顺序删除 alias_mapping_audit、alias_pool_sighting、alias_pool_entry、alias_auto_block。
-若自动映射新插入了别名行，撤销函数会按审计记录中的别名行编号删除该行，并按动作前的快照恢复场次的三个身份编号。
+若自动映射新插入了别名行，撤销函数会按审计记录中的别名行编号删除该行。
+撤销只恢复该次映射实际改过的身份编号列，并且只有当前值仍等于映射写入的值时才恢复。已经被改过的列跳过，撤销审计用完整句子说明原因。
+直接自动映射、从未进入待定池的名称，撤销后会新建待定池记录，原因记为 auto_revoked，并写一条出现记录。
 已经冻结的预测不在撤销范围内，因为自动映射和撤销都不会修改预测表。
 
 本模块不接入赛果入库、竞彩场次构建、预期进球观测或导入库。那些入口属于后续拉取请求。
@@ -39,6 +44,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.db import split_sql
+from app.formal_db import guard_write_target
 from app.team_pending import norm as _team_pending_norm
 
 _BEIJING = timezone(timedelta(hours=8))
@@ -104,9 +110,9 @@ _LOOSE_PUNCTUATION = frozenset(
 )
 
 # 设计文档已经点名、不能因为库里目前只有一个标准名就自动合并的名称。
-# 阿赫利同时被用来称呼沙特的吉达国民和埃及的阿赫利。
-# 韩国既可能是国家队，也可能出现在俱乐部语境。比较时使用规范化键。
-# 这里不收入全部国家名称。文档只把韩国当作例子，其余国家队仍按标准名是否唯一来判断。
+# 阿赫利同时被用来称呼沙特和埃及的球队，因此名称中只要出现这几个字就不自动映射，沙特阿赫利也算在内。
+# 韩国按整个规范化键相等来判断。大韩民国按包含关系判断。
+# 英文 Al Ahly 与 Al Ahli 用单独的表达式识别。这里不收入全部国家名称。
 _KNOWN_HOMONYM_KEYS = frozenset(("阿赫利", "韩国"))
 
 _CONTEXT_KEYS = ("competition_name", "jingcai_date", "kickoff_at", "region", "country", "opponent_mapped")
@@ -125,12 +131,25 @@ _MATCH_SLOT = {
     "competition_name": (KIND_COMPETITION, "league_id"),
     "competition": (KIND_COMPETITION, "league_id"),
 }
+_IDENTITY_COLUMNS = ("home_team_id", "away_team_id", "league_id")
+_IDENTITY_LABEL = {
+    "home_team_id": "主队编号",
+    "away_team_id": "客队编号",
+    "league_id": "赛事编号",
+}
 _SOURCE_REF_PATTERNS = (
     re.compile(r"matches\.id=(\d+)#(home_team|away_team|competition_name)(?![A-Za-z0-9_])"),
     re.compile(r"(?<![A-Za-z0-9_])match_id=(\d+)#(home|away|competition)(?![A-Za-z0-9_])"),
 )
-_AGE_MARK = re.compile(r"(?<![a-z])u[\s.\-]*?(?:15|16|17|18|19|20|21|23)(?!\d)")
+_AGE_U = re.compile(r"(?<![a-z])u[\s.\-]*?(\d{2})(?!\d)")
+_SUB_AGE = re.compile(r"(?<![a-z])sub[\s.\-]*(\d{2})(?!\d)")
 _PAREN_W = re.compile(r"\(\s*w\s*\)")
+_STANDALONE_W = re.compile(r"(?<![a-z0-9])w(?![a-z0-9])")
+_STANDALONE_B = re.compile(r"(?<![a-z0-9])b(?![a-z0-9])")
+_CASTILLA_MARK = re.compile(r"(?<![a-z])castilla(?![a-z])")
+_AHLY_MARK = re.compile(
+    r"(?<![a-z])al[\s.\-·・]*ahly(?![a-z])|(?<![a-z])al[\s.\-·・]*ahli(?![a-z])"
+)
 _FEM_MARK = re.compile(r"(?<![a-z])fem(?![a-z])")
 _II_MARK = re.compile(r"(?<![a-z])ii(?![a-z])|(?<=[a-hj-uwyz])ii(?![a-z])")
 _RES_MARK = re.compile(r"(?<![a-z])res(?![a-z])")
@@ -141,6 +160,7 @@ _LADIES_MARK = re.compile(r"(?<![a-z])ladies(?![a-z])")
 _REASON_SENTENCE = {
     REASON_GENDER: "名称含有性别标记，不能自动映射。",
     REASON_AGE: "名称含有年龄段标记，不能自动映射。",
+    "age_u22": "名称含有年龄段标记 U22，不能自动映射。",
     REASON_RESERVE: "名称含有二队或预备队标记，不能自动映射。",
     REASON_SAME_NAME: "这个名称对应一支以上的球队，或者是已经点名的同名歧义，不能自动映射。",
     REASON_MULTI: "这个名称对应一个以上的标准名，不能自动映射。",
@@ -179,14 +199,43 @@ def loose_key(name: Any) -> str:
     return "".join(character for character in without_space if character not in _LOOSE_PUNCTUATION)
 
 
+def _age_reason(text: str) -> str | None:
+    """识别年龄段标记，并给出原因代码。
+
+    任意两位数字的 U 年龄都算年龄段，数字前允许空格、点或连字符。
+    U22 的原因代码是 age_u22，用来标明这是年龄段，而不是名称结尾的数字 2 所代表的二队。
+    其余 U 年龄段、Sub 加两位年龄，以及「青年」「预备」「梯队」，原因代码仍是 age_group。
+    """
+    found = _AGE_U.search(text)
+    if found is not None:
+        if found.group(1) == "22":
+            return "age_u22"
+        return REASON_AGE
+    if _SUB_AGE.search(text) or "青年" in text or "预备" in text or "梯队" in text:
+        return REASON_AGE
+    return None
+
+
+def _is_known_homonym(text: str) -> bool:
+    """判断名称是不是已经点名的同名歧义。
+
+    阿赫利按包含判断，因此沙特阿赫利也会被拦住。韩国按整个规范化键相等判断。
+    大韩民国按包含判断。英文 Al Ahly 与 Al Ahli 允许中间有空格、点或连字符。
+    """
+    if "阿赫利" in text or "大韩民国" in text or text in _KNOWN_HOMONYM_KEYS:
+        return True
+    return _AHLY_MARK.search(text) is not None
+
+
 def detect_ambiguity(name: Any) -> str | None:
     """识别禁止自动映射的歧义标记。
 
-    返回 gender、age_group、reserve_team、same_name_other_team 之一。没有标记时返回空。
-    性别包括「女」「女足」「女子」，以及括号中的 W、独立出现的 Women、Ladies、Fem。
-    年龄段包括 U15 至 U21 和 U23，数字前允许空格、点或连字符，也包括「青年」「预备」「梯队」「青年队」。
-    二队包括「B队」、独立出现的罗马数字 II、名称结尾的数字 2、「二队」，以及独立出现的 Reserves、Res、Youth。
-    阿赫利和韩国是设计文档已经点名的同名歧义，即使库里目前只有一个标准名也不自动映射。
+    返回 gender、age_group、age_u22、reserve_team、same_name_other_team 之一。没有标记时返回空。
+    性别包括「女」「女足」「女子」，括号中的 W，独立出现的 W，以及 Women、Ladies、Fem。
+    年龄段包括任意两位数字的 U 年龄和 Sub 加两位年龄，也包括「青年」「预备」「梯队」。
+    U22 的原因代码是 age_u22。其余年龄段的原因代码是 age_group。
+    二队包括「B队」、独立出现的字母 B、Castilla、独立出现的罗马数字 II、名称结尾的数字 2、「二队」，以及 Reserves、Res、Youth。
+    阿赫利、沙特阿赫利、韩国、大韩民国、Al Ahly 和 Al Ahli 即使库里目前只有一个标准名也不自动映射。
     """
     text = norm_key(name)
     if not text:
@@ -197,12 +246,16 @@ def detect_ambiguity(name: Any) -> str | None:
         or _LADIES_MARK.search(text)
         or _FEM_MARK.search(text)
         or _PAREN_W.search(text)
+        or _STANDALONE_W.search(text)
     ):
         return REASON_GENDER
-    if _AGE_MARK.search(text) or "青年" in text or "预备" in text or "梯队" in text:
-        return REASON_AGE
+    age = _age_reason(text)
+    if age is not None:
+        return age
     if (
         re.search(r"b\s*队", text)
+        or _STANDALONE_B.search(text)
+        or _CASTILLA_MARK.search(text)
         or _II_MARK.search(text)
         or text.endswith("2")
         or "二队" in text
@@ -211,9 +264,22 @@ def detect_ambiguity(name: Any) -> str | None:
         or _YOUTH_MARK.search(text)
     ):
         return REASON_RESERVE
-    if text in _KNOWN_HOMONYM_KEYS:
+    if _is_known_homonym(text):
         return REASON_SAME_NAME
     return None
+
+
+def _guard_connection_target(conn: sqlite3.Connection) -> None:
+    """写入前检查连接上的数据库文件。
+
+    内存库没有文件路径，因此不会要求备份确认。
+    每个非空文件路径都交给 guard_write_target。写正式库时必须已经设置 FORMAL_DB_BACKUP_DONE=1。
+    指向已归档研究副本的连接会被拒绝。
+    """
+    for row in conn.execute("PRAGMA database_list"):
+        file_path = row[2]
+        if file_path:
+            guard_write_target(file_path, writing=True)
 
 
 def schema_path() -> Path:
@@ -225,8 +291,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     """在给定连接上建立四张新表。
 
     可以重复执行，不会删除已经写入的行。本函数不负责打开正式库。
-    连接应当由调用方创建。未经备份和批准，不要把正式库的连接传进来。
+    写入前会先经过 guard_write_target。正式库必须已经备份并设置 FORMAL_DB_BACKUP_DONE=1。
     """
+    _guard_connection_target(conn)
     path = schema_path()
     try:
         script = path.read_text(encoding="utf-8")
@@ -250,6 +317,7 @@ def pool_observe(
     命中等级 1 或等级 2 时写入别名和审计，并只回填来源位置指向的那一场的一个身份编号。
     未命中时写入待定池。含歧义标记、对应多个标准名、赛事不一致或已经撤销的名称都不会自动映射。
     上下文只保留赛前已经知道的信息。比分、赛果和赔率即使被传入也会丢弃，不参与判断，也不写入出现记录。
+    真正写入之前会先经过 guard_write_target。名称为空时不写库，因此也不检查备份。
     """
     _require_kind(kind)
     source_text = _require_token(source, "入口名称")
@@ -267,6 +335,7 @@ def pool_observe(
             message="名称为空，没有写入待定池。",
         )
     cleaned = _clean_context(context)
+    _guard_connection_target(conn)
 
     def work() -> dict:
         _require_pool_tables(conn)
@@ -299,16 +368,20 @@ def revoke_mapping(conn: sqlite3.Connection, audit_id: int, actor: str) -> dict:
     """撤销一条映射审计。
 
     如果该次映射新插入了别名行，按编号删除那一行。原来就已经存在的别名不删除。
-    场次上的主队编号、客队编号和赛事编号恢复为该次映射之前的值。
+    只恢复该次映射实际改过的身份编号列，并且只有当前值仍等于映射写入的值时才恢复。
+    某一列在映射之后已被改过时，跳过该列，并在撤销审计里用完整句子说明原因。
     随后写入一条 mode 为 revoke 的审计，把原记录指向它，并把规范化键写入禁止自动名单。
-    对应的待定池记录改为必须人工处理，原因是曾经撤销。
+    名称已经在待定池里时，把该记录改为必须人工处理，原因是曾经撤销。
+    名称是直接自动映射、从未进入待定池时，新建一条待定池记录，原因记为 auto_revoked，并写一条出现记录。
     此后同一规范化键，以及宽松键相同的写法，都不再自动映射。本函数不修改预测表。
+    写入前会先经过 guard_write_target。
     """
     actor_text = _require_token(actor, "操作人")
     try:
         audit_number = int(audit_id)
     except (TypeError, ValueError) as exc:
         raise ValueError("撤销时必须提供映射审计的整数编号。") from exc
+    _guard_connection_target(conn)
 
     def work() -> dict:
         _require_pool_tables(conn)
@@ -337,8 +410,11 @@ def _apply_revoke(conn: sqlite3.Connection, original: dict, actor: str, moment: 
         (kind, normalized),
     )
     alias_deleted = _delete_inserted_alias(conn, original)
-    restored = _restore_matches(conn, mapped_before)
+    # 先记下撤销前场次上的真实编号。人工改过的值必须出现在审计的动作前快照里，不能沿用映射当时写入的值。
+    live_before = _current_matches(conn, mapped_before)
+    restored, skip_reasons = _restore_matches(conn, mapped_before, mapped_after)
     entry_after = entry_before
+    pool_created = False
     if entry_before is not None:
         conn.execute(
             """
@@ -350,6 +426,9 @@ def _apply_revoke(conn: sqlite3.Connection, original: dict, actor: str, moment: 
             (STATUS_AMBIGUOUS, REASON_REVOKED, moment, entry_before["id"]),
         )
         entry_after = _fetchone_dict(conn, "SELECT * FROM alias_pool_entry WHERE id = ?", (entry_before["id"],))
+    else:
+        entry_after = _insert_revoked_pool_entry(conn, original, kind, raw_name, normalized, moment)
+        pool_created = True
     conn.execute(
         """
         INSERT OR IGNORE INTO alias_auto_block (kind, norm_key, reason, created_by, created_at)
@@ -360,14 +439,21 @@ def _apply_revoke(conn: sqlite3.Connection, original: dict, actor: str, moment: 
     before_audit = {
         "pool_entry": _entry_snapshot(entry_before),
         "alias_row": mapped_after.get("alias_row"),
-        "matches": _matches_from_payload(mapped_after) or _matches_from_payload(mapped_before),
+        "matches": live_before,
     }
     after_audit = {
         "pool_entry": _entry_snapshot(entry_after),
         "alias_deleted": alias_deleted,
         "matches": _current_matches(conn, mapped_before),
         "effective_at": moment,
+        "skip_reason": "".join(skip_reasons) if skip_reasons else None,
+        "pool_created": pool_created,
     }
+    message = f"已撤销编号为 {original['id']} 的映射，并禁止这个规范化键再次自动映射。"
+    if skip_reasons:
+        message += "".join(skip_reasons)
+    if pool_created:
+        message += "这个名称此前没有进入待定池，撤销时已新建待定池记录，并写了一条出现记录。"
     cursor = conn.execute(
         """
         INSERT INTO alias_mapping_audit (
@@ -417,10 +503,12 @@ def _apply_revoke(conn: sqlite3.Connection, original: dict, actor: str, moment: 
         standard_id=original["standard_id"],
         standard_name=original["standard_name"],
         match_updated=restored > 0,
-        message=f"已撤销编号为 {original['id']} 的映射，并禁止这个规范化键再次自动映射。",
+        message=message,
         revoked_audit_id=int(original["id"]),
         alias_deleted=alias_deleted,
         matches_restored=restored,
+        skip_reasons=skip_reasons,
+        pool_created=pool_created,
     )
 
 
@@ -489,12 +577,23 @@ def _analyze(
         target = _standard_by_id(standards, unique_alias_ids[0])
         if target is None:
             sentence = "宽松键与已有别名相同，但没有找到对应的标准名，因此不自动映射。"
-        else:
+            return _manual_decision(None, None, reason_text=sentence, ambiguous=False)
+        marker = _marker_on_hits([target, *alias_hits])
+        if marker is not None:
+            return _manual_decision(marker, target, basis=BASIS_ALIAS)
+        competition_name = context.get("competition_name")
+        if kind == KIND_TEAM and _competition_conflicts(conn, int(target["standard_id"]), competition_name):
             sentence = (
-                f"宽松键与已有别名相同，对应标准名「{target['standard_name']}」。"
-                "标准名本身的宽松键并不相同，因此只作为候选提示，不自动映射。"
+                f"宽松键与已有别名相同，该别名只指向标准名「{target['standard_name']}」，"
+                f"但该球队已经出现过的赛事与本次赛事「{competition_name}」没有交集，因此不自动映射。"
             )
-        return _manual_decision(None, target, reason_text=sentence, basis=BASIS_ALIAS, ambiguous=False)
+            return _manual_decision(None, target, reason_text=sentence, basis=BASIS_ALIAS, ambiguous=False)
+        return _auto_decision(
+            CRITERION_LOOSE_KEY,
+            CONFIDENCE_LEVEL2,
+            target,
+            detail="判据是宽松键与已有别名相同，并且该别名只指向这一个标准名。",
+        )
 
     affix = _affix_candidate(standards, loosened)
     if affix is not None:
@@ -624,7 +723,7 @@ def _apply_auto(
         standard_name=target_name,
         alias_inserted=alias_inserted,
         match_updated=match_updated,
-        message=f"已自动映射到标准名「{target_name}」。{_CRITERION_SENTENCE[decision['criterion']]}",
+        message=f"已自动映射到标准名「{target_name}」。{decision.get('detail') or _CRITERION_SENTENCE[decision['criterion']]}",
     )
 
 
@@ -794,8 +893,8 @@ def _merge_status(
     return new_status, new_reason
 
 
-def _auto_decision(criterion: str, confidence: str, target: dict) -> dict:
-    """构造一条允许自动映射的决定。"""
+def _auto_decision(criterion: str, confidence: str, target: dict, detail: str | None = None) -> dict:
+    """构造一条允许自动映射的决定。detail 用来换成更具体的判据说明。"""
     return {
         "action": MODE_AUTO,
         "criterion": criterion,
@@ -808,6 +907,7 @@ def _auto_decision(criterion: str, confidence: str, target: dict) -> dict:
         "candidate_name": target["standard_name"],
         "candidate_reason": None,
         "candidate_basis": None,
+        "detail": detail,
     }
 
 
@@ -1027,25 +1127,134 @@ def _backfill_match(
     return before, after, True
 
 
-def _restore_matches(conn: sqlite3.Connection, payload: dict) -> int:
-    """按映射前的快照恢复三个身份编号。不修改场次的其他列。"""
+def _format_identity(value: int | None) -> str:
+    """把身份编号写成审计句子里的文字。空编号写成「空值」。"""
+    if value is None:
+        return "空值"
+    return str(value)
+
+
+def _insert_revoked_pool_entry(
+    conn: sqlite3.Connection,
+    original: dict,
+    kind: str,
+    raw_name: str,
+    normalized: str,
+    moment: str,
+) -> dict:
+    """为从未进入待定池的自动映射补一条池记录和一条出现记录。
+
+    出现记录使用原来的入口和来源位置，便于对照是哪一次上报被撤销。
+    原因记为 auto_revoked。禁止自动名单由调用方另行写入，这里不能只写名单。
+    """
+    source = str(original["source"]).strip() if original["source"] else "revoke"
+    source_ref = str(original["source_ref"]).strip() if original["source_ref"] else f"audit.id={original['id']}"
+    standard_name = "" if original["standard_name"] is None else str(original["standard_name"])
+    sentence = (
+        f"这个名称曾被自动映射到标准名「{standard_name}」，撤销后进入待定池。"
+        "它必须由人工处理，不能再次自动映射。"
+    )
+    basis = None
+    if original["criterion"] == CRITERION_KNOWN_ALIAS:
+        basis = BASIS_ALIAS
+    elif original["criterion"] == CRITERION_LOOSE_KEY:
+        basis = BASIS_LOOSE
+    cursor = conn.execute(
+        """
+        INSERT INTO alias_pool_entry (
+            kind, raw_name, norm_key, loose_key, scope_hint, first_source, sources_json,
+            first_source_ref, seen_count, first_seen_at, last_seen_at, candidate_kind_id,
+            candidate_name, candidate_reason, candidate_basis, status, manual_reason, extras,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?)
+        """,
+        (
+            kind,
+            raw_name,
+            normalized,
+            loose_key(raw_name),
+            source,
+            _dump_list([source]),
+            source_ref,
+            moment,
+            moment,
+            original["standard_id"],
+            standard_name,
+            sentence,
+            basis,
+            STATUS_AMBIGUOUS,
+            REASON_REVOKED,
+            moment,
+            moment,
+        ),
+    )
+    entry_id = int(cursor.lastrowid)
+    conn.execute(
+        """
+        INSERT INTO alias_pool_sighting (entry_id, source, source_ref, context_json, seen_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (entry_id, source, source_ref, _dump({}), moment),
+    )
+    conn.execute(
+        "UPDATE alias_pool_entry SET seen_count = 1, updated_at = ? WHERE id = ?",
+        (moment, entry_id),
+    )
+    entry = _fetchone_dict(conn, "SELECT * FROM alias_pool_entry WHERE id = ?", (entry_id,))
+    if entry is None:
+        raise RuntimeError("撤销后新建的待定池记录没有写成功。")
+    return entry
+
+
+def _restore_matches(conn: sqlite3.Connection, before_payload: dict, after_payload: dict) -> tuple[int, list[str]]:
+    """只恢复本次映射真正改过、且当前值仍等于写入值的那一列。
+
+    映射没有改过的列保持原样，即使后来被别人改过，也不改回去。
+    当前值已经不同于映射写入的值时，跳过该列，并返回一句完整的跳过原因。
+    返回值是实际恢复过的场次数，以及跳过原因列表。
+    """
     if not _table_exists(conn, "matches"):
-        return 0
+        return 0, []
+    before_rows = {row["id"]: row for row in _matches_from_payload(before_payload)}
+    after_rows = {row["id"]: row for row in _matches_from_payload(after_payload)}
     restored = 0
-    for row in _matches_from_payload(payload):
-        exists = _fetchone_dict(conn, "SELECT id FROM matches WHERE id = ?", (row["id"],))
-        if exists is None:
+    skips: list[str] = []
+    for match_id, before_row in before_rows.items():
+        after_row = after_rows.get(match_id)
+        if after_row is None:
             continue
+        current_found = _fetchone_dict(
+            conn,
+            "SELECT id, home_team_id, away_team_id, league_id FROM matches WHERE id = ?",
+            (match_id,),
+        )
+        if current_found is None:
+            continue
+        current = _match_snapshot(current_found)
+        assignments: list[str] = []
+        params: list[int | None] = []
+        for column in _IDENTITY_COLUMNS:
+            if before_row[column] == after_row[column]:
+                continue
+            if current[column] == after_row[column]:
+                assignments.append(f"{column} = ?")
+                params.append(before_row[column])
+                continue
+            label = _IDENTITY_LABEL[column]
+            skips.append(
+                f"场次 {match_id} 的{label}当前是{_format_identity(current[column])}，"
+                f"与本次映射写入的{_format_identity(after_row[column])}不同，"
+                "说明该编号在映射之后已被改过，撤销时跳过这一列，没有恢复。"
+            )
+        if not assignments:
+            continue
+        params.append(match_id)
         conn.execute(
-            """
-            UPDATE matches
-               SET home_team_id = ?, away_team_id = ?, league_id = ?
-             WHERE id = ?
-            """,
-            (row["home_team_id"], row["away_team_id"], row["league_id"], row["id"]),
+            f"UPDATE matches SET {', '.join(assignments)} WHERE id = ?",
+            tuple(params),
         )
         restored += 1
-    return restored
+    return restored, skips
 
 
 def _current_matches(conn: sqlite3.Connection, payload: dict) -> list[dict]:
