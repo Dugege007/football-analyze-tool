@@ -37,15 +37,15 @@ nohup setsid /workspace/odds-data/.venv-dc/bin/python scripts/live/result_ingest
 
 ## 竞彩网缓存每日刷新（2026-10-14 分析师决定；2026-10-17 起大陆本机取数改为 YPC 优先）
 
-本机出口请求竞彩网会被拦。因此每天北京时间 11:30 之前，先在大陆本机 YPC（即 YuePC）上执行 `refresh_sporttery.ps1`，再把生成的 `latest_bundle.json` 拷回本机导入。YPC 的建议路径是 `D:\Projects\fat-sporttery\`。YPC 不在线，或者在 YPC 上取不到文件时，才改用 MSI，备用路径是 `C:\Users\win10\fat-sporttery\`。只有 YPC 与 MSI 都失败时，才把这一次刷新记为失败。
+本机出口请求竞彩网会被拦。因此每天北京时间 11:30 之前，先在大陆本机 YPC（即 YuePC）上请求一次，再把结果拷回本机导入。YPC 不在线，或者在 YPC 上取不到文件时，才改用 MSI。只有 YPC 与 MSI 都失败时，才把这一次刷新记为失败。
 
-1. 先在 YPC 上执行下面的命令。脚本位于仓库 `scripts/live/msi/refresh_sporttery.ps1`。它请求最近 4 天到今天的赛果，并把所有分页合成一个文件 `latest_bundle.json`。脚本运行后仍把文件写到当前用户主目录下的 `fat-sporttery\latest_bundle.json`。如果实际输出路径不是建议目录，请先把 `latest_bundle.json` 复制到 `D:\Projects\fat-sporttery\`，再从建议目录拷回本机。
+1. 先在 YPC 上用 Windows PowerShell 5.1 执行下面的命令。YPC 上的 `pwsh` 只是 WindowsApps 里的占位程序，不能运行这个脚本。脚本位于仓库 `scripts/live/msi/refresh_sporttery.ps1`，实测放在 `C:\Users\Administrator\fat-sporttery\`。它请求最近 4 天到今天的赛果，并把所有分页合成一个文件 `latest_bundle.json`。
 
-   `pwsh -NoProfile -ExecutionPolicy Bypass -File D:\Projects\fat-sporttery\refresh_sporttery.ps1`
+   `powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\Administrator\fat-sporttery\refresh_sporttery.ps1`
 
-2. 把 YPC 上的 `D:\Projects\fat-sporttery\latest_bundle.json` 拷到本机 `/workspace/uploads/sporttery_bundle/latest_bundle.json`。
+2. 把 YPC 上的 `C:\Users\Administrator\fat-sporttery\latest_bundle.json` 拷到本机 `/workspace/uploads/sporttery_bundle/latest_bundle.json`。`D:\Projects\fat-sporttery\` 不是取数主路径，该盘写入曾经被拒绝。只有文件已经写成功之后，才可以再复制一份到这个目录，这一份只是可选副本。
 
-3. 如果第 1 步或第 2 步失败，再在 MSI 上执行下面的命令，并把 MSI 上的 `C:\Users\win10\fat-sporttery\latest_bundle.json` 拷到本机的同一路径。
+3. 如果第 1 步或第 2 步失败，再在 MSI 上用 `pwsh` 执行下面的命令，并把 MSI 上的 `C:\Users\win10\fat-sporttery\latest_bundle.json` 拷到本机的同一路径。MSI 才使用 `pwsh` 和 `C:\Users\win10\fat-sporttery\`。
 
    `pwsh -NoProfile -ExecutionPolicy Bypass -File C:\Users\win10\fat-sporttery\refresh_sporttery.ps1`
 
