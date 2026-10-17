@@ -5,7 +5,7 @@
 
 来源：
 - 竞彩网赛果（sporttery，getUniformMatchResultV1 的原始分页 JSON）。本机出口通常被拦（HTTP 567），
-  所以本程序只尝试直连一次，失败就读本地缓存目录（由国内出口机器刷新后放入）。
+  所以本程序只尝试直连一次，失败就读本地缓存目录。缓存由大陆本机刷新后放入。大陆本机取数时优先使用 YPC（即 YuePC）。YPC 不在线或取不到时，才使用 MSI。
 - 5DollarFootballAPI 的中国体彩清单 /chinasportslottery（自带完赛比分和状态），密钥只从环境变量
   FIVEDOLLAR_FOOTBALL_API_KEY 读取，不打印、不落盘。
 - Football-Data.co.uk 公开 CSV（只在两个来源都没有比分时作兜底核对，由 fd_crosscheck 子命令执行）。
@@ -656,7 +656,7 @@ def daemon(args):
         time.sleep(args.interval)
 
 
-# ----------------------------------------------------------------------------- 竞彩网缓存刷新（MSI）
+# ----------------------------------------------------------------------------- 竞彩网缓存刷新（大陆本机，YPC 优先，失败再用 MSI）
 
 SPORTTERY_CACHE = "/workspace/odds-data/research/jingcai-competition-whitelist/cache/sporttery"
 REFRESH_MAX_AGE_H = 3
@@ -664,19 +664,19 @@ REFRESH_MAX_AGE_H = 3
 
 def import_sporttery_bundle(bundle: Path | None, cache_dir: Path, out_dir: Path, now: dt.datetime,
                             note: str | None = None, dry_run: bool = False) -> dict:
-    """把 MSI 上 refresh_sporttery.ps1 生成的 latest_bundle.json 拆页写进缓存目录，并把这次刷新是否成功
-    追加到 out_dir/sporttery_refresh.jsonl（每日汇总读它）。bundle 缺失、过期或内容不对都记为失败。"""
+    """把大陆本机上 refresh_sporttery.ps1 生成的 latest_bundle.json 拆页写进缓存目录，并把这次刷新是否成功
+    追加到 out_dir/sporttery_refresh.jsonl（每日汇总读它）。大陆本机取数时优先使用 YPC（即 YuePC）。YPC 不在线或取不到时，才使用 MSI。bundle 缺失、过期或内容不对都记为失败。"""
     rec = {"at": iso(now), "ok": False, "pages": 0, "matches": 0, "range": None, "error": None}
     try:
         if bundle is None or not bundle.exists():
-            raise ValueError(note or "没有拿到 MSI 的刷新文件")
+            raise ValueError(note or "没有拿到大陆本机（YPC 优先，失败再用 MSI）的刷新文件。")
         doc = json.loads(bundle.read_text(encoding="utf-8-sig"))
         rec["range"] = f"{doc.get('begin')}..{doc.get('end')}"
         fa = dt.datetime.fromisoformat(doc["fetched_at"])
         if now - fa > dt.timedelta(hours=REFRESH_MAX_AGE_H):
             raise ValueError(f"刷新文件是 {doc['fetched_at']} 生成的，已超过 {REFRESH_MAX_AGE_H} 小时，视为本次没有刷新")
         if not doc.get("ok"):
-            raise ValueError(f"MSI 请求竞彩网失败：{doc.get('error')}")
+            raise ValueError(f"大陆本机（YPC 优先，失败再用 MSI）请求竞彩网失败：{doc.get('error')}")
         pages = doc.get("pages") or []
         if isinstance(pages, str):
             pages = [pages]
@@ -892,7 +892,7 @@ def crosscheck_single_source(db: str, out_dir: Path, backup_root: Path, now: dt.
 def main(argv=None):
     p = argparse.ArgumentParser(description="赛果定时入库（只写研究副本 v2d3）")
     p.add_argument("cmd", choices=["daemon", "once", "backfill", "summary", "sporttery_import", "crosscheck"])
-    p.add_argument("--bundle", default=None, help="sporttery_import：MSI 刷新文件 latest_bundle.json 的本机路径")
+    p.add_argument("--bundle", default=None, help="sporttery_import：大陆本机（YPC 优先，失败再用 MSI）刷新得到的 latest_bundle.json 在本机上的路径")
     p.add_argument("--note", default=None, help="sporttery_import：没拿到文件时写进汇总的原因")
     p.add_argument("--sporttery-cache", default=SPORTTERY_CACHE)
     p.add_argument("--fd-refresh", action="store_true", help="crosscheck：先下载 Football-Data.co.uk 公开 CSV")
@@ -913,7 +913,7 @@ def main(argv=None):
     a.sporttery_dir = a.sporttery_dir or str(od / "sporttery_raw")
     a.call_log = a.call_log or str(od / "call_log.tsv")
     if a.sporttery_cache and a.sporttery_cache not in a.extra_sporttery_dir:
-        a.extra_sporttery_dir.append(a.sporttery_cache)  # MSI 刷新的竞彩网缓存
+        a.extra_sporttery_dir.append(a.sporttery_cache)  # 大陆本机（YPC 优先，失败再用 MSI）刷新的竞彩网缓存
     db = check_db_path(a.db)
     if a.cmd == "daemon":
         daemon(a)

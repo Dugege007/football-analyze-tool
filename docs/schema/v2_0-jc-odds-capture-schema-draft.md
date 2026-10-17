@@ -24,11 +24,11 @@
 > | `https://webapi.sporttery.cn/gateway/jc/football/getMatchCalculatorV1.qry`（参数例如 `poolCode=hhad,had&channel=c`） | 官方赔率计算器页面 `https://m.sporttery.cn/mjc/jsq/zqspf/` 使用的公开网页接口，只给当前赔率和涨跌标志（开源项目 Johnserf-Seed/SportteryAPI 与 coryeleven/sporttery-advisor-skill 的说明）。 | 返回腾讯云 EdgeOne 安全拦截页面（HTML），没有拿到 JSON。 |
 > | `https://webapi.sporttery.cn/gateway/jc/football/getFixedBonusV1.qry?clientCode=3001&matchId=<官方场次编号>` | 单场固定奖金接口，社区代码（吾爱破解论坛帖子 thread-1989366）用它按场次读取各玩法赔率。网上有说法称其中含有赔率变化历史列表，但本次没有找到可靠来源列出字段名。 | 返回 HTTP 567 与 EdgeOne「Restricted Access」拦截页面，没有拿到 JSON。 |
 >
-> 结论：赔率变化历史与官方首开赔率的接口地址只有线索，**字段名、是否包含首开那一条、发布时间精度、调用频率限制全部未验证**，本文不写任何未经验证的字段名。需要在没有被屏蔽的网络（例如用户 MSI 电脑上的本地采集器）上实际请求一次 `getFixedBonusV1`，保存原始响应后再定字段映射。
+> 结论：赔率变化历史与官方首开赔率的接口地址只有线索，**字段名、是否包含首开那一条、发布时间精度、调用频率限制全部未验证**，本文不写任何未经验证的字段名。需要在没有被屏蔽的网络上实际请求一次 `getFixedBonusV1`，保存原始响应后再定字段映射。例如可以在大陆本机上的本地采集器里请求。大陆本机取数时优先使用 YPC（即 YuePC）。YPC 不在线或取不到时，才使用 MSI。
 >
 > **用户 2026-10-10 决定暂不接官方接口**
 >
-> 1. 竞彩官方接口（`getMatchCalculatorV1`、`getFixedBonusV1`）暂不接入，也不在用户 MSI 电脑上的采集器里试接。上面的调研结果只作记录。
+> 1. 竞彩官方接口（`getMatchCalculatorV1`、`getFixedBonusV1`）暂不接入，也不在大陆本机上的采集器里试接。大陆本机取数时优先使用 YPC，YPC 不在线或取不到时才使用 MSI。上面的调研结果只作记录。
 > 2. 竞彩胜平负初盘只取 5DollarFootballAPI 历史开赛前的第一笔（见上一节）。
 > 3. 竞彩让球胜平负保持初盘缺失（`status = missing`）。
 > 4. 5DollarFootballAPI 的 `chinasportslottery` 只支持 `1x2`、`asian`、`goalline`、`corner` 四种玩法，没有让球胜平负。

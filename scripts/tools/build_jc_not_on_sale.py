@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""从竞彩官网赛果缓存（MSI bundle）生成「竞彩未开售胜平负」名单 CSV。只读数据库，不写库。
+"""从大陆本机（优先使用 YPC，即 YuePC；YPC 不在线或取不到时才使用 MSI）赛果缓存生成「竞彩未开售胜平负」名单 CSV。只读数据库，不写库。
 
 判断依据：bundle 的 matchResult 里胜平负赔率 h、d、a 全为空，且比赛不是退款或无效场次。
 场次对应：bundle 的 matchNumStr（例如「周二008」）去掉「周」得到 jc_id，matchDate 与本库竞彩日相差 0 或 1 天，

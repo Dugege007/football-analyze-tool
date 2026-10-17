@@ -1,6 +1,9 @@
 # Sync the formal SQLite snapshot before start.bat launches the API.
-# Prefer D:\Du_Test\football\sync when app_latest.db.gz and app_latest.db.sha256
-# are both there; otherwise use C:\Users\win10\football-sync.
+# Prefer the mainland computer YPC (that is, YuePC). Use D:\Du_Test\football\sync
+# when app_latest.db.gz and app_latest.db.sha256 are both in that folder.
+# If YPC is offline or those files are missing, fall back to the MSI computer.
+# The MSI path C:\Users\win10\football-sync remains the backup path.
+# This comment does not change which folder the script selects.
 # Compare SHA256 of the uncompressed db. Same hash skips decompress.
 # A different hash, or a missing local db, gzip-decompresses and replaces
 # D:\Du_Test\football\current\app_latest.db atomically.

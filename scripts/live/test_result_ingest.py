@@ -167,7 +167,7 @@ def test_daemon_single_instance_lock(tmp_path):
     assert p.returncode != 0 and "已有一份" in p.stderr
 
 
-# ---------------------------------------------------------------- 竞彩网缓存刷新（MSI 文件导入）
+# ---------------------------------------------------------------- 竞彩网缓存刷新（大陆本机文件导入。优先使用 YPC，即 YuePC；失败再用 MSI）
 
 def _bundle(tmp, now, *, ok=True, age_h=0.5, pages=None):
     import json
@@ -189,8 +189,8 @@ def test_sporttery_import_ok_stale_failed_missing(tmp_path):
     assert ("2026-10-10", "六001") in R.load_sporttery([str(cache)])
     assert not R.import_sporttery_bundle(_bundle(tmp_path, now, age_h=5), cache, out, now)["ok"]
     assert not R.import_sporttery_bundle(_bundle(tmp_path, now, ok=False), cache, out, now)["ok"]
-    r = R.import_sporttery_bundle(None, cache, out, now, "MSI 不在线")
-    assert not r["ok"] and "MSI 不在线" in r["error"]
+    r = R.import_sporttery_bundle(None, cache, out, now, "大陆本机均不可用")
+    assert not r["ok"] and "大陆本机均不可用" in r["error"]
     recs = R.refresh_records(out)
     assert [x["ok"] for x in recs] == [True, False, False, False]
 
