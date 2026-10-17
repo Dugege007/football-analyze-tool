@@ -2,6 +2,7 @@
 import datetime as dt
 # 与 result_ingest 相同的跨平台文件锁，避免测试文件在 Windows 上因缺少 fcntl 而无法收集。
 import importlib.util as _pl_util
+import json
 import pathlib as _pl_pathlib
 _pl_spec = _pl_util.spec_from_file_location(
     "_portable_lock", _pl_pathlib.Path(__file__).resolve().parents[2] / "api/app/portable_lock.py")
@@ -302,3 +303,250 @@ def test_sporttery_import_dry_run_records_nothing(tmp_path):
 def test_check_db_path_allows_production_after_merge(monkeypatch):
     monkeypatch.setattr(R, "FORMAL_MERGED", True)  # 合并后模式：正式库是唯一库
     assert R.check_db_path(R.PROD_DB)
+
+
+# ---------------------------------------------------------------- 竞彩网二次核对（只用临时库）
+
+CROSSCHECK_NOW = dt.datetime(2026, 10, 17, 9, 30, tzinfo=TZ)
+
+
+def _seed_single_source(db, match_id, jc_id, home, away, score=(1, 0), *, flag=True, jingcai="2026-10-10"):
+    """在临时库里放一场已经入库、来源为 5df_csl 的比赛。默认带未解决的单一来源标记。"""
+    home_goals, away_goals = score
+    outcome = "胜" if home_goals > away_goals else ("平" if home_goals == away_goals else "负")
+    connection = sqlite3.connect(db)
+    R.ensure_schema(connection)
+    connection.execute(
+        "insert into matches values (?, ?, 'jingcai', ?, ?, ?, ?, ?)",
+        (match_id, f"uid{match_id}", jingcai, jc_id, home, away, f"{jingcai}T13:00:00+08:00"))
+    connection.execute(
+        "insert into results values (?, ?, ?, ?, ?)",
+        (match_id, home_goals, away_goals, home_goals + away_goals, outcome))
+    connection.execute(
+        "insert into result_ingest_log values (?, '5df_csl', null, ?, null, '{}', null, 'x')",
+        (match_id, f"{home_goals}:{away_goals}"))
+    if flag:
+        connection.execute(
+            "insert into result_ingest_flags values (?, 'single_source', '{}', 'x', 'x', null)",
+            (match_id,))
+    connection.commit()
+    connection.close()
+
+
+def _write_msi_cache(directory: Path, rows: list[dict]) -> None:
+    """按竞彩网导入程序的分页格式写一份临时缓存。"""
+    directory.mkdir(parents=True, exist_ok=True)
+    payload = {"errorCode": "0", "value": {"matchResult": rows}}
+    (directory / "msi_2026-10-06_2026-10-11_p1.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _crosscheck(db: str, cache: Path, root: Path, apply: bool):
+    """对临时库执行一次竞彩网二次核对。"""
+    return R.run_sporttery_crosscheck(db, [str(cache)], root / "bk", root / "out", CROSSCHECK_NOW, apply=apply)
+
+
+def _stored_state(db: str, match_id: int):
+    """读出一场的来源、赛果表比分和单一来源标记，用来对比命令有没有改库。"""
+    connection = sqlite3.connect(db)
+    log = connection.execute(
+        "select source, sporttery_score, fivedf_score, fd_score, detail_json "
+        "from result_ingest_log where match_id = ?", (match_id,)).fetchone()
+    score = connection.execute(
+        "select home_goals, away_goals, total_goals, wdl from results where match_id = ?",
+        (match_id,)).fetchone()
+    flag = connection.execute(
+        "select resolved_at from result_ingest_flags where match_id = ? and flag = 'single_source'",
+        (match_id,)).fetchone()
+    connection.close()
+    return log, score, flag
+
+
+def test_sporttery_crosscheck_upgrades_when_score_agrees(tmp_path):
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 11, "六011", "上海海港", "山东泰山", (2, 1))
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [sp("周六011", "2026-10-11", "上海海港", "山东泰山", "2:1")])
+    result = _crosscheck(db, cache, tmp_path, True)
+    assert result["wrote"] is True
+    assert (result["upgrade_count"], result["mismatch_count"], result["no_data_count"]) == (1, 0, 0)
+    assert Path(result["backup"], "app.db").exists()
+    audit = json.loads(Path(result["audit"]).read_text(encoding="utf-8"))
+    assert audit["kind"] == "sporttery_crosscheck_audit"
+    assert audit["upgrades"][0]["before"]["source"] == "5df_csl"
+    assert audit["upgrades"][0]["before"]["sporttery_score"] is None
+    assert audit["upgrades"][0]["after"]["source"] == "sporttery+5df_csl"
+    assert audit["upgrades"][0]["after"]["sporttery_score"] == "2:1"
+    assert audit["upgrades"][0]["after"]["single_source_resolved_at"] == R.iso(CROSSCHECK_NOW)
+    assert (Path(result["backup"]) / "sporttery_crosscheck_audit.json").read_text(encoding="utf-8")
+    log, score, flag = _stored_state(db, 11)
+    assert log == ("sporttery+5df_csl", "2:1", "2:1", None, "{}")
+    assert score == (2, 1, 3, "胜")
+    assert flag == (R.iso(CROSSCHECK_NOW),)
+    backup_db = sqlite3.connect(str(Path(result["backup"]) / "app.db"))
+    assert backup_db.execute("select source, sporttery_score from result_ingest_log where match_id = 11").fetchone() == (
+        "5df_csl", None)
+    backup_db.close()
+
+
+def test_sporttery_crosscheck_leaves_mismatch_untouched(tmp_path):
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 12, "六012", "北京国安", "广州队", (1, 0))
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [sp("周六012", "2026-10-10", "北京国安", "广州队", "0:1")])
+    before = _stored_state(db, 12)
+    result = _crosscheck(db, cache, tmp_path, True)
+    assert result["mismatch_count"] == 1 and result["upgrade_count"] == 0 and result["wrote"] is False
+    assert result["backup"] is None and result["audit"] is None
+    assert _stored_state(db, 12) == before
+    assert "两边不一致，本场不修改" in result["mismatch_matches"][0]["reason"]
+
+
+def test_sporttery_crosscheck_leaves_missing_cache_untouched(tmp_path):
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 13, "六013", "成都蓉城", "武汉三镇", (3, 2))
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    before = _stored_state(db, 13)
+    result = _crosscheck(db, cache, tmp_path, True)
+    assert result["no_data_count"] == 1 and result["upgrade_count"] == 0 and result["wrote"] is False
+    assert result["backup"] is None
+    assert _stored_state(db, 13) == before
+
+
+def test_sporttery_crosscheck_rejects_team_name_mismatch(tmp_path):
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 14, "六014", "天津津门虎", "梅州客家", (1, 0))
+    _seed_single_source(db, 15, "六015", "上海海港", "甲乙丙丁", (1, 0))
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [
+        sp("周六014", "2026-10-10", "上海 海港", "山东 泰山", "1:0"),
+        sp("周六015", "2026-10-10", "上海海港", "山东泰山", "1:0"),
+    ])
+    before_14 = _stored_state(db, 14)
+    before_15 = _stored_state(db, 15)
+    result = _crosscheck(db, cache, tmp_path, True)
+    assert result["upgrade_count"] == 0 and result["no_data_count"] == 2 and result["wrote"] is False
+    assert _stored_state(db, 14) == before_14
+    assert _stored_state(db, 15) == before_15
+    assert all("误匹配" in item["reason"] for item in result["no_data_matches"])
+
+
+def test_sporttery_crosscheck_dry_run_does_not_write(tmp_path):
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 11, "六011", "上海海港", "山东泰山", (2, 1))
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [sp("周六011", "2026-10-11", "上海海港", "山东泰山", "2:1")])
+    before = _stored_state(db, 11)
+    result = _crosscheck(db, cache, tmp_path, False)
+    assert result["applied"] is False and result["wrote"] is False and result["upgrade_count"] == 1
+    assert result["backup"] is None and result["audit"] is None
+    assert _stored_state(db, 11) == before
+    assert not (tmp_path / "bk").exists()
+    report = Path(result["report"]).read_text(encoding="utf-8")
+    assert "将升级" in report and "本次没有修改数据库" in report
+
+
+def test_sporttery_crosscheck_apply_is_idempotent(tmp_path):
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 11, "六011", "上海海港", "山东泰山", (2, 1))
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [sp("周六011", "2026-10-11", "上海海港", "山东泰山", "2:1")])
+    first = _crosscheck(db, cache, tmp_path, True)
+    assert first["wrote"] is True
+    snapshot = _stored_state(db, 11)
+    second = _crosscheck(db, cache, tmp_path, True)
+    assert second["checked"] == 0 and second["upgrade_count"] == 0 and second["wrote"] is False
+    assert second["backup"] is None
+    assert _stored_state(db, 11) == snapshot
+    backups = [path for path in (tmp_path / "bk").iterdir() if path.name.startswith("v2d3-before-sporttery-crosscheck-")]
+    assert backups == [Path(first["backup"])]
+
+
+def test_sporttery_crosscheck_ignores_rows_without_open_single_source_flag(tmp_path):
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 16, "六016", "上海海港", "山东泰山", (2, 1), flag=False)
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [sp("周六016", "2026-10-10", "上海海港", "山东泰山", "2:1")])
+    before = _stored_state(db, 16)
+    result = _crosscheck(db, cache, tmp_path, True)
+    assert result["checked"] == 0 and result["wrote"] is False
+    assert _stored_state(db, 16) == before
+    assert before[2] is None
+
+
+def test_sporttery_crosscheck_does_not_upgrade_refund(tmp_path):
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 17, "六017", "上海海港", "山东泰山", (1, 0))
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [sp("周六017", "2026-10-10", "上海海港", "山东泰山", "1:0", "Refund")])
+    before = _stored_state(db, 17)
+    result = _crosscheck(db, cache, tmp_path, True)
+    assert result["mismatch_count"] == 1 and result["wrote"] is False
+    assert _stored_state(db, 17) == before
+    assert "退款" in result["mismatch_matches"][0]["reason"]
+
+
+def test_sporttery_crosscheck_rollback_restores_and_second_run_changes_nothing(tmp_path):
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 11, "六011", "上海海港", "山东泰山", (2, 1))
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [sp("周六011", "2026-10-11", "上海海港", "山东泰山", "2:1")])
+    upgraded = _crosscheck(db, cache, tmp_path, True)
+    audit = Path(upgraded["audit"])
+    preview = R.rollback_sporttery_crosscheck(db, audit, tmp_path / "bk", tmp_path / "out", CROSSCHECK_NOW, apply=False)
+    assert preview["restore_count"] == 1 and preview["wrote"] is False and preview["backup"] is None
+    assert _stored_state(db, 11)[0][0] == "sporttery+5df_csl"
+    restored = R.rollback_sporttery_crosscheck(db, audit, tmp_path / "bk", tmp_path / "out", CROSSCHECK_NOW, apply=True)
+    assert restored["wrote"] is True and restored["backup"]
+    log, score, flag = _stored_state(db, 11)
+    assert log == ("5df_csl", None, "2:1", None, "{}")
+    assert score == (2, 1, 3, "胜")
+    assert flag == (None,)
+    again = R.rollback_sporttery_crosscheck(db, audit, tmp_path / "bk", tmp_path / "out", CROSSCHECK_NOW, apply=True)
+    assert again["restore_count"] == 0 and again["wrote"] is False and again["backup"] is None
+    assert _stored_state(db, 11) == (log, score, flag)
+
+
+def test_sporttery_crosscheck_rollback_skips_when_stored_score_changed(tmp_path):
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 11, "六011", "上海海港", "山东泰山", (2, 1))
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [sp("周六011", "2026-10-11", "上海海港", "山东泰山", "2:1")])
+    upgraded = _crosscheck(db, cache, tmp_path, True)
+    connection = sqlite3.connect(db)
+    connection.execute("update results set home_goals = 9, total_goals = 10 where match_id = 11")
+    connection.commit()
+    connection.close()
+    result = R.rollback_sporttery_crosscheck(
+        db, Path(upgraded["audit"]), tmp_path / "bk", tmp_path / "out", CROSSCHECK_NOW, apply=True)
+    assert result["skip_count"] == 1 and result["restore_count"] == 0 and result["wrote"] is False
+    assert _stored_state(db, 11)[0][0] == "sporttery+5df_csl"
+    assert "赛果表里的比分已经与审计时不同" in result["skip_matches"][0]["reason"]
+
+
+def test_sporttery_crosscheck_cli_preview_does_not_write_database(tmp_path, capsys):
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 11, "六011", "上海海港", "山东泰山", (2, 1))
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [sp("周六011", "2026-10-11", "上海海港", "山东泰山", "2:1")])
+    before = _stored_state(db, 11)
+    R.main([
+        "sporttery_crosscheck", "--db", db, "--out-dir", str(tmp_path / "out"),
+        "--sporttery-dir", str(cache), "--sporttery-cache", str(cache),
+        "--backup-root", str(tmp_path / "bk"),
+    ])
+    printed = capsys.readouterr().out
+    assert "将升级" in printed and "本次没有修改数据库" in printed
+    assert _stored_state(db, 11) == before
+    assert not (tmp_path / "bk").exists()
+
+
+def test_sporttery_crosscheck_help_describes_preview_and_rollback(capsys):
+    with pytest.raises(SystemExit) as caught:
+        R.main(["--help"])
+    assert caught.value.code == 0
+    text = capsys.readouterr().out
+    assert "竞彩网二次核对" in text
+    assert "--apply" in text and "--rollback" in text
+    assert "不修改数据库" in text
