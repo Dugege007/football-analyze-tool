@@ -18,6 +18,9 @@
 - 竞彩退款：标记 refund；5DF 推迟、取消、腰斩：标记 postponed、cancelled、abandoned；这些都不进可结算赛果。
 - 每次有内容要写之前，先用 sqlite backup 备份到 /workspace/backups/v2d3-before-result-ingest-<时间戳>/app.db。
 - 新增两张表（只追加，不改已有表）：result_ingest_log 记录每场赛果的来源，result_ingest_flags 记录特殊场次标记。
+- 子命令 sporttery_crosscheck（竞彩网二次核对）只处理已经写入、来源仍是 5df_csl、并且单一来源标记尚未解决的场次。
+  默认只列出清单。显式加上 --apply 时，仅在竞彩网比分与已经入库的比分完全一致时，把来源改为 sporttery+5df_csl 并解除该标记。
+  赛果表里的比分不做任何修改。写入前先整库备份，并写出可以据此回滚的审计文件。
 """
 from __future__ import annotations
 
@@ -889,11 +892,530 @@ def crosscheck_single_source(db: str, out_dir: Path, backup_root: Path, now: dt.
     return res
 
 
+# ----------------------------------------------------------------------------- 竞彩网二次核对
+
+DUAL_SOURCE = "sporttery+5df_csl"
+SPORTTERY_CROSSCHECK_AUDIT_KIND = "sporttery_crosscheck_audit"
+
+
+def _real_name_chars(text: str | None) -> set[str]:
+    """只保留汉字和英文字母，避免空格、标点或数字造成队名误匹配。"""
+    return set(re.findall(r"[\u4e00-\u9fffA-Za-z]", text or ""))
+
+
+def _team_side_matches(stored_name: str | None, *cache_names: str | None) -> bool:
+    """库里的队名与竞彩网队名至少有一个相同的汉字或英文字母时，认为这一侧队名对上了。"""
+    left = _real_name_chars(stored_name)
+    right: set[str] = set()
+    for name in cache_names:
+        right |= _real_name_chars(name)
+    return bool(left and right and (left & right))
+
+
+def _parse_score_text(text: str | None):
+    """把已经入库的比分文本解析成整数对。无法解析时返回空。"""
+    if text is None:
+        return None
+    matched = re.fullmatch(r"(\d+):(\d+)", str(text).strip())
+    if not matched:
+        return None
+    return int(matched.group(1)), int(matched.group(2))
+
+
+def find_sporttery_result(cache: dict, jingcai_date: str | None, jc_id: str | None, home: str | None, away: str | None) -> dict:
+    """按竞彩日或开赛次日的短编号查找竞彩网赛果，并且要求主队和客队两侧都能对上队名。
+
+    查找窗口与 sporttery_lookup 相同：竞彩网的 matchDate 是开赛自然日，可能比竞彩日晚一天。
+    某一天已经有这个编号、但队名对不上时，不再改用另一天，避免把别的场次当成这一场。
+    返回 outcome 为 matched、name_mismatch 或 missing。
+    """
+    code = short_code(jc_id)
+    if not code or not jingcai_date or not home or not away:
+        return {"outcome": "missing", "match_result": None}
+    try:
+        day0 = dt.date.fromisoformat(str(jingcai_date)[:10])
+    except ValueError:
+        return {"outcome": "missing", "match_result": None}
+    for day in (day0, day0 + dt.timedelta(days=1)):
+        match_result = cache.get((day.isoformat(), code))
+        if match_result is None:
+            continue
+        home_ok = _team_side_matches(home, match_result.get("allHomeTeam"), match_result.get("homeTeam"))
+        away_ok = _team_side_matches(away, match_result.get("allAwayTeam"), match_result.get("awayTeam"))
+        if home_ok and away_ok:
+            return {"outcome": "matched", "match_result": match_result}
+        return {"outcome": "name_mismatch", "match_result": match_result}
+    return {"outcome": "missing", "match_result": None}
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    """把字典写成 UTF-8 的 JSON 文件。先写临时文件再替换，避免读到半截内容。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    temporary.replace(path)
+
+
+def _load_single_source_rows(db: str) -> list[dict]:
+    """读取来源仍是 5df_csl、并且单一来源标记尚未解决的已入库场次。只读，不建表。"""
+    connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=60)
+    try:
+        log_exists = connection.execute(
+            "select 1 from sqlite_master where type = 'table' and name = 'result_ingest_log'").fetchone()
+        flag_exists = connection.execute(
+            "select 1 from sqlite_master where type = 'table' and name = 'result_ingest_flags'").fetchone()
+        if not log_exists or not flag_exists:
+            return []
+        rows = connection.execute(
+            "select l.match_id, m.jingcai_date, m.jc_id, m.home_team, m.away_team, m.kickoff_at, "
+            "l.source, l.sporttery_score, l.fivedf_score, l.fd_score, l.detail_json, "
+            "r.home_goals, r.away_goals "
+            "from result_ingest_log l "
+            "join matches m on m.id = l.match_id "
+            "left join results r on r.match_id = l.match_id "
+            "where l.source = '5df_csl' and exists ("
+            "select 1 from result_ingest_flags f where f.match_id = l.match_id "
+            "and f.flag = 'single_source' and f.resolved_at is null) "
+            "order by m.jingcai_date, m.jc_id, l.match_id").fetchall()
+    finally:
+        connection.close()
+    keys = ("match_id", "jingcai_date", "jc_id", "home_team", "away_team", "kickoff_at",
+            "source", "sporttery_score", "fivedf_score", "fd_score", "detail_json", "home_goals", "away_goals")
+    return [dict(zip(keys, row)) for row in rows]
+
+
+def _base_crosscheck_item(row: dict) -> dict:
+    """整理一场比赛在升级前的字段，供清单和审计文件共用。"""
+    stored = None
+    if row["home_goals"] is not None and row["away_goals"] is not None:
+        stored = (int(row["home_goals"]), int(row["away_goals"]))
+    return {
+        "match_id": row["match_id"],
+        "jc_id": row["jc_id"],
+        "jingcai_date": row["jingcai_date"],
+        "home_team": row["home_team"],
+        "away_team": row["away_team"],
+        "kickoff_at": row["kickoff_at"],
+        "stored_score": _s(stored),
+        "results_home_goals": None if stored is None else stored[0],
+        "results_away_goals": None if stored is None else stored[1],
+        "sporttery_score": None,
+        "sporttery_home": None,
+        "sporttery_away": None,
+        "sporttery_match_date": None,
+        "before": {
+            "source": row["source"],
+            "sporttery_score": row["sporttery_score"],
+            "fivedf_score": row["fivedf_score"],
+            "fd_score": row["fd_score"],
+            "detail_json": row["detail_json"],
+            "single_source_resolved_at": None,
+        },
+        "_stored_pair": stored,
+        "_fivedf_pair": _parse_score_text(row["fivedf_score"]),
+        "_existing_sporttery_pair": _parse_score_text(row["sporttery_score"]) if row["sporttery_score"] else None,
+        "_fd_pair": _parse_score_text(row["fd_score"]) if row["fd_score"] else None,
+    }
+
+
+def classify_sporttery_crosscheck_row(row: dict, cache: dict) -> dict:
+    """判定一场比赛是将升级、比分不一致，还是竞彩网没有可用数据。不写数据库。"""
+    item = _base_crosscheck_item(row)
+    found = find_sporttery_result(cache, row["jingcai_date"], row["jc_id"], row["home_team"], row["away_team"])
+    if found["outcome"] == "missing":
+        item["category"] = "no_data"
+        item["reason"] = "竞彩网缓存里没有与这场编号和两队队名同时对上的赛果。"
+        return item
+    match_result = found["match_result"] or {}
+    item["sporttery_home"] = match_result.get("allHomeTeam") or match_result.get("homeTeam")
+    item["sporttery_away"] = match_result.get("allAwayTeam") or match_result.get("awayTeam")
+    item["sporttery_match_date"] = (match_result.get("matchDate") or "")[:10] or None
+    if found["outcome"] == "name_mismatch":
+        item["category"] = "no_data"
+        item["reason"] = "竞彩网缓存里同一编号的记录与库里的主队或客队对不上，为避免误匹配，本场不采用。"
+        return item
+    sporttery_pair = sporttery_score(match_result)
+    item["sporttery_score"] = _s(sporttery_pair)
+    if match_result.get("poolStatus") == "Refund":
+        item["category"] = "mismatch"
+        item["reason"] = "竞彩网把这场标为退款。即使比分数字相同，本次也不升级来源，也不修改比分。"
+        return item
+    stored = item["_stored_pair"]
+    if stored is None:
+        item["category"] = "mismatch"
+        item["reason"] = "赛果表里没有这场的完场比分，无法与竞彩网核对，本次不修改。"
+        return item
+    if item["_fivedf_pair"] != stored:
+        item["category"] = "mismatch"
+        item["reason"] = "赛果日志里的五元足球比分与赛果表里的完场比分不一致，本次不修改。"
+        return item
+    if row["sporttery_score"] and item["_existing_sporttery_pair"] != stored:
+        item["category"] = "mismatch"
+        item["reason"] = "赛果日志里已经记录了另一条竞彩网比分，与已经入库的比分不一致，本次不修改。"
+        return item
+    if row["fd_score"] and item["_fd_pair"] != stored:
+        item["category"] = "mismatch"
+        item["reason"] = "赛果日志里的 Football-Data 比分与已经入库的比分不一致，本次不修改。"
+        return item
+    if sporttery_pair is None:
+        item["category"] = "no_data"
+        item["reason"] = "竞彩网缓存里有这场，但是没有可解析的完场比分，本次不修改。"
+        return item
+    if sporttery_pair != stored:
+        item["category"] = "mismatch"
+        item["reason"] = (f"竞彩网完场比分是 {_s(sporttery_pair)}，已经入库的比分是 {_s(stored)}，"
+                          "两边不一致，本场不修改。")
+        return item
+    item["category"] = "upgrade"
+    item["reason"] = "竞彩网完场比分与已经入库的比分完全一致，来源可以升级为 sporttery+5df_csl，并解除单一来源未解决标记。"
+    item["after_source"] = DUAL_SOURCE
+    item["after_sporttery_score"] = _s(sporttery_pair)
+    return item
+
+
+def _public_crosscheck_item(item: dict) -> dict:
+    """去掉仅供内部比较的字段，使清单和审计文件只保留可读内容。"""
+    return {key: value for key, value in item.items() if not key.startswith("_")}
+
+
+def _group_crosscheck(items: list[dict]) -> dict:
+    """把判定结果分成将升级、比分不一致、竞彩网没有数据三类。"""
+    public = [_public_crosscheck_item(item) for item in items]
+    upgrades = [item for item in public if item["category"] == "upgrade"]
+    mismatches = [item for item in public if item["category"] == "mismatch"]
+    no_data = [item for item in public if item["category"] == "no_data"]
+    return {
+        "mode": "crosscheck",
+        "checked": len(public),
+        "upgrade_count": len(upgrades),
+        "mismatch_count": len(mismatches),
+        "no_data_count": len(no_data),
+        "upgrade_matches": upgrades,
+        "mismatch_matches": mismatches,
+        "no_data_matches": no_data,
+        "applied": False,
+        "wrote": False,
+        "backup": None,
+        "audit": None,
+        "report": None,
+    }
+
+
+def _finish_report(result: dict, out_dir: Path, now: dt.datetime, filename: str) -> dict:
+    """把本次清单写成 UTF-8 的 JSON 文件，并带上命令行要用的中文句子。"""
+    report_path = out_dir / filename
+    result["report"] = str(report_path)
+    result["lines"] = _crosscheck_lines(result)
+    _write_json(report_path, {"run_at": iso(now), **result})
+    return result
+
+
+def _crosscheck_lines(result: dict) -> list[str]:
+    """生成命令行上要打印的完整中文句子。"""
+    if result.get("mode") == "rollback":
+        verb = "已回退" if result.get("wrote") else "将回退"
+        lines = [
+            f"审计文件里有 {result['checked']} 场升级记录。",
+            f"可以回退 {result['restore_count']} 场，不能回退 {result['skip_count']} 场。",
+        ]
+        if result.get("wrote"):
+            lines.append(f"已经按审计文件回退。本次备份目录是 {result['backup']}。回退审计文件是 {result['audit']}。")
+        else:
+            lines.append("本次没有修改数据库。")
+        for item in result["restore_matches"]:
+            lines.append(
+                f"{verb}：比赛 {item['match_id']}，编号 {item.get('jc_id')}，"
+                f"{item.get('home_team')} 对 {item.get('away_team')}。"
+                f"来源从 {item['after']['source']} 回到 {item['before']['source']}，"
+                f"竞彩网比分字段从 {item['after']['sporttery_score']} 回到 {item['before']['sporttery_score']}，"
+                "单一来源标记恢复为未解决。")
+        for item in result["skip_matches"]:
+            lines.append(f"不能回退：比赛 {item.get('match_id')}。{item.get('reason')}")
+        return lines
+    verb = "已升级" if result.get("wrote") else "将升级"
+    lines = [
+        f"本次检查了 {result['checked']} 场来源仍为 5df_csl 且单一来源标记尚未解决的比赛。",
+        f"{verb} {result['upgrade_count']} 场，比分不一致 {result['mismatch_count']} 场，"
+        f"竞彩网没有数据 {result['no_data_count']} 场。",
+    ]
+    if result.get("wrote"):
+        lines.append(f"已经写入数据库。备份目录是 {result['backup']}。审计文件是 {result['audit']}。")
+    else:
+        lines.append("本次没有修改数据库。")
+    for item in result["upgrade_matches"]:
+        lines.append(
+            f"{verb}：比赛 {item['match_id']}，编号 {item['jc_id']}，竞彩日 {item['jingcai_date']}，"
+            f"{item['home_team']} 对 {item['away_team']}，比分 {item['stored_score']}。{item['reason']}")
+    for item in result["mismatch_matches"]:
+        lines.append(
+            f"比分不一致：比赛 {item['match_id']}，编号 {item['jc_id']}，竞彩日 {item['jingcai_date']}，"
+            f"{item['home_team']} 对 {item['away_team']}。{item['reason']}")
+    for item in result["no_data_matches"]:
+        lines.append(
+            f"竞彩网没有数据：比赛 {item['match_id']}，编号 {item['jc_id']}，竞彩日 {item['jingcai_date']}，"
+            f"{item['home_team']} 对 {item['away_team']}。{item['reason']}")
+    return lines
+
+
+def _still_matches_upgrade(connection: sqlite3.Connection, item: dict) -> bool:
+    """写入前再读一次当前行，确认它仍然是计划里的那一场，避免覆盖中途被改过的数据。"""
+    current = connection.execute(
+        "select l.source, l.sporttery_score, l.fivedf_score, l.fd_score, l.detail_json, "
+        "r.home_goals, r.away_goals, f.resolved_at "
+        "from result_ingest_log l "
+        "left join results r on r.match_id = l.match_id "
+        "left join result_ingest_flags f on f.match_id = l.match_id and f.flag = 'single_source' "
+        "where l.match_id = ?", (item["match_id"],)).fetchone()
+    if current is None:
+        return False
+    source, sporttery_text, fivedf_text, fd_text, detail_json, home_goals, away_goals, resolved_at = current
+    before = item["before"]
+    return (source == before["source"] == "5df_csl"
+            and sporttery_text == before["sporttery_score"]
+            and fivedf_text == before["fivedf_score"]
+            and fd_text == before["fd_score"]
+            and detail_json == before["detail_json"]
+            and resolved_at is None
+            and home_goals == item["results_home_goals"]
+            and away_goals == item["results_away_goals"])
+
+
+def run_sporttery_crosscheck(db: str, sporttery_dirs: list[str], backup_root: Path, out_dir: Path,
+                             now: dt.datetime, *, apply: bool) -> dict:
+    """执行竞彩网二次核对。apply 为假时只列出清单；为真时只升级比分完全一致的场次。
+
+    升级只修改赛果日志的来源和竞彩网比分字段，并给单一来源标记写上解决时间。
+    不修改赛果表里的进球数。没有任何场次需要升级时，不制作备份。
+    """
+    db = check_db_path(db)
+    cache = load_sporttery(sporttery_dirs)
+    classified = [classify_sporttery_crosscheck_row(row, cache) for row in _load_single_source_rows(db)]
+    result = _group_crosscheck(classified)
+    result["applied"] = bool(apply)
+    if not apply or result["upgrade_count"] == 0:
+        report_name = "sporttery_crosscheck_dryrun.json" if not apply else "sporttery_crosscheck_result.json"
+        return _finish_report(result, out_dir, now, report_name)
+    backup_dir = backup(db, backup_root, "sporttery-crosscheck")
+    result["backup"] = backup_dir
+    resolved_at = iso(now)
+    audit_upgrades = []
+    connection = sqlite3.connect(db, timeout=60)
+    try:
+        with connection:
+            for item in result["upgrade_matches"]:
+                if not _still_matches_upgrade(connection, item):
+                    raise RuntimeError(
+                        f"比赛 {item['match_id']} 在备份之后已经变化，本次写入已全部取消。请重新预览后再决定是否写入。")
+                updated = connection.execute(
+                    "update result_ingest_log set source = ?, sporttery_score = ? "
+                    "where match_id = ? and source = '5df_csl'",
+                    (DUAL_SOURCE, item["after_sporttery_score"], item["match_id"]))
+                if updated.rowcount != 1:
+                    raise RuntimeError(f"比赛 {item['match_id']} 的来源没有更新成功，本次写入已全部取消。")
+                flagged = connection.execute(
+                    "update result_ingest_flags set resolved_at = ? "
+                    "where match_id = ? and flag = 'single_source' and resolved_at is null",
+                    (resolved_at, item["match_id"]))
+                if flagged.rowcount != 1:
+                    raise RuntimeError(f"比赛 {item['match_id']} 的单一来源标记没有解除，本次写入已全部取消。")
+                audit_upgrades.append({
+                    "match_id": item["match_id"],
+                    "jc_id": item["jc_id"],
+                    "jingcai_date": item["jingcai_date"],
+                    "home_team": item["home_team"],
+                    "away_team": item["away_team"],
+                    "results_home_goals": item["results_home_goals"],
+                    "results_away_goals": item["results_away_goals"],
+                    "sporttery_match_date": item["sporttery_match_date"],
+                    "sporttery_home": item["sporttery_home"],
+                    "sporttery_away": item["sporttery_away"],
+                    "before": item["before"],
+                    "after": {
+                        "source": DUAL_SOURCE,
+                        "sporttery_score": item["after_sporttery_score"],
+                        "fivedf_score": item["before"]["fivedf_score"],
+                        "fd_score": item["before"]["fd_score"],
+                        "detail_json": item["before"]["detail_json"],
+                        "single_source_resolved_at": resolved_at,
+                    },
+                })
+    except Exception:
+        connection.close()
+        raise
+    connection.close()
+    result["wrote"] = True
+    stamp = Path(backup_dir).name.rsplit("-", 1)[-1]
+    audit = {
+        "kind": SPORTTERY_CROSSCHECK_AUDIT_KIND,
+        "run_at": iso(now),
+        "backup": backup_dir,
+        "upgrades": audit_upgrades,
+    }
+    audit_path = out_dir / f"sporttery_crosscheck_audit_{stamp}.json"
+    _write_json(Path(backup_dir) / "sporttery_crosscheck_audit.json", audit)
+    _write_json(audit_path, audit)
+    result["audit"] = str(audit_path)
+    return _finish_report(result, out_dir, now, "sporttery_crosscheck_result.json")
+
+
+def _rollback_plan(db: str, audit_path: Path) -> dict:
+    """对照审计文件和当前数据库，分出仍可回退的场次和必须跳过的场次。只读。"""
+    try:
+        document = json.loads(audit_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise SystemExit(f"找不到审计文件：{audit_path}") from error
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"审计文件不是合法的 JSON：{audit_path}") from error
+    if not isinstance(document, dict) or document.get("kind") != SPORTTERY_CROSSCHECK_AUDIT_KIND:
+        raise SystemExit("这个文件不是竞彩网二次核对的审计文件，不能用来回退。")
+    upgrades = document.get("upgrades") or []
+    if not isinstance(upgrades, list):
+        raise SystemExit("审计文件里的升级记录格式不正确，不能用来回退。")
+    connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=60)
+    restore_matches = []
+    skip_matches = []
+    try:
+        for item in upgrades:
+            if not isinstance(item, dict) or "match_id" not in item or "before" not in item or "after" not in item:
+                skip_matches.append({"match_id": None, "reason": "审计文件里有一条记录缺少升级前后的字段，本条不回退。"})
+                continue
+            current = connection.execute(
+                "select l.source, l.sporttery_score, l.fivedf_score, l.fd_score, l.detail_json, "
+                "r.home_goals, r.away_goals, f.resolved_at "
+                "from result_ingest_log l "
+                "left join results r on r.match_id = l.match_id "
+                "left join result_ingest_flags f on f.match_id = l.match_id and f.flag = 'single_source' "
+                "where l.match_id = ?", (item["match_id"],)).fetchone()
+            reason = _rollback_skip_reason(item, current)
+            if reason:
+                skip_matches.append({"match_id": item["match_id"], "jc_id": item.get("jc_id"), "reason": reason})
+                continue
+            restore_matches.append(item)
+    finally:
+        connection.close()
+    return {
+        "mode": "rollback",
+        "checked": len(upgrades),
+        "restore_count": len(restore_matches),
+        "skip_count": len(skip_matches),
+        "restore_matches": restore_matches,
+        "skip_matches": skip_matches,
+        "applied": False,
+        "wrote": False,
+        "backup": None,
+        "audit": None,
+        "source_audit": str(audit_path),
+        "report": None,
+    }
+
+
+def _same_value(left, right) -> bool:
+    """比较审计值和数据库值。两者都是空时视为相同。"""
+    return left == right
+
+
+def _rollback_skip_reason(item: dict, current) -> str | None:
+    """当前行若已不再是审计里的升级后状态，返回不能回退的原因；可以回退时返回空。"""
+    if current is None:
+        return "数据库里已经找不到这场的赛果日志，本场不回退。"
+    source, sporttery_text, fivedf_text, fd_text, detail_json, home_goals, away_goals, resolved_at = current
+    after = item["after"]
+    if not _same_value(source, after.get("source")) or not _same_value(sporttery_text, after.get("sporttery_score")):
+        return "当前来源或竞彩网比分字段已经不是审计文件中的升级后数值，为避免覆盖后来的修改，本场不回退。"
+    if not _same_value(fivedf_text, after.get("fivedf_score")) or not _same_value(fd_text, after.get("fd_score")):
+        return "五元足球比分或 Football-Data 比分已经与审计文件不一致，本场不回退。"
+    if not _same_value(detail_json, after.get("detail_json")):
+        return "赛果日志的明细已经与审计文件不一致，本场不回退。"
+    if home_goals != item.get("results_home_goals") or away_goals != item.get("results_away_goals"):
+        return "赛果表里的比分已经与审计时不同，本场不回退。"
+    if not _same_value(resolved_at, after.get("single_source_resolved_at")):
+        return "单一来源标记的解决时间已经与审计文件不一致，本场不回退。"
+    return None
+
+
+def rollback_sporttery_crosscheck(db: str, audit_path: Path, backup_root: Path, out_dir: Path,
+                                  now: dt.datetime, *, apply: bool) -> dict:
+    """按审计文件把来源和单一来源标记恢复到升级前。apply 为假时只列出将回退的场次。
+
+    只有当前数值仍与审计中的升级后数值完全一致时才回退。写入前会再做一次整库备份。
+    """
+    db = check_db_path(db)
+    result = _rollback_plan(db, audit_path)
+    result["applied"] = bool(apply)
+    if not apply or result["restore_count"] == 0:
+        report_name = "sporttery_crosscheck_rollback_dryrun.json" if not apply else "sporttery_crosscheck_rollback_result.json"
+        return _finish_report(result, out_dir, now, report_name)
+    backup_dir = backup(db, backup_root, "sporttery-crosscheck-rollback")
+    result["backup"] = backup_dir
+    connection = sqlite3.connect(db, timeout=60)
+    try:
+        with connection:
+            for item in result["restore_matches"]:
+                current = connection.execute(
+                    "select l.source, l.sporttery_score, l.fivedf_score, l.fd_score, l.detail_json, "
+                    "r.home_goals, r.away_goals, f.resolved_at "
+                    "from result_ingest_log l "
+                    "left join results r on r.match_id = l.match_id "
+                    "left join result_ingest_flags f on f.match_id = l.match_id and f.flag = 'single_source' "
+                    "where l.match_id = ?", (item["match_id"],)).fetchone()
+                reason = _rollback_skip_reason(item, current)
+                if reason:
+                    raise RuntimeError(f"比赛 {item['match_id']} {reason}本次回退已全部取消。")
+                before = item["before"]
+                after = item["after"]
+                updated = connection.execute(
+                    "update result_ingest_log set source = ?, sporttery_score = ? where match_id = ? and source = ?",
+                    (before["source"], before["sporttery_score"], item["match_id"], after["source"]))
+                if updated.rowcount != 1:
+                    raise RuntimeError(f"比赛 {item['match_id']} 的来源没有回退成功，本次回退已全部取消。")
+                flagged = connection.execute(
+                    "update result_ingest_flags set resolved_at = ? "
+                    "where match_id = ? and flag = 'single_source' and resolved_at = ?",
+                    (before["single_source_resolved_at"], item["match_id"], after["single_source_resolved_at"]))
+                if flagged.rowcount != 1:
+                    raise RuntimeError(f"比赛 {item['match_id']} 的单一来源标记没有回退成功，本次回退已全部取消。")
+    except Exception:
+        connection.close()
+        raise
+    connection.close()
+    result["wrote"] = True
+    stamp = Path(backup_dir).name.rsplit("-", 1)[-1]
+    rollback_audit = {
+        "kind": "sporttery_crosscheck_rollback_audit",
+        "run_at": iso(now),
+        "source_audit": str(audit_path),
+        "backup": backup_dir,
+        "restored": result["restore_matches"],
+    }
+    audit_path_out = out_dir / f"sporttery_crosscheck_rollback_{stamp}.json"
+    _write_json(Path(backup_dir) / "sporttery_crosscheck_rollback_audit.json", rollback_audit)
+    _write_json(audit_path_out, rollback_audit)
+    result["audit"] = str(audit_path_out)
+    return _finish_report(result, out_dir, now, "sporttery_crosscheck_rollback_result.json")
+
+
 def main(argv=None):
-    p = argparse.ArgumentParser(description="赛果定时入库（只写研究副本 v2d3）")
-    p.add_argument("cmd", choices=["daemon", "once", "backfill", "summary", "sporttery_import", "crosscheck"])
+    p = argparse.ArgumentParser(
+        description="赛果定时入库（只写研究副本 v2d3）。子命令 sporttery_crosscheck 是竞彩网二次核对。",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "子命令 sporttery_crosscheck 用来做竞彩网二次核对。\n"
+            "它只处理来源仍是 5df_csl、并且单一来源标记尚未解决的已入库场次。\n"
+            "默认只列出将升级的场次、比分不一致的场次，以及竞彩网缓存里没有数据的场次，不修改数据库。\n"
+            "加上 --apply 之后，才会在整库备份之后，把比分完全一致的场次来源改为 sporttery+5df_csl，并解除单一来源未解决标记。赛果表里的比分不会改写。\n"
+            "预览回退：python scripts/live/result_ingest.py sporttery_crosscheck --rollback 审计文件.json\n"
+            "确认回退：python scripts/live/result_ingest.py sporttery_crosscheck --rollback 审计文件.json --apply\n"
+            "回退前会再做一次整库备份。只有当前数值仍与审计文件中的升级后数值一致时，该场才会回到升级前。"
+        ),
+    )
+    p.add_argument("cmd", choices=["daemon", "once", "backfill", "summary", "sporttery_import", "crosscheck",
+                                   "sporttery_crosscheck"])
     p.add_argument("--bundle", default=None, help="sporttery_import：大陆本机（YPC 优先，失败再用 MSI）刷新得到的 latest_bundle.json 在本机上的路径")
     p.add_argument("--note", default=None, help="sporttery_import：没拿到文件时写进汇总的原因")
+    p.add_argument("--apply", action="store_true",
+                   help="只用于竞彩网二次核对：确认写入数据库。不带这个参数时只列出清单，不修改数据库。")
+    p.add_argument("--rollback", default=None,
+                   help="只用于竞彩网二次核对：审计文件路径。按其中的升级前数值回退来源和单一来源标记。不带 --apply 时只列出将回退的场次。")
     p.add_argument("--sporttery-cache", default=SPORTTERY_CACHE)
     p.add_argument("--fd-refresh", action="store_true", help="crosscheck：先下载 Football-Data.co.uk 公开 CSV")
     p.add_argument("--db", default=os.environ.get("V2D3_DB_PATH") or (PROD_DB if FORMAL_MERGED else "/workspace/match-analysis-api/data/v2d3/app.db"))
@@ -908,6 +1430,10 @@ def main(argv=None):
     p.add_argument("--no-sporttery-fetch", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args(argv)
+    if (a.apply or a.rollback) and a.cmd != "sporttery_crosscheck":
+        raise SystemExit("--apply 和 --rollback 只用于子命令 sporttery_crosscheck（竞彩网二次核对）。")
+    if a.cmd == "sporttery_crosscheck" and a.apply and a.dry_run:
+        raise SystemExit("竞彩网二次核对不能同时指定 --apply 和 --dry-run。不带 --apply 时已经是只读预览。")
     od = Path(a.out_dir)
     a.csl_dir = a.csl_dir or str(od / "csl_raw")
     a.sporttery_dir = a.sporttery_dir or str(od / "sporttery_raw")
@@ -959,6 +1485,20 @@ def main(argv=None):
             json.dumps({"run_at": iso(now), **r, "matches": rep}, ensure_ascii=False, indent=1), encoding="utf-8")
         import collections
         print(json.dumps(r, ensure_ascii=False), collections.Counter(x["action"] for x in rep))
+    elif a.cmd == "sporttery_crosscheck":
+        # 竞彩网二次核对：默认只列出清单。--apply 才在备份之后升级来源。--rollback 按审计文件回退。
+        now = now_cn()
+        if a.rollback:
+            result = rollback_sporttery_crosscheck(db, Path(a.rollback), Path(a.backup_root), od, now, apply=a.apply)
+        else:
+            result = run_sporttery_crosscheck(
+                db, [a.sporttery_dir] + list(a.extra_sporttery_dir), Path(a.backup_root), od, now, apply=a.apply)
+        for line in result["lines"]:
+            print(line)
+        summary = {key: value for key, value in result.items()
+                   if key not in ("upgrade_matches", "mismatch_matches", "no_data_matches",
+                                  "restore_matches", "skip_matches", "lines")}
+        print(json.dumps(summary, ensure_ascii=False))
 
 
 if __name__ == "__main__":
