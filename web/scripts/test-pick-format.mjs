@@ -1,15 +1,15 @@
 // 赛程页预测方向格式与当日消息模板的单元测试：用 tsc 把两个文件编译到临时目录后用 node:test 运行。
-import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { compileWithTypeScript } from './compile-with-tsc.mjs'
 
 const out = mkdtempSync(join(tmpdir(), 'pick-format-'))
-execFileSync('node_modules/.bin/tsc', ['src/api/pickFormat.ts', 'src/api/dailyMessageTemplate.ts',
-  '--outDir', out, '--module', 'es2022', '--target', 'es2022', '--skipLibCheck', '--ignoreConfig'], { stdio: 'inherit' })
+compileWithTypeScript(['src/api/pickFormat.ts', 'src/api/dailyMessageTemplate.ts',
+  '--outDir', out, '--module', 'es2022', '--target', 'es2022', '--skipLibCheck', '--ignoreConfig'])
 const msgPath = join(out, 'dailyMessageTemplate.js')
 writeFileSync(msgPath, readFileSync(msgPath, 'utf8').replace("from './pickFormat'", "from './pickFormat.js'"))
 writeFileSync(join(out, 'package.json'), '{"type":"module"}')

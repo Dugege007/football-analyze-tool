@@ -1,15 +1,15 @@
 // 人气差值只做显示换算：小数乘以 100，保留 1 位小数；空值不显示成数字。
-import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { compileWithTypeScript } from './compile-with-tsc.mjs'
 
 const out = mkdtempSync(join(tmpdir(), 'popularity-diff-'))
-execFileSync('node_modules/.bin/tsc', ['src/api/popularity.ts', 'src/api/dataSource.ts',
-  '--outDir', out, '--module', 'es2022', '--target', 'es2022', '--skipLibCheck', '--ignoreConfig'], { stdio: 'inherit' })
+compileWithTypeScript(['src/api/popularity.ts', 'src/api/dataSource.ts',
+  '--outDir', out, '--module', 'es2022', '--target', 'es2022', '--skipLibCheck', '--ignoreConfig'])
 writeFileSync(join(out, 'package.json'), '{"type":"module"}')
 const F = await import(pathToFileURL(join(out, 'popularity.js')).href)
 const D = await import(pathToFileURL(join(out, 'dataSource.js')).href)

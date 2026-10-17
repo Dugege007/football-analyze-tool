@@ -1,15 +1,15 @@
 // 日历置灰：有比赛只看日期集合；月份未返回时不算无比赛；范围选择器要带上下一个月。
-import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { compileWithTypeScript } from './compile-with-tsc.mjs'
 
 const out = mkdtempSync(join(tmpdir(), 'match-dates-'))
-execFileSync('node_modules/.bin/tsc', ['src/api/matchDateMarks.ts',
-  '--outDir', out, '--module', 'es2022', '--target', 'es2022', '--skipLibCheck', '--ignoreConfig'], { stdio: 'inherit' })
+compileWithTypeScript(['src/api/matchDateMarks.ts',
+  '--outDir', out, '--module', 'es2022', '--target', 'es2022', '--skipLibCheck', '--ignoreConfig'])
 writeFileSync(join(out, 'package.json'), '{"type":"module"}')
 const M = await import(pathToFileURL(join(out, 'matchDateMarks.js')).href)
 

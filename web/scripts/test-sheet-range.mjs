@@ -1,15 +1,15 @@
 // 数据表快捷日期：北京时间日历日，五个区间含首尾且不超过 31 天。
-import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { compileWithTypeScript } from './compile-with-tsc.mjs'
 
 const out = mkdtempSync(join(tmpdir(), 'sheet-range-'))
-execFileSync('node_modules/.bin/tsc', ['src/sheet2/dateRangePresets.ts',
-  '--outDir', out, '--module', 'es2022', '--target', 'es2022', '--skipLibCheck', '--ignoreConfig'], { stdio: 'inherit' })
+compileWithTypeScript(['src/sheet2/dateRangePresets.ts',
+  '--outDir', out, '--module', 'es2022', '--target', 'es2022', '--skipLibCheck', '--ignoreConfig'])
 writeFileSync(join(out, 'package.json'), '{"type":"module"}')
 const M = await import(pathToFileURL(join(out, 'dateRangePresets.js')).href)
 
