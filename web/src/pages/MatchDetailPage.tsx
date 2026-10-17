@@ -210,7 +210,7 @@ export default function MatchDetailPage() {
         <Space align="center" wrap>
           {match.jc && <Tag color="geekblue">{match.jc.id}</Tag>}
           <Tag>
-            <DisplayLeague name={labels.league} title={labels.leagueTitle} />
+            <DisplayLeague name={labels.league} title={labels.leagueTitle} pending={labels.leaguePending} />
           </Tag>
           <Tag>{match.scope === 'jingcai' ? '竞彩' : '扩展'}</Tag>
         </Space>

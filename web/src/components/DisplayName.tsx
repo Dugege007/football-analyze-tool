@@ -1,23 +1,30 @@
 import { Typography } from 'antd'
 import type { TeamLabel } from '../names/matchLabels'
-import { TeamPendingMark } from './TeamPendingMark'
+import { PendingMark, TeamPendingMark } from './TeamPendingMark'
 
 const { Text } = Typography
 
 /**
  * 按数据表同一套规则显示赛事简称。
- * 格子里是简称，悬停是来源赛事名。
+ * 格子里是简称，悬停是来源赛事名。待确认时在简称旁加星号，星号悬停仍是「待确认」。
  */
 export function DisplayLeague({
   name,
   title,
+  pending = false,
   empty = '—',
 }: {
   name: string | null
   title?: string
+  pending?: boolean
   empty?: string
 }) {
-  return <span title={title}>{name ?? empty}</span>
+  return (
+    <span title={title}>
+      {name ?? empty}
+      {pending ? <PendingMark /> : null}
+    </span>
+  )
 }
 
 /**

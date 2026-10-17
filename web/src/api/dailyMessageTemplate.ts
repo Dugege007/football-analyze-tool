@@ -16,6 +16,10 @@ import { PICK_COLUMNS, formatPick, NO_BET, type Pick } from './pickFormat'
 export interface MessageMatch {
   jcId?: string | null
   league?: string | null
+  /** 悬停时显示的赛事来源名。只影响页面预览，不写入复制文本。 */
+  leagueTitle?: string
+  /** 赛事名旁是否显示待确认星号。只影响页面预览，不写入复制文本。 */
+  leaguePending?: boolean
   home: string
   away: string
   /**

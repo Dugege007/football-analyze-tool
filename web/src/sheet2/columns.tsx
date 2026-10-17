@@ -1,9 +1,10 @@
 import { isTeamPending, teamAliasTip, teamCommon } from '../names/teamName'
 import { leagueShort } from '../names/leagueShort'
+import { isLeaguePending } from '../names/leaguePending'
 import type { ColDef, ColGroupDef, ICellRendererParams } from 'ag-grid-community'
 import { Tag, Tooltip } from 'antd'
 import type { ReactNode } from 'react'
-import { TeamPendingMark } from '../components/TeamPendingMark'
+import { PendingMark, TeamPendingMark } from '../components/TeamPendingMark'
 import { formatPick } from '../api/pickFormat'
 import { alignClass, w, type WidthKey } from './columnWidths'
 import {
@@ -112,8 +113,8 @@ function baseChildren(): Col[] {
     { colId: 'jcNo', headerName: '编号', width: w('base.jcNo'), pinned: 'left', valueGetter: (p) => p.data?.match.jc_id ?? '-', cellClass: (p) => dayClass(p.data), sort: 'asc', sortIndex: 1 },
     { colId: 'kickoff', headerName: '开赛时间', width: w('base.kickoff'), pinned: 'left', valueGetter: (p) => kickoffText(p.data?.match.kickoff_at ?? null) },
     { colId: 'league', headerName: '赛事', width: w('base.league'), pinned: 'left', valueGetter: (p) => leagueShort(p.data?.match.league_canonical ?? p.data?.match.league) ?? '-',
-      // The cell shows the short name; hovering shows the full league name from the backend.
-      cellRenderer: (p: P) => <span title={p.data?.match.league ?? undefined}>{p.value}</span> },
+      // 格子里是简称，悬停是来源赛事全称。认不出的赛事在简称旁加待确认星号。
+      cellRenderer: (p: P) => <span title={p.data?.match.league ?? undefined}>{p.value}{isLeaguePending(p.data?.match.league, p.data?.match.league_canonical, p.data?.match.league_pending_confirm) && <PendingMark />}</span> },
     { colId: 'home', headerName: '主队', width: w('base.home'), pinned: 'left', valueGetter: (p) => teamCommon(p.data?.match.home_team, p.data?.match.home_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league)) ?? '-',
       // The cell shows the common name; hovering lists the other names of the same team.
       cellRenderer: (p: P) => <span title={teamAliasTip(p.data?.match.home_team, p.data?.match.home_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league))}>{p.value}{isTeamPending(p.data?.match.home_team, p.data?.match.home_team_canonical, p.data?.match.home_team_pending_confirm) && <TeamPendingMark />}</span> },
