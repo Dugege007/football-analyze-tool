@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import sqlite3
 import subprocess
 import sys
@@ -15,6 +16,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bsd_event_map_build as m  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parent / "bsd_event_map_build.py"
+
+
+def _cli_env() -> dict[str, str]:
+    """子进程沿用当前环境，并强制 UTF-8 模式。
+
+    Windows 中文 locale 下，未指定 encoding 时 subprocess 按 GBK 解码标准输出，
+    无法正确读回帮助文本和导入摘要中的中文。PYTHONUTF8=1 让子进程以 UTF-8 写出。
+    """
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    return env
 
 
 SCHEMA = """
@@ -158,7 +170,15 @@ def map_rows(db: Path):
 
 
 def test_help_lists_dry_run_apply_and_alias_import():
-    proc = subprocess.run([sys.executable, str(SCRIPT), "--help"], capture_output=True, text=True, check=True)
+    proc = subprocess.run(
+        [sys.executable, str(SCRIPT), "--help"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=_cli_env(),
+        check=True,
+    )
     text = proc.stdout
     assert "--apply" in text
     assert "--import-aliases-from-dc-train" in text
@@ -553,7 +573,11 @@ def test_import_aliases_subcommand(tmp_path):
     proc = subprocess.run(
         [sys.executable, str(SCRIPT), "import-aliases", "--db", str(db), "--aliases-csv", str(path),
          "--no-final-names", "--apply"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=_cli_env(),
     )
     assert proc.returncode == 0, proc.stderr
     assert "拟插入 1" in proc.stdout
