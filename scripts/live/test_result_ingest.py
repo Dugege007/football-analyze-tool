@@ -1,6 +1,12 @@
 """赛果定时入库的单元测试（只用临时库，不碰任何真实库）。"""
 import datetime as dt
-import fcntl
+# 与 result_ingest 相同的跨平台文件锁，避免测试文件在 Windows 上因缺少 fcntl 而无法收集。
+import importlib.util as _pl_util
+import pathlib as _pl_pathlib
+_pl_spec = _pl_util.spec_from_file_location(
+    "_portable_lock", _pl_pathlib.Path(__file__).resolve().parents[2] / "api/app/portable_lock.py")
+fcntl = _pl_util.module_from_spec(_pl_spec)
+_pl_spec.loader.exec_module(fcntl)
 import sqlite3
 import subprocess
 import sys

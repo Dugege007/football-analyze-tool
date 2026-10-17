@@ -714,14 +714,15 @@ def default_quota_path() -> Path:
 
 def reserve_daily_call(path: Path, now: datetime, *, cap: int = DAILY_CALL_CAP) -> bool:
     """按协调世界时的日期计数。达到上限时返回假，并且不把计数再加一。"""
-    import fcntl
+    # Linux 与 macOS 上 portable_lock 直接调用 fcntl.flock，锁语义与原先一致；Windows 使用 msvcrt。
+    from app import portable_lock as fcntl
 
     path.parent.mkdir(parents=True, exist_ok=True)
     if now.tzinfo is None:
         now = now.replace(tzinfo=TZ_CN)
     day = now.astimezone(timezone.utc).date().isoformat()
     with path.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        fcntl.flock(handle, fcntl.LOCK_EX)
         try:
             handle.seek(0)
             raw = handle.read()
@@ -740,7 +741,7 @@ def reserve_daily_call(path: Path, now: datetime, *, cap: int = DAILY_CALL_CAP) 
             handle.write(json.dumps(data, ensure_ascii=False))
             return True
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 class BsdStatsClient:

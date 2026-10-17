@@ -142,6 +142,6 @@ def test_quota_floor_pause(tmp_path, monkeypatch):
     str(_REPO_ROOT / "scripts/backfill/5dollar_odds_resume.py"),
 ])
 def test_backfill_callers_wired(path):
-    p = Path(path) if path.startswith("/") else ROOT / path
-    src = p.read_text()
+    p = Path(path) if Path(path).is_absolute() else ROOT / path
+    src = p.read_text(encoding="utf-8")
     assert "shared_api_yield" in src and ".before_request()" in src and ".after_response(" in src
