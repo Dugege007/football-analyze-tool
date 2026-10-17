@@ -7,6 +7,7 @@ const jingcaiDetail: MatchDetail & { prediction: Prediction } = {
     scope: 'jingcai',
     jc: { id: '一003', weekday: '一', no: '003' },
     competition: { name: '英超', type: '联赛', stage: '8' },
+    league_id: 1,
     kickoff_hour: 3,
     kickoff_at: '2026-10-07T03:00:00+08:00',
     teams: { home: '示例主队', away: '示例客队' },
@@ -82,6 +83,7 @@ const extraDetail: MatchDetail = {
     scope: 'extra',
     jc: null,
     competition: { name: '西甲', type: '联赛', stage: '8' },
+    league_id: 2,
     kickoff_hour: 4,
     teams: { home: '非竞彩示例主', away: '非竞彩示例客' },
     ids: {},
@@ -98,9 +100,35 @@ const extraDetail: MatchDetail = {
   },
 }
 
+/** 来源赛事名有字、赛事编号为空，赛程和详情应在赛事名旁显示待确认星号。 */
+const unmappedDetail: MatchDetail = {
+  match: {
+    date: '2026-10-06',
+    weekday: '一',
+    scope: 'jingcai',
+    jc: { id: '一009', weekday: '一', no: '009' },
+    competition: { name: '未识别联赛', type: '联赛' },
+    league_id: null,
+    kickoff_hour: 5,
+    kickoff_at: '2026-10-07T05:00:00+08:00',
+    teams: { home: '待定主队', away: '待定客队' },
+    ids: {},
+  },
+  result: null,
+  stats: { popularity_diff: null, support_proxy_odds: null },
+  odds: { asian: {} },
+  meta: {
+    source_file: 'demo/json-v2-sample.json',
+    month: '2610',
+    schema_version: '2.0',
+    pipeline: 'api_v1',
+  },
+}
+
 export const MOCK_DETAILS: Record<string, MatchDetail & { prediction?: Prediction }> = {
   '2026-10-06|一003': jingcaiDetail,
   '2026-10-06|extra|西甲': extraDetail,
+  '2026-10-06|一009': unmappedDetail,
 }
 
 export function mockListItems(date: string, scope: string): MatchListItem[] {
@@ -116,6 +144,13 @@ export function mockListItems(date: string, scope: string): MatchListItem[] {
       match: extraDetail.match,
       has_prediction: false,
       direction: null,
+    },
+    {
+      id: '2026-10-06|一009',
+      match: unmappedDetail.match,
+      has_prediction: true,
+      direction: '主',
+      picks: [{ market: 'ah', side: '主', line: 0.5, stake: 1 }],
     },
   ]
   return all.filter((item) => {

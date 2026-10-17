@@ -25,6 +25,8 @@ interface Spec {
   id: string
   ko: string
   league: string
+  /** 为 true 时不写规范名，赛事列按未映射显示待确认星号。 */
+  unmappedLeague?: boolean
   home: string
   away: string
   status: Row['match']['status']
@@ -52,6 +54,7 @@ const SPECS: Spec[] = [
   { id: '三007', ko: '2026-10-15T03:00:00+08:00', league: '法甲', home: '里尔', away: '朗斯', status: 'cancelled', ahLines: [0.25, 0.5, 0.5], ouLines: [2.5, 2.5, 2.5], dir: null },
   { id: '三008', ko: '2026-10-14T21:00:00+08:00', league: '荷甲', home: '阿贾克斯', away: '特温特', status: 'postponed', ahLines: [1, 1, 1], ouLines: [3, 3, 3], dir: null },
   { id: '三009', ko: '2026-10-14T18:00:00+08:00', league: '澳超', home: '悉尼FC', away: '墨尔本城', status: 'finished', score: [3, 1], ahLines: [0.5, 0.75, 0.75], ouLines: [2.75, 3, 3], dir: '主', noCloseFor: ['pinnacle', 'bet365'] },
+  { id: '三010', ko: '2026-10-14T17:00:00+08:00', league: '未识别联赛', unmappedLeague: true, home: '待定主队', away: '待定客队', status: 'not_started', ahLines: [0, 0, 0], ouLines: [2.5, 2.5, 2.5], dir: null },
   { id: '二012', ko: '2026-10-13T20:00:00+08:00', league: '世预赛', home: '中国', away: '印尼', status: 'finished', score: [2, 1], ahLines: [0.75, 0.5, 0.25], ouLines: [2.25, 2.25, 2], dir: '主' },
   { id: '日004', ko: '2026-10-11T20:00:00+08:00', league: '挪超', home: '博德闪耀', away: '莫尔德', status: 'finished', score: [2, 2], ahLines: [0.5, 0.5, 0.25], ouLines: [3, 3, 3.25], dir: '主' },
   { id: '六010', ko: '2026-10-10T22:00:00+08:00', league: '瑞超', home: '马尔默', away: '哈马比', status: 'finished', score: [0, 0], ahLines: [0.25, 0.25, 0.25], ouLines: [2.5, 2.5, 2.5], dir: '客' },
@@ -252,7 +255,17 @@ function build(s: Spec): Row {
   }
   return {
     match_id: `${s.ko.slice(0, 10)}|${s.id}`,
-    match: { jc_id: s.id, jingcai_date: jcDate(s), kickoff_at: s.ko, league: s.league, home_team: s.home, away_team: s.away, status: s.status },
+    match: {
+      jc_id: s.id,
+      jingcai_date: jcDate(s),
+      kickoff_at: s.ko,
+      league: s.league,
+      // 模拟赛事名已经是页面上的名称。写入规范名后不再整列标星；未映射的一场留空，用来显示待确认星号。
+      league_canonical: s.unmappedLeague ? null : s.league,
+      home_team: s.home,
+      away_team: s.away,
+      status: s.status,
+    },
     prediction: s.dir ? { direction: s.dir } : null,
     ah: ahM,
     ou: ouM,

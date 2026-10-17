@@ -22,7 +22,14 @@ import { labelDataSource } from '../labels'
 import { formatScore } from '../api/formatScore'
 import type { MatchListItem } from '../api/types'
 import { PICK_COLUMNS, formatMarketCell, hasEstimatedStake } from '../api/pickFormat'
-import { buildDailyMessage, countBetMatches, type MessageMatch } from '../api/dailyMessageTemplate'
+import {
+  buildDailyMessage,
+  countBetMatches,
+  messageDirections,
+  messageJcNo,
+  messageKickoffHm,
+  type MessageMatch,
+} from '../api/dailyMessageTemplate'
 import { HelpTip, LabelWithHelp } from '../components/HelpTip'
 import { DisplayLeague, DisplayTeam } from '../components/DisplayName'
 import { matchLabels } from '../names/matchLabels'
@@ -66,6 +73,35 @@ function formatKickoff(row: MatchListItem): string {
     return `竞彩日 ${m.date} 的 ${String(m.kickoff_hour).padStart(2, '0')}时（日期和分钟未知）`
   }
   return '—'
+}
+
+/**
+ * 当日消息预览。文字排版与 buildDailyMessage 相同，认不出的赛事在简称旁加待确认星号。
+ * 复制出去的文本仍由 buildDailyMessage 生成，不含这颗星。
+ */
+function DailyMessagePreview({ matches }: { matches: MessageMatch[] }) {
+  const visible = matches.filter((match) => messageDirections(match.picks).length > 0)
+  if (!visible.length) return <>这一天没有下注的场次。</>
+  return (
+    <>
+      {visible.map((match, index) => (
+        <span key={`${match.jcId ?? 'match'}-${index}`}>
+          {index > 0 ? '\n' : null}
+          - {messageJcNo(match.jcId)} {messageKickoffHm(match.kickoffText)}{' '}
+          <DisplayLeague
+            name={match.league ?? null}
+            title={match.leagueTitle}
+            pending={match.leaguePending === true}
+            empty="-"
+          />
+          {' '}
+          {match.home}-{match.away}：
+          {'\n'}
+          {messageDirections(match.picks).map((direction) => `  ${direction}；`).join('\n')}
+        </span>
+      ))}
+    </>
+  )
 }
 
 export default function MatchListPage() {
@@ -128,7 +164,7 @@ export default function MatchListPage() {
       width: 96,
       render: (_, row) => {
         const labels = matchLabels(row.match)
-        return <DisplayLeague name={labels.league} title={labels.leagueTitle} />
+        return <DisplayLeague name={labels.league} title={labels.leagueTitle} pending={labels.leaguePending} />
       },
     },
     {
@@ -211,6 +247,8 @@ export default function MatchListPage() {
     return {
       jcId: row.match.jc?.id,
       league: labels.league,
+      leagueTitle: labels.leagueTitle,
+      leaguePending: labels.leaguePending,
       home: labels.home.text ?? row.match.teams.home,
       away: labels.away.text ?? row.match.teams.away,
       kickoffText: formatKickoff(row),
@@ -308,7 +346,7 @@ export default function MatchListPage() {
                   fontSize: 13,
                 }}
               >
-                {msgAll ?? '这一天没有下注的场次。'}
+                <DailyMessagePreview matches={messageMatches} />
               </Paragraph>
             ),
           },

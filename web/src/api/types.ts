@@ -21,6 +21,22 @@ export interface Match {
    * 列表和详情接口都会返回；为 true 时队名旁显示待确认星号。
    */
   teams_pending_confirm?: { home?: boolean | null; away?: boolean | null } | null
+  /**
+   * 赛事是否还认不出来。
+   * 列表和详情返回 true 时，赛事名旁显示待确认星号。
+   * 字段缺席时，有来源赛事名且规范名为空才标星。
+   */
+  league_pending_confirm?: boolean | null
+  /**
+   * 赛事规范名。列表和详情目前通常不返回。
+   * 一旦返回，空值表示尚未映射，待确认判断不再改用赛事编号。
+   */
+  league_canonical?: string | null
+  /**
+   * 赛事编号。列表和详情已经返回。
+   * league_pending_confirm 与 league_canonical 都缺席时，编号为空且来源赛事名有字则标星。
+   */
+  league_id?: number | string | null
   ids?: Record<string, unknown>
 }
 
