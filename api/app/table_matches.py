@@ -41,7 +41,7 @@ from app import kickoff_drift as kd
 from app import leak_suspect as leak
 from app import reason_codes
 from app import fundamentals as fund  # 0.3.21
-from app import league_pending as lp  # 2026-10-18 赛事常用名尚未确定才标星
+from app import league_pending as lp  # 有来源名且 league_id 为空才待确认，不读待定池
 from app import team_pending as tp  # 2026-10-14 待确认球队；2026-10-18 改为常用名规则
 from app import open_status as osx  # opening status and source fields (user rule 2026-10-10)
 from app import avg_cells  # 多家平均三格（接口约定第 3 版第 7 节）
@@ -2098,6 +2098,8 @@ class MatchInfo(_M_):
     scope: str
     league: Optional[str] = None
     league_canonical: Optional[str] = None
+    # 与 league、league_canonical 同级。有赛事来源名且 league_id 为空时为 true；没有来源名或已挂上 league_id 时为 false。
+    league_pending_confirm: bool = False
     competition_type: Optional[str] = None
     home_team: Optional[str] = None
     away_team: Optional[str] = None
@@ -2105,7 +2107,6 @@ class MatchInfo(_M_):
     away_team_canonical: Optional[str] = None
     home_team_pending_confirm: bool = False  # 常用名尚未确定时为 true，前端悬停「待确认」
     away_team_pending_confirm: bool = False
-    league_pending_confirm: bool = False  # 与队名同一套常用名规则
 
 
 class Schedule(_M_):
@@ -3197,14 +3198,12 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 **_mf_row,
                 "scope": row["scope"], "league": row["competition_name"],
                 "league_canonical": row["league_canonical"],
+                "league_pending_confirm": lp.from_row(row),
                 "competition_type": row["competition_type"],
                 "home_team": row["home_team"], "away_team": row["away_team"],
                 "home_team_canonical": row["home_canonical"], "away_team_canonical": row["away_canonical"],
                 "home_team_pending_confirm": tp.is_pending(row["home_team_id"], row["home_canonical"], _pending, row["home_team"]),
                 "away_team_pending_confirm": tp.is_pending(row["away_team_id"], row["away_canonical"], _pending, row["away_team"]),
-                "league_pending_confirm": lp.is_pending(
-                    _rowv(row, "league_id"), row["competition_name"], getattr(_pending, "league", None), row["league_canonical"]
-                ),
             },
             "phase_exception": exc,
             "schedule": {k: v for k, v in sched.items() if k != "live_rule_1110_target_time"},
