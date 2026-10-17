@@ -1,4 +1,6 @@
 # ---- 密钥 / 本机配置（永不提交）----
+# 含公网地址与 SSH 方式，只留本机
+docs/分析工具服务器.md
 .env
 .env.*
 !config.example.env
