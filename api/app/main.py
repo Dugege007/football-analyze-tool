@@ -22,6 +22,7 @@ from app import collection_schedule
 from app import leak_suspect as _leak  # 0.3.20
 from app import odds_timeline_chart as otc  # 0.3.23
 from app import team_pending as tp  # 2026-10-14 待确认球队
+from app import league_pending as lp  # 待定池合入前的赛事待确认
 
 DEFAULT_STRATEGY = "CFFXDJ_5_V3"
 TZ_CN = timezone(timedelta(hours=8))
@@ -129,6 +130,8 @@ def build_match_obj(row: sqlite3.Row, meta_extras: dict | None = None, pending: 
             "name": row["competition_name"],
             "type": row["competition_type"],
             "stage": row["competition_stage"],
+            # 赛事对象上也带这个字段。待定池合入前，有赛事来源名并且 league_id 为空时为 true，没有来源名时为 false。
+            "league_pending_confirm": lp.from_row(row),
         },
         "kickoff_hour": row["kickoff_hour"],
         "kickoff_at": kickoff_at,
@@ -142,6 +145,8 @@ def build_match_obj(row: sqlite3.Row, meta_extras: dict | None = None, pending: 
         "home_team_id": row_get(row, "home_team_id"),
         "away_team_id": row_get(row, "away_team_id"),
         "league_id": row_get(row, "league_id"),
+        # 与队名 teams_pending_confirm 同级。列表、详情、待发接口都走本函数。
+        "league_pending_confirm": lp.from_row(row),
         "ids": extras.get("ids") or {},
     }
 

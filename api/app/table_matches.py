@@ -42,6 +42,7 @@ from app import leak_suspect as leak
 from app import reason_codes
 from app import fundamentals as fund  # 0.3.21
 from app import team_pending as tp  # 2026-10-14 待确认球队
+from app import league_pending as lp  # 待定池合入前的赛事待确认
 from app import open_status as osx  # opening status and source fields (user rule 2026-10-10)
 from app import avg_cells  # 多家平均三格（接口约定第 3 版第 7 节）
 from app import alert_baseline as alb  # 预警档位按每格抓取时刻固定基准（2026-10-14）
@@ -2097,6 +2098,8 @@ class MatchInfo(_M_):
     scope: str
     league: Optional[str] = None
     league_canonical: Optional[str] = None
+    # 与 league、league_canonical 同级。有赛事来源名且 league_id 为空时为 true；没有来源名时为 false。
+    league_pending_confirm: bool = False
     competition_type: Optional[str] = None
     home_team: Optional[str] = None
     away_team: Optional[str] = None
@@ -3195,6 +3198,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 **_mf_row,
                 "scope": row["scope"], "league": row["competition_name"],
                 "league_canonical": row["league_canonical"],
+                "league_pending_confirm": lp.from_row(row),
                 "competition_type": row["competition_type"],
                 "home_team": row["home_team"], "away_team": row["away_team"],
                 "home_team_canonical": row["home_canonical"], "away_team_canonical": row["away_canonical"],

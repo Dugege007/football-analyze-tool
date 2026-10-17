@@ -11,7 +11,18 @@ export interface Match {
   weekday?: string
   scope: 'jingcai' | 'extra'
   jc: JcInfo | null
-  competition?: { name?: string; type?: string; stage?: string }
+  competition?: {
+    name?: string
+    type?: string
+    stage?: string
+    /** 有赛事来源名且 league_id 为空时为 true；没有来源名时为 false。 */
+    league_pending_confirm?: boolean | null
+  }
+  /**
+   * 与 competition 上的同名字段一致。
+   * 有赛事来源名且 league_id 为空时为 true；没有来源名时为 false。
+   */
+  league_pending_confirm?: boolean | null
   kickoff_hour?: number
   kickoff_at?: string | null
   kickoff_minute_known?: boolean

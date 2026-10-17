@@ -187,6 +187,8 @@ export interface Row {
     league: string | null
     /** Canonical league name from the backend, present for only some leagues. */
     league_canonical?: string | null
+    /** 有赛事来源名且 league_id 为空时为 true；没有来源名时为 false。接口未返回时缺省。 */
+    league_pending_confirm?: boolean | null
     /** Canonical team names from the backend, present for only some matches. */
     home_team_canonical?: string | null
     away_team_canonical?: string | null
