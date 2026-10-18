@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import app.db as adb  # noqa: E402
+from app.collection_schedule import TZ_CN  # noqa: E402
 from app.main import app  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -137,14 +139,52 @@ def test_n_avg_present_wherever_kelly_computed(table):
 
 # ---------------------------------------------------------------- hl_v0.2：返还率只看真实水位
 
+def _windows(dates: list[date], span: int = 31) -> list[tuple[date, date]]:
+    """把已排序的竞彩日收成日历差不超过 span 的闭区间。"""
+    if not dates:
+        return []
+    windows: list[tuple[date, date]] = []
+    start = prev = dates[0]
+    for d in dates[1:]:
+        if (d - start).days > span:
+            windows.append((start, prev))
+            start = d
+        prev = d
+    windows.append((start, prev))
+    return windows
+
+
 def test_hl_v02_config_and_real_only_baseline_counts(table):
     which, _ = table
-    # 全量日期：基准样本是库内所有更早竞彩日（默认 7 天窗口会漏掉窗口外的样本；v2d3 18:17 起有新竞彩日）
-    r = TestClient(app).get("/table/matches", params={"limit": 2000, "date_from": "2000-01-01"})
-    d = r.json()
-    assert d["total"] <= 2000
-    assert d["config_version"] == "hl_v0.3.1" and d["config"]["return_hl_water"] == "real_only"
-    items = d["items"]
+    # 全量日期：基准样本是库内所有更早竞彩日（默认 7 天窗口会漏掉窗口外的样本；v2d3 18:17 起有新竞彩日）。
+    # 接口最多 31 天，按库里实际竞彩日拆窗后再拼回。
+    today = datetime.now(TZ_CN).date().isoformat()
+    c = sqlite3.connect(f"file:{adb.DB_PATH}?mode=ro", uri=True)
+    try:
+        dates = [date.fromisoformat(r[0]) for r in c.execute(
+            "SELECT DISTINCT jingcai_date FROM matches WHERE scope = 'jingcai' AND jingcai_date <= ? ORDER BY 1",
+            (today,))]
+    finally:
+        c.close()
+    items = []
+    config = None
+    for start, end in _windows(dates):
+        offset = 0
+        while True:
+            r = TestClient(app).get("/table/matches", params={
+                "limit": 2000, "offset": offset,
+                "date_from": start.isoformat(), "date_to": end.isoformat(),
+            })
+            assert r.status_code == 200, r.text
+            d = r.json()
+            config = d
+            assert d["count"] == len(d["items"])
+            items.extend(d["items"])
+            offset += d["count"]
+            if d["count"] == 0 or offset >= d["total"]:
+                break
+    assert config is not None
+    assert config["config_version"] == "hl_v0.3.1" and config["config"]["return_hl_water"] == "real_only"
     for b in ("macau", "crown", "william", "pinnacle"):
         for p in ("open", "mid", "close"):
             for it in items:

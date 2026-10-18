@@ -131,6 +131,29 @@ def _row(d, uid):
     return next(i for i in d["items"] if i["match_id"] == uid)
 
 
+def _items_over(client, date_from: str, date_to: str, **params):
+    """按最多 31 天的窗口合并 items。接口拒绝更长的竞彩日跨度。"""
+    start = datetime.fromisoformat(date_from).date()
+    end = datetime.fromisoformat(date_to).date()
+    items = []
+    cur = start
+    while cur <= end:
+        win_to = min(end, cur + timedelta(days=tm.MAX_JINGCAI_DATE_SPAN_DAYS))
+        offset = 0
+        total = None
+        while True:
+            d = _get(client, date_from=cur.isoformat(), date_to=win_to.isoformat(),
+                     offset=offset, **params)
+            if total is None:
+                total = d["total"]
+            items.extend(d["items"])
+            offset += d["count"]
+            if d["count"] == 0 or offset >= total:
+                break
+        cur = win_to + timedelta(days=1)
+    return items
+
+
 # ---------------------------------------------------------------- leakage
 
 def test_unfinished_match_has_no_result_or_settlement(db, client):
@@ -190,9 +213,9 @@ def test_future_as_of_is_clamped_to_now(db, client):
 # ---------------------------------------------------------------- V3 consistency + settlement
 
 def test_v3_fields_match_single_match_endpoint(db, client):
-    d = _get(client, date_from="2026-06-01", date_to="2026-07-05", limit=2000)
+    items = _items_over(client, "2026-06-01", "2026-07-05", limit=2000)
     checked = 0
-    for row in d["items"]:
+    for row in items:
         single = client.get(f"/matches/{row['match_id']}/prediction")
         if single.status_code == 404:
             assert row["prediction"] is None
@@ -208,10 +231,10 @@ def test_v3_fields_match_single_match_endpoint(db, client):
 def test_settlement_matches_backtest_engine(db, client):
     """每场结算 = backtest.settle_pnl(odds_asian macau_close, 默认 0.95)。"""
     from app import backtest as bt
-    d = _get(client, date_from="2026-06-01", date_to="2026-07-05", limit=2000)
+    items = _items_over(client, "2026-06-01", "2026-07-05", limit=2000)
     c = sqlite3.connect(str(db))
     n = 0
-    for row in d["items"]:
+    for row in items:
         s = row["settlement"]
         if not s or s["code"] == "no_bet":
             continue
@@ -316,9 +339,17 @@ def test_pagination_and_defaults(db, client):
     c.close()
     assert d["date_to"] == expect_to
     assert d["date_from"] == (datetime.fromisoformat(expect_to) - timedelta(days=6)).date().isoformat()
-    p1 = _get(client, date_from="2026-06-01", date_to="2026-07-05", limit=10, offset=0)
-    p2 = _get(client, date_from="2026-06-01", date_to="2026-07-05", limit=10, offset=10)
-    assert p1["total"] == 177 and p1["count"] == 10
+    # 接口最多接受 31 天：2026-06-01 至 2026-07-02 的日历差正好是 31。
+    span_from, span_to = "2026-06-01", "2026-07-02"
+    p1 = _get(client, date_from=span_from, date_to=span_to, limit=10, offset=0)
+    p2 = _get(client, date_from=span_from, date_to=span_to, limit=10, offset=10)
+    c = sqlite3.connect(str(db))
+    expect = c.execute(
+        "SELECT COUNT(*) FROM matches WHERE jingcai_date BETWEEN ? AND ? AND scope = 'jingcai'",
+        (span_from, span_to),
+    ).fetchone()[0]
+    c.close()
+    assert p1["total"] == expect and expect > 10 and p1["count"] == 10
     assert not {i["match_id"] for i in p1["items"]} & {i["match_id"] for i in p2["items"]}
 
 
@@ -333,7 +364,7 @@ def test_connection_is_read_only(db):
 
 def test_prod_db_untouched(prod_sha_before, client, monkeypatch):
     monkeypatch.setattr(adb, "DB_PATH", PROD_DB)
-    _get(client, date_from="2026-06-01", date_to="2026-07-05", include_live="all")
+    _get(client, date_from="2026-06-06", date_to="2026-06-06", include_live="all")
     assert _sha(PROD_DB) == prod_sha_before
 
 
@@ -576,12 +607,12 @@ def test_flat_format_and_openapi(db, client):
 
 
 def test_nested_validates_against_response_model(db, client):
-    d = _get(client, date_from="2026-06-01", date_to="2026-07-05", limit=2000)
+    d = _get(client, date_from="2026-06-01", date_to="2026-07-02", limit=2000)
     tm.TableResponse.model_validate(d)
 
 
 def test_flat_columns_stable_across_rows(db, client):
-    d = _get(client, date_from="2026-06-01", date_to="2026-07-05", format="flat", limit=2000)
+    d = _get(client, date_from="2026-06-01", date_to="2026-07-02", format="flat", limit=2000)
     keysets = {tuple(sorted(r.keys())) for r in d["items"]}
     assert len(keysets) == 1  # 例外场/非例外场、有无结算 → 同一列集合
     row = d["items"][0]

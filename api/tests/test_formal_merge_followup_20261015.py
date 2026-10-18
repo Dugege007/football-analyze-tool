@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -113,7 +113,37 @@ def test_whole_formal_table_output_never_contains_a_batch_name(monkeypatch):
     monkeypatch.setattr(adb, "DB_PATH", live_db)
     monkeypatch.setattr(adb, "DB_LABEL", "live")
     monkeypatch.setattr(adb, "READONLY", True)
-    body = TestClient(app).get("/table/matches", params={
-        "date_from": "2000-01-01", "date_to": "2099-12-31", "scope": "all", "limit": 1000}).json()
-    assert len(body["items"]) > 0
-    assert "gapfill" not in json.dumps(body)
+    conn = sqlite3.connect(f"file:{live_db}?mode=ro", uri=True)
+    try:
+        dates = [date.fromisoformat(r[0]) for r in conn.execute(
+            "SELECT DISTINCT jingcai_date FROM matches ORDER BY 1")]
+    finally:
+        conn.close()
+    # 接口最多 31 天。按库里实际竞彩日拆窗，仍覆盖全部输出。
+    windows: list[tuple[date, date]] = []
+    if dates:
+        start = prev = dates[0]
+        for d in dates[1:]:
+            if (d - start).days > 31:
+                windows.append((start, prev))
+                start = d
+            prev = d
+        windows.append((start, prev))
+    blobs: list[str] = []
+    n_items = 0
+    for start, end in windows:
+        offset = 0
+        while True:
+            r = TestClient(app).get("/table/matches", params={
+                "date_from": start.isoformat(), "date_to": end.isoformat(),
+                "scope": "all", "limit": 1000, "offset": offset,
+            })
+            assert r.status_code == 200, r.text
+            body = r.json()
+            blobs.append(json.dumps(body))
+            n_items += body["count"]
+            offset += body["count"]
+            if body["count"] == 0 or offset >= body["total"]:
+                break
+    assert n_items > 0
+    assert "gapfill" not in "".join(blobs)

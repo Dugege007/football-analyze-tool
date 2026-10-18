@@ -5,7 +5,7 @@ import hashlib
 import json
 import sqlite3
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -57,6 +57,37 @@ def _table(client, **kw):
     r = client.get("/table/matches", params={"limit": 500, "scope": "all", **kw})
     assert r.status_code == 200, r.text
     return r.json()
+
+
+def _items_in_span(db_path: Path, client, date_from: str, date_to: str, **kw) -> list:
+    """按库里实际竞彩日拆成不超过 31 天的窗口，把原先一次取长区间的结果拼回来。"""
+    c = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        dates = [date.fromisoformat(r[0]) for r in c.execute(
+            "SELECT DISTINCT jingcai_date FROM matches WHERE jingcai_date BETWEEN ? AND ? ORDER BY 1",
+            (date_from, date_to))]
+    finally:
+        c.close()
+    items: list = []
+    if not dates:
+        return items
+    start = prev = dates[0]
+    windows = []
+    for d in dates[1:]:
+        if (d - start).days > 31:
+            windows.append((start, prev))
+            start = d
+        prev = d
+    windows.append((start, prev))
+    for a, b in windows:
+        offset = 0
+        while True:
+            page = _table(client, date_from=a.isoformat(), date_to=b.isoformat(), offset=offset, **kw)
+            items.extend(page["items"])
+            offset += page["count"]
+            if page["count"] == 0 or offset >= page["total"]:
+                break
+    return items
 
 
 def _ids(p: Path) -> dict[str, int]:
@@ -209,7 +240,7 @@ def test_void_postponed_hook(v2d3_copy, monkeypatch):
 # ---------------- 2. kickoff_jc_conflict ----------------
 
 def test_kickoff_jc_conflict_v2d3(v2d3_copy):
-    items = _table(TestClient(app), date_from="2026-01-01", date_to="2026-12-31")["items"]
+    items = _table(TestClient(app), date_from="2026-06-05", date_to="2026-07-05")["items"]
     hit = [i["match_id"] for i in items if i["match"]["kickoff_jc_conflict"]]
     assert hit == ["2026-06-05|五201"]
     it = next(i for i in items if i["match_id"] == "2026-06-05|五201")
@@ -263,7 +294,7 @@ def test_generator_main_refuses_old_keys(tmp_path, monkeypatch):
 
 def test_ledger_note_on_frozen_old_entries_live(live_copy):
     client = TestClient(app)
-    items = _table(client, date_from="2026-01-01", date_to="2026-12-31", strategy="SHADOW_S2")["items"]
+    items = _items_in_span(live_copy, client, "2026-01-01", "2026-12-31", strategy="SHADOW_S2")
     noted = sorted(i["match_id"] for i in items if (i.get("prediction") or {}).get("ledger_note"))
     assert noted == ["2026-06-19|五030", "2026-06-22|一044"]
     with_pred = [i for i in items if i.get("prediction")]
@@ -271,7 +302,7 @@ def test_ledger_note_on_frozen_old_entries_live(live_copy):
     it = next(i for i in items if i["match_id"] == "2026-06-19|五030")
     assert it["prediction"]["ledger_note"] == "触发依据是换算水位"
     assert it["prediction"]["ledger_note_reason"] == "tier_water_trigger"
-    n4 = [i for i in _table(client, date_from="2026-01-01", date_to="2026-12-31", strategy="SHADOW_N4")["items"]
+    n4 = [i for i in _items_in_span(live_copy, client, "2026-01-01", "2026-12-31", strategy="SHADOW_N4")
           if i.get("prediction")]
     assert len(n4) == 13 and all(i["prediction"]["ledger_note"] == "触发依据是换算水位" for i in n4)
     r = client.get("/matches/2026-06-22|一044/prediction", params={"strategy": "SHADOW_S2"})
@@ -330,7 +361,7 @@ def test_manual_review_reason_in_validate(v2d3_copy):
 
 
 def test_flat_columns_stable_v2d3(v2d3_copy):
-    rows = TestClient(app).get("/table/matches", params={"date_from": "2026-01-01", "date_to": "2026-12-31",
+    rows = TestClient(app).get("/table/matches", params={"date_from": "2026-06-05", "date_to": "2026-07-05",
                                                          "scope": "all", "format": "flat", "limit": 500,
                                                          "strategy": "SHADOW_S2_V2"}).json()["items"]
     assert len({frozenset(r) for r in rows}) == 1
@@ -342,7 +373,7 @@ def test_flat_columns_stable_v2d3(v2d3_copy):
 
 def test_flat_posthoc_flags_never_null_v2d3(v2d3_copy):
     """2026-10-13：扁平格式里所有阶段格子的 asof_backfill 与 phase_assign_late 都不为空（含澳门第五数据通道与真实阶段空模板）。"""
-    rows = TestClient(app).get("/table/matches", params={"date_from": "2026-01-01", "date_to": "2026-12-31",
+    rows = TestClient(app).get("/table/matches", params={"date_from": "2026-06-05", "date_to": "2026-07-05",
                                                          "scope": "all", "format": "flat", "limit": 500,
                                                          "strategy": "SHADOW_S2_V2"}).json()["items"]
     assert rows
