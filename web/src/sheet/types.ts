@@ -279,8 +279,15 @@ export interface ApiTableMatch {
   manual_review_reason?: string | null
   /** 0.3.19：日核对原因 */
   daily_check?: string[] | null
+  /** 来源队名。规范名在 home_team_canonical，显示时才优先取规范名。 */
   home: string
   away: string
+  league_canonical?: string | null
+  league_pending_confirm?: boolean | null
+  home_team_canonical?: string | null
+  away_team_canonical?: string | null
+  home_team_pending_confirm?: boolean | null
+  away_team_pending_confirm?: boolean | null
 }
 
 export interface ApiTablePrediction {
@@ -512,8 +519,14 @@ export interface BeTableRow {
     extras?: Record<string, unknown> | null
     scope: string
     league: string | null
+    league_canonical?: string | null
+    league_pending_confirm?: boolean | null
     home_team: string | null
     away_team: string | null
+    home_team_canonical?: string | null
+    away_team_canonical?: string | null
+    home_team_pending_confirm?: boolean | null
+    away_team_pending_confirm?: boolean | null
   }
   /** 预留：行级 extras（kickoff_placeholder_suspect / phase_assign_late 可能放这里） */
   extras?: Record<string, unknown> | null
@@ -729,7 +742,11 @@ export interface SheetRow {
   date: string
   scope: 'jingcai' | 'extra'
   jcNo: string
+  /** 页面上的赛事常用名。有规范名时不再是来源文本。 */
   league: string
+  leaguePending: boolean
+  /** 赛事别名悬停。一行一个，没有别名时可能仍是来源名。 */
+  leagueAliasTip: string | undefined
   kickoffAt: string | null
   kickoffLabel: string
   /** 开赛时间悬停注（占位值 / 竞彩官方来源 / 推迟 / 漂移）；无则 null */
@@ -757,8 +774,15 @@ export interface SheetRow {
   settlementHiddenReason: string | null
   /** 0.3.19 预测台账备注（旧冻结 S2/N4「触发依据是换算水位」） */
   ledgerNote: string | null
+  /** 页面上的主队常用名。 */
   home: string
+  homePending: boolean
+  /** 主队别名悬停。一行一个，不加前缀。 */
+  homeAliasTip: string | undefined
+  /** 页面上的客队常用名。 */
   away: string
+  awayPending: boolean
+  awayAliasTip: string | undefined
   matchup: string
 
   ah: Record<

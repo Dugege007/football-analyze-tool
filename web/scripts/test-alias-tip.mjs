@@ -38,6 +38,19 @@ test('队名别名一行一个，不加前缀', () => {
   assert.equal(teams.teamAliasTip('全北汽车', '全北现代'), '全北汽车')
 })
 
+test('利雅得新月和坎布尔是常用名，写反的名称只出现在悬停里', () => {
+  assert.equal(teams.teamCommon('利雅得希拉尔', '利雅得新月'), '利雅得新月')
+  assert.equal(teams.teamAliasTip('利雅得希拉尔', '利雅得新月'), '利雅得希拉尔')
+  assert.equal(teams.teamAliasTip('利雅得新月'), '利雅得希拉尔')
+  assert.equal(teams.teamCommon('金堡尔', '坎布尔'), '坎布尔')
+  assert.equal(teams.teamAliasTip('金堡尔', '坎布尔'), '金堡尔')
+  assert.equal(teams.teamAliasTip('坎布尔'), '金堡尔')
+  assert.equal(teams.teamAliasTip('利雅得希拉尔', '利雅得新月').includes('别名'), false)
+  assert.equal(teams.isTeamPending('利雅得希拉尔', '利雅得新月', false), false)
+  assert.equal(teams.isTeamPending('金堡尔', '坎布尔', false), false)
+  assert.equal(teams.isTeamPending('利雅得希拉尔', '利雅得新月', true), true)
+})
+
 test('队名没有别名时不返回空悬停', () => {
   assert.equal(teams.teamAliasTip('鹿岛鹿角'), undefined)
   assert.equal(teams.teamAliasTip('曼彻斯特城', '曼彻斯特城'), undefined)

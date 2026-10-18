@@ -1,8 +1,8 @@
 /**
- * 赛程页、当日消息预览和比赛详情页的赛事名、队名显示。
- * 优先读 GET /matches 的规范名（扁平字段与嵌套字段同值），再经 shownLeague / shownTeam 显示。
- * 这两个函数与数据表赛事、主队、客队列相同。规范名字段缺席时才用来源文本。
- * 接口在没有规范名时已把该字段回退成来源文本，页面不再另造名称。
+ * 赛程页、当日消息预览、比赛详情页和数据表的赛事名、队名显示。
+ * 优先读规范名（扁平字段与嵌套字段同值），再经 shownLeague / shownTeam 显示。
+ * 规范名字段缺席时才用来源文本。
+ * 赛程接口在没有规范名时已把该字段回退成来源文本；数据表接口则把规范名留空，页面再回到来源文本。
  * 悬停别名赛事走 leagueAliasTip，队名走 teamAliasTip，都是一行一个、不加前缀。
  * 球队待确认走 isTeamPending，优先用接口布尔值。
  * 赛事待确认走 isLeaguePending，优先用 league_pending_confirm。已升格的常用名不标星，临时名继续标星。
@@ -97,4 +97,42 @@ export function matchLabels(match: Match): MatchLabels {
       preferPending(match.away_team_pending_confirm, match.teams_pending_confirm?.away),
     ),
   }
+}
+
+/** 数据表一行上与名称有关的字段。规范名留空时表示接口没有给出常用名。 */
+export interface TableNameFields {
+  league?: string | null
+  league_canonical?: string | null
+  league_pending_confirm?: boolean | null
+  league_id?: number | string | null
+  home_team?: string | null
+  away_team?: string | null
+  home_team_canonical?: string | null
+  away_team_canonical?: string | null
+  home_team_pending_confirm?: boolean | null
+  away_team_pending_confirm?: boolean | null
+}
+
+/**
+ * 数据表赛事、主队、客队的显示结果。
+ * 有规范名时用规范名，没有规范名时用来源文本。星号只认接口给出的待确认布尔值。
+ */
+export function labelsForTableMatch(fields: TableNameFields): MatchLabels {
+  return matchLabels({
+    date: '',
+    scope: 'jingcai',
+    jc: null,
+    competition: { name: fields.league ?? undefined },
+    league_canonical: fields.league_canonical,
+    league_pending_confirm: fields.league_pending_confirm,
+    league_id: fields.league_id,
+    teams: {
+      home: fields.home_team ?? '',
+      away: fields.away_team ?? '',
+    },
+    home_team_canonical: fields.home_team_canonical,
+    away_team_canonical: fields.away_team_canonical,
+    home_team_pending_confirm: fields.home_team_pending_confirm,
+    away_team_pending_confirm: fields.away_team_pending_confirm,
+  })
 }
