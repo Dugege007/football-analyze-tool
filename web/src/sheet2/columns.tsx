@@ -1,5 +1,6 @@
-import { isTeamPending, teamAliasTip, teamCommon } from '../names/teamName'
-import { leagueAliasTip, leagueShort } from '../names/leagueShort'
+import { isTeamPending, teamAliasTip } from '../names/teamName'
+import { leagueAliasTip } from '../names/leagueShort'
+import { shownLeague, shownTeam } from '../names/shownName'
 import { isLeaguePending } from '../names/leaguePending'
 import { NameHover } from '../components/DisplayName'
 import type { ColDef, ColGroupDef, ICellRendererParams } from 'ag-grid-community'
@@ -113,12 +114,12 @@ function baseChildren(): Col[] {
     },
     { colId: 'jcNo', headerName: '编号', width: w('base.jcNo'), pinned: 'left', valueGetter: (p) => p.data?.match.jc_id ?? '-', cellClass: (p) => dayClass(p.data), sort: 'asc', sortIndex: 1 },
     { colId: 'kickoff', headerName: '开赛时间', width: w('base.kickoff'), pinned: 'left', valueGetter: (p) => kickoffText(p.data?.match.kickoff_at ?? null) },
-    { colId: 'league', headerName: '赛事', width: w('base.league'), pinned: 'left', valueGetter: (p) => leagueShort(p.data?.match.league_canonical ?? p.data?.match.league) ?? '-',
-      // 格子里是简称。有别名时悬停一行一个；没有别名时仍是来源赛事名。认不出的赛事在简称旁加待确认星号。
+    { colId: 'league', headerName: '赛事', width: w('base.league'), pinned: 'left', valueGetter: (p) => shownLeague(p.data?.match.league, p.data?.match.league_canonical) ?? '-',
+      // 格子里是常用名。有别名时悬停一行一个；没有别名时仍是来源赛事名。认不出的赛事在简称旁加待确认星号。
       cellRenderer: (p: P) => {
         const source = p.data?.match.league
         const canonical = p.data?.match.league_canonical
-        const shown = leagueShort(canonical ?? source)
+        const shown = shownLeague(source, canonical)
         return (
           <span>
             <NameHover tip={leagueAliasTip(shown, source, [source, canonical])}>{p.value}</NameHover>
@@ -126,19 +127,19 @@ function baseChildren(): Col[] {
           </span>
         )
       } },
-    { colId: 'home', headerName: '主队', width: w('base.home'), pinned: 'left', valueGetter: (p) => teamCommon(p.data?.match.home_team, p.data?.match.home_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league)) ?? '-',
+    { colId: 'home', headerName: '主队', width: w('base.home'), pinned: 'left', valueGetter: (p) => shownTeam(p.data?.match.home_team, p.data?.match.home_team_canonical, p.data?.match.league, p.data?.match.league_canonical) ?? '-',
       // 格子里是常用名。悬停列出别名，一行一个，不加前缀。
       cellRenderer: (p: P) => (
         <span>
-          <NameHover tip={teamAliasTip(p.data?.match.home_team, p.data?.match.home_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league))}>{p.value}</NameHover>
+          <NameHover tip={teamAliasTip(p.data?.match.home_team, p.data?.match.home_team_canonical, shownLeague(p.data?.match.league, p.data?.match.league_canonical))}>{p.value}</NameHover>
           {isTeamPending(p.data?.match.home_team, p.data?.match.home_team_canonical, p.data?.match.home_team_pending_confirm) && <TeamPendingMark />}
         </span>
       ) },
-    { colId: 'away', headerName: '客队', width: w('base.away'), pinned: 'left', valueGetter: (p) => teamCommon(p.data?.match.away_team, p.data?.match.away_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league)) ?? '-',
+    { colId: 'away', headerName: '客队', width: w('base.away'), pinned: 'left', valueGetter: (p) => shownTeam(p.data?.match.away_team, p.data?.match.away_team_canonical, p.data?.match.league, p.data?.match.league_canonical) ?? '-',
       // 格子里是常用名。悬停列出别名，一行一个，不加前缀。
       cellRenderer: (p: P) => (
         <span>
-          <NameHover tip={teamAliasTip(p.data?.match.away_team, p.data?.match.away_team_canonical, leagueShort(p.data?.match.league_canonical ?? p.data?.match.league))}>{p.value}</NameHover>
+          <NameHover tip={teamAliasTip(p.data?.match.away_team, p.data?.match.away_team_canonical, shownLeague(p.data?.match.league, p.data?.match.league_canonical))}>{p.value}</NameHover>
           {isTeamPending(p.data?.match.away_team, p.data?.match.away_team_canonical, p.data?.match.away_team_pending_confirm) && <TeamPendingMark />}
         </span>
       ) },
