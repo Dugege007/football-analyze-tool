@@ -21,7 +21,7 @@ from app import shadow_evaluable as shadow_ev  # N5/N5-PIN 不可评估记账
 from app import collection_schedule
 from app import leak_suspect as _leak  # 0.3.20
 from app import odds_timeline_chart as otc  # 0.3.23
-from app import league_pending as lp  # 有来源名且 league_id 为空才待确认，不读待定池
+from app import league_pending as lp  # 2026-10-18 赛事常用名尚未确定才标星
 from app import team_pending as tp  # 2026-10-14 待确认球队；2026-10-18 改为常用名规则
 
 DEFAULT_STRATEGY = "CFFXDJ_5_V3"
@@ -107,9 +107,14 @@ def row_get(row: sqlite3.Row, key: str, default: Any = None) -> Any:
 
 
 def _league_pending_confirm(row: sqlite3.Row, pending) -> bool:
-    """有赛事来源名且 league_id 为空时为 True。不读待定池，已挂上编号不标星。"""
-    _ = pending
-    return lp.from_row(row)
+    """赛事常用名尚未确定时为 True。索引优先用 load_pending 附带的赛事名册。"""
+    league_idx = getattr(pending, "league", None) if isinstance(pending, tp.NameIndex) else None
+    return lp.is_pending(
+        row_get(row, "league_id"),
+        row_get(row, "competition_name"),
+        league_idx,
+        row_get(row, "league_canonical"),
+    )
 
 
 def build_match_obj(row: sqlite3.Row, meta_extras: dict | None = None, pending: tuple | None = None) -> dict:
@@ -137,7 +142,6 @@ def build_match_obj(row: sqlite3.Row, meta_extras: dict | None = None, pending: 
             "name": row["competition_name"],
             "type": row["competition_type"],
             "stage": row["competition_stage"],
-            # 赛事对象上也带这个字段。有赛事来源名并且 league_id 为空时为 true；没有来源名或已挂上 league_id 时为 false。
             "league_pending_confirm": league_flag,
         },
         "kickoff_hour": row["kickoff_hour"],
@@ -149,7 +153,7 @@ def build_match_obj(row: sqlite3.Row, meta_extras: dict | None = None, pending: 
             "home": tp.is_pending(row_get(row, "home_team_id"), None, pending, row["home_team"]),
             "away": tp.is_pending(row_get(row, "away_team_id"), None, pending, row["away_team"]),
         },
-        # 与队名 teams_pending_confirm 同级。列表、详情、待发接口都走本函数。已挂上 league_id 不标星。
+        # 与队名同一套升格规则。league_id 不单独取消星号。
         "league_pending_confirm": league_flag,
         "home_team_id": row_get(row, "home_team_id"),
         "away_team_id": row_get(row, "away_team_id"),
