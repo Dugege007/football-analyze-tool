@@ -41,6 +41,8 @@
 ├── research/shadow-ledger/ 影子台账框架、方案登记模板（shadow-schemes.csv 仅表头）、防泄漏验收清单
 ├── config/                 strategy_params.example.json（策略参数模板，全为 null）
 ├── config.example.env      全部环境变量的样例与中文说明（复制为 .env 使用）
+├── .env.deploy.example     大陆站一键发布的配置模板（复制为 .env.deploy，只留本机）
+├── deploy.bat              Windows 双击发布大陆站（只允许 124.221.56.38）
 ├── CHANGELOG.md            版本更新记录
 ├── CONTRIBUTING.md
 └── LICENSE                 PolyForm Noncommercial 1.0.0
@@ -235,3 +237,21 @@ npm run dev
 - 双击仓库根目录的 `start.bat`：在两个最小化窗口里分别启动后台接口（端口 8787）和网页界面（端口 5173），等网页可以访问后自动打开浏览器。第一次运行时如果没有 `web\node_modules`，会先自动执行 `npm install`。使用前需要已经按上文创建好 `.venv` 虚拟环境。
 - 启动后台接口之前，`start.bat` 会先运行 `scripts/sync_formal_db.ps1`。脚本先看 `D:\Du_Test\football\sync\` 里是否同时有 `app_latest.db.gz` 和 `app_latest.db.sha256`。两份文件都在时，启动就用这个目录；否则改用备用目录 `C:\Users\win10\football-sync\`。脚本按目录里有没有成对文件来选择，不按电脑名称选择。YPC（即 YuePC）上只读库落地之后的真实同步路径，等确认后再写入本文。脚本计算本机 `D:\Du_Test\football\current\app_latest.db` 的 SHA256，并与校验文件比较。校验和一致时跳过解压，直接继续启动。校验和不同，或者本机正式库还不存在时，脚本把压缩包解压，再原子替换为 `current\app_latest.db`。同步目录不存在，或者校验文件和压缩包缺失时，脚本只给出提示，并继续用现有数据库启动。脚本不从网络下载。环境里还没有 `APP_DB_PATH` 时，启动脚本会把它设为 `D:\Du_Test\football\current\app_latest.db`，后台接口读取这份正式库。环境里还没有 `APP_DB_LABEL` 时保持 `live`，响应里的 `meta.db` 仍是 live。
 - 双击 `stop.bat`：不弹出任何提示，直接关闭这两个窗口和其中的服务进程，并释放 8787 和 5173 端口。
+
+## 大陆站一键发布
+
+只发布到大陆站 `124.221.56.38`。脚本会拒绝 `81.70.76.42` 和个人站目录。详细步骤、三种模式和回滚要点见 [`docs/cn-one-click-deploy.md`](docs/cn-one-click-deploy.md)。
+
+在 YuePC 或 MSI 上：
+
+```powershell
+copy .env.deploy.example .env.deploy
+```
+
+用编辑器填写 `.env.deploy`。私钥只写本机路径：YuePC 一般为 `C:\Users\Administrator\.ssh\id_ed25519`，MSI 一般为 `C:\Users\win10\.ssh\id_ed25519`。默认模式是 `static,api`，不会覆盖远端正式库。
+
+然后双击仓库根目录的 `deploy.bat`，核对主机和模式后输入 `Y`。想先看步骤、不连服务器时，在仓库根目录执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1 --dry-run
+```

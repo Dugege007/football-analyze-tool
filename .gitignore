@@ -4,6 +4,10 @@ docs/分析工具服务器.md
 .env
 .env.*
 !config.example.env
+# 大陆站一键发布：本机实配不提交，示例可以提交
+.env.deploy
+.env.deploy.*
+!.env.deploy.example
 secrets/
 secrets*
 *.pem

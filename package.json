@@ -1,0 +1,9 @@
+{
+  "name": "football-analyze-tool",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy:cn": "node scripts/cn-deploy.mjs",
+    "deploy:cn:check": "node --test scripts/cn-deploy-lib/cn-deploy.test.mjs"
+  }
+}
