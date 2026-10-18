@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -80,15 +80,47 @@ def _table(client, **kw):
     return r.json()
 
 
+def _items_in_span(db_path, client, date_from: str, date_to: str, **kw) -> list:
+    """按库里实际竞彩日拆成不超过 31 天的窗口，把原先一次取长区间的结果拼回来。"""
+    c = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        dates = [date.fromisoformat(r[0]) for r in c.execute(
+            "SELECT DISTINCT jingcai_date FROM matches WHERE jingcai_date BETWEEN ? AND ? ORDER BY 1",
+            (date_from, date_to))]
+    finally:
+        c.close()
+    items: list = []
+    if not dates:
+        return items
+    start = prev = dates[0]
+    windows = []
+    for d in dates[1:]:
+        if (d - start).days > 31:
+            windows.append((start, prev))
+            start = d
+        prev = d
+    windows.append((start, prev))
+    for a, b in windows:
+        offset = 0
+        while True:
+            page = _table(client, date_from=a.isoformat(), date_to=b.isoformat(), offset=offset, **kw)
+            items.extend(page["items"])
+            offset += page["count"]
+            if page["count"] == 0 or offset >= page["total"]:
+                break
+    return items
+
+
 def test_exception_count_formal_after_merge(live_copy):
     # 2026-10-15 并库之后正式库共 316 场（竞彩 314 场加 2 场非竞彩探针场），其中例外场 241 场；
     # 并库前的 177 场里有 146 场例外场，截止到 2026-07-05 这 177 场的例外场数量不变。
-    d = _table(TestClient(app), date_from="2026-01-01", date_to="2026-12-31")
-    items = d["items"]
+    client = TestClient(app)
+    items = _items_in_span(live_copy, client, "2026-01-01", "2026-12-31")
     assert len(items) == 316
-    assert d["config"]["exception_rule"] == "jc_code_ge_2300"
+    cfg = _table(client, date_from="2026-06-01", date_to="2026-06-01")
+    assert cfg["config"]["exception_rule"] == "jc_code_ge_2300"
     assert sum(1 for i in items if i["schedule"]["phase_exception"]) == 241
-    old = _table(TestClient(app), date_from="2026-01-01", date_to="2026-07-05")["items"]
+    old = _items_in_span(live_copy, client, "2026-01-01", "2026-07-05")
     assert len(old) == 177 and sum(1 for i in old if i["schedule"]["phase_exception"]) == 146
     # 并库后正式库有 kickoff_jc 列，这三场的竞彩开赛时间是次日 12:00。
     for uid, jc in (("2026-06-13|六008", "2026-06-14T12:00:00+08:00"), ("2026-06-16|二020", "2026-06-17T12:00:00+08:00"),

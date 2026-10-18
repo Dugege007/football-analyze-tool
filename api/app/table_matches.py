@@ -2828,12 +2828,25 @@ def _flat_row(item: dict) -> dict:
     return flat
 
 
+# 数据表页产品规则：竞彩日闭区间的日历差最多 31 天，与前端把结束日收到开始日 + 31 天一致。
+# 恰好 31 天允许（2026-01-01 至 2026-02-01）；缺省 date_from = date_to − 6 天仍然合法。
+# 只在 GET /table/matches 打开。脚本和单测直接调用 build_table 时仍可按研究区间取数。
+MAX_JINGCAI_DATE_SPAN_DAYS = 31
+
+
+def _ensure_jingcai_date_span(date_from: str, date_to: str) -> None:
+    """已解析的竞彩日闭区间，日历差大于 31 天则拒绝。"""
+    span_days = (date_cls.fromisoformat(date_to) - date_cls.fromisoformat(date_from)).days
+    if span_days > MAX_JINGCAI_DATE_SPAN_DAYS:
+        raise HTTPException(400, f"竞彩日跨度不能超过 {MAX_JINGCAI_DATE_SPAN_DAYS} 天")
+
+
 def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str | None,
                 scope: str, strategy: str, channel: str, include_live: str,
                 settlement_version: str | None, as_of: str | None,
                 baseline_window_days: int | None, baseline_min_n: int,
                 limit: int, offset: int, fmt: str = "nested",
-                now: datetime | None = None) -> dict:
+                now: datetime | None = None, enforce_date_span: bool = False) -> dict:
     M = _M()
     scope_db = SCOPE_ALIASES.get(scope)
     if scope_db is None:
@@ -2863,6 +2876,8 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
         date_from = (date_cls.fromisoformat(date_to) - timedelta(days=6)).isoformat()
     if date_from > date_to:
         raise HTTPException(400, "date_from > date_to")
+    if enforce_date_span:
+        _ensure_jingcai_date_span(date_from, date_to)
 
     where = "m.jingcai_date BETWEEN ? AND ?"
     args: list[Any] = [date_from, date_to]
@@ -3395,8 +3410,10 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                      "description": "format=nested 的结构；format=flat 时 items 为扁平字典（键 = 嵌套路径用 _ 连接）"}},
 )
 def table_matches(
-    date_from: Optional[str] = Query(None, description="竞彩日起 YYYY-MM-DD；缺省 = date_to − 6 天"),
-    date_to: Optional[str] = Query(None, description="竞彩日止 YYYY-MM-DD；缺省 = 库内 ≤ as_of 日的最大竞彩日"),
+    date_from: Optional[str] = Query(
+        None, description="竞彩日起 YYYY-MM-DD；缺省 = date_to − 6 天。与 date_to 的日历差超过 31 天返回 400"),
+    date_to: Optional[str] = Query(
+        None, description="竞彩日止 YYYY-MM-DD；缺省 = 库内 ≤ as_of 日的最大竞彩日。恰好 31 天允许"),
     scope: str = Query("jc", pattern="^(jc|ext|all|jingcai|extra)$",
                        description="jc=竞彩(scope=jingcai)｜ext=非竞彩(scope=extra)｜all"),
     strategy: str = Query("CFFXDJ_5_V3", description="predictions.strategy；默认 V3"),
@@ -3420,6 +3437,6 @@ def table_matches(
                            strategy=strategy, channel=channel, include_live=include_live,
                            settlement_version=settlement_version, as_of=as_of,
                            baseline_window_days=baseline_window_days, baseline_min_n=baseline_min_n,
-                           limit=limit, offset=offset, fmt=format)
+                           limit=limit, offset=offset, fmt=format, enforce_date_span=True)
     finally:
         conn.close()

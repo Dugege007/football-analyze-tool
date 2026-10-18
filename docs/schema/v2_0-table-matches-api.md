@@ -45,6 +45,8 @@
 | `format` | `nested` | `nested`｜`flat`（扁平键，AG Grid 直接用；见 §9） |
 | `limit` / `offset` | 500 / 0 | 上限 2000；响应带 `total` |
 
+竞彩日起止的日历差超过 31 天返回 400（恰好 31 天允许，例如 2026-01-01 至 2026-02-01）；缺省的 7 日窗口仍合法。
+
 排序沿用 `/matches`：`jingcai_date, kickoff_hour, jc_no, id`。
 
 示例：

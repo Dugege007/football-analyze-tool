@@ -200,7 +200,7 @@ def test_baseline_excludes_tier_midpoint_and_uses_fixed_fallback(db, client):
 
 
 def test_baseline_method_on_every_rr_cell_and_fallback_table(db, client):
-    d = _get(client, date_from="2026-06-01", date_to="2026-07-05", limit=2000)
+    d = _get(client, date_from="2026-06-01", date_to="2026-07-02", limit=2000)
     for i in d["items"]:
         for market in ("ah", "x1x2"):
             for b in tm.BOOKS:
