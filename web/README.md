@@ -2,7 +2,7 @@
 
 本目录是 football-analyze-tool 的网页界面，使用 Vite、React、TypeScript、Ant Design、AG Grid 与 ECharts 构建，通过本地 API（`api/`）取数。
 
-界面规范（注释性说明用问号 Tooltip 显示）见 [UI-GUIDELINES.md](UI-GUIDELINES.md)。
+界面规范见 [UI-GUIDELINES.md](UI-GUIDELINES.md)。问号提示只说明数据来源或如何使用，不写程序逻辑和内部规则。
 
 ## 页面
 

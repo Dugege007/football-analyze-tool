@@ -3,8 +3,8 @@ import { Tooltip } from 'antd'
 import { QuestionCircleOutlined } from '@ant-design/icons'
 
 /**
- * 界面规范（见 web/UI-GUIDELINES.md）：注释性说明不直接写在页面上，
- * 需要解释的栏目或标签旁放一个小问号，鼠标悬停时用 Tooltip 显示说明。
+ * 界面规范（见 web/UI-GUIDELINES.md 规则一、规则二）：注释性说明不直接写在页面上。
+ * 问号悬停只说明数据来源或如何使用，不写业务口径、程序逻辑和内部规则。
  */
 export function HelpTip({ tip }: { tip: ReactNode }) {
   return (
