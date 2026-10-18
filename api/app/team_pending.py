@@ -4,6 +4,7 @@
 队名和赛事名共用本索引。
 
 已经升格的常用名不标星。升格来源只有三种：雷速体育写法、人工明确定稿、旧分析仓库里的高置信名称。
+提议表没有升格或待确认标记时，只把尚不在常用名里的名称记为待确认，不得把已经升格的常用名重新写入待确认。
 只是归并到临时名、名称表标了待确认、别名来源以 _pending_confirm 结尾、或待定池仍开放的，继续标星。
 男子与女子、一线队与青年队等相近名称不能借用另一个实体的常用名把星号消掉。
 身份编号不是升格。外部研究表缺失时只记警告，不得把全部名称标成待确认。
@@ -156,7 +157,9 @@ def _apply(known: set[str], pending: set[str], names, flag: bool) -> None:
     if flag:
         pending.update(ns)
     else:
+        # 已升格名称要从 pending 里拿掉，否则提议表临时名会盖掉包内/正式库常用名。
         known.update(ns)
+        pending.difference_update(ns)
 
 
 def _consume(path: Path, role: str, known: set[str], pending: set[str],
@@ -173,10 +176,16 @@ def _consume(path: Path, role: str, known: set[str], pending: set[str],
             names = [r.get("canonical")] + (r.get("aliases") or "").split("|")
             flag = _is_temporary_row(r)
         elif role == "proposed":
-            # 提议表只是归并建议。没有写明已经升格时，先映射到临时名，星号保留。
+            # 提议表只是归并建议。没有写明已经升格时，仅对「尚不在 known」的名称记临时名。
+            # 已在定稿/包内升格的常用名不得被提议表重新打成待确认（用户规则：已有常用名不加星）。
             names = [r.get("alias"), r.get("team_canonical")]
             marked = str(r.get("promotion") or "").strip() or str(r.get("pending_confirm") or "").strip()
-            flag = _is_temporary_row(r) if marked else True
+            if marked:
+                flag = _is_temporary_row(r)
+            else:
+                ns = {norm(n) for n in names if norm(n)}
+                pending.update(n for n in ns if n not in known)
+                continue
         else:
             if seed_tables is not None and r.get("table") not in seed_tables:
                 continue
