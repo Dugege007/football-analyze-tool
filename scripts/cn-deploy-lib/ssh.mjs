@@ -2,14 +2,14 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { DeployError, assertBackupPath, assertTempPath, assertSafeRemotePath, FIXED } from './assert-host.mjs';
 
-function spawnCaptured(cmd, args, { input } = {}) {
+function spawnCaptured(cmd, args, { input, quiet = false } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] });
     const out = [];
     const err = [];
     child.stdout.on('data', (chunk) => {
       out.push(chunk);
-      process.stdout.write(chunk);
+      if (!quiet) process.stdout.write(chunk);
     });
     child.stderr.on('data', (chunk) => {
       err.push(chunk);
@@ -93,7 +93,7 @@ export function createRunner({ cfg, dryRun, log = console.log, spawnImpl = spawn
       ];
       return spawnImpl('scp', args);
     },
-    async ssh(script, title) {
+    async ssh(script, title, options = {}) {
       if (title) log(title);
       if (dryRun) {
         log('---- 干跑：远程脚本（不执行）----');
@@ -102,7 +102,7 @@ export function createRunner({ cfg, dryRun, log = console.log, spawnImpl = spawn
         return { stdout: 'DRY_RUN\n', stderr: '', code: 0 };
       }
       const args = [...sshArgs(cfg), 'bash', '-s'];
-      return spawnImpl('ssh', args, { input: script });
+      return spawnImpl('ssh', args, { input: script, quiet: Boolean(options.quiet) });
     },
   };
 }

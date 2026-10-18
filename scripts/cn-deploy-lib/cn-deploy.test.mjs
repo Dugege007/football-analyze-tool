@@ -20,6 +20,18 @@ import { dbRemoteScript } from './mode-db.mjs';
 import { staticRemoteScript } from './mode-static.mjs';
 import { dbHashScript, healthScript, listenScript, preflightScript } from './verify.mjs';
 import {
+  assertAssetCacheControl,
+  assertCacheProbeText,
+  assertHtmlCacheControl,
+  cacheDiscoverScript,
+  ensureStaticCacheInclude,
+  loadCacheSnippet,
+  nginxReloadScript,
+  planCacheInstall,
+  renderCacheApplyScript,
+  splitTopLevelServers,
+} from './nginx-cache.mjs';
+import {
   assertUploadBytes,
   collectApiEntries,
   packTarGz,
@@ -130,9 +142,42 @@ test('打包结果可以被 tar 解出', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+const baotaVhost = `server
+{
+    listen 80;
+    server_name 124.221.56.38;
+    root /www/wwwroot/124.221.56.38;
+    location /api/ {
+        proxy_pass http://127.0.0.1:8787/;
+    }
+    location ~ .*\\.(js|css)?$
+    {
+        expires 12h;
+    }
+    # 注释 } 不能截断 server
+    location /note/ {
+        return 200 "{";
+    }
+}
+`;
+
+function discoverText(files) {
+  const lines = files.map((file) => {
+    const encoded = Buffer.from(file.body, 'utf8').toString('base64');
+    return `CANDIDATE ${file.path}\nB64 ${encoded}`;
+  });
+  if (files.length === 0) lines.push('CANDIDATE_NONE');
+  lines.push('DISCOVER_DONE');
+  return lines.join('\n');
+}
+
 test('远程脚本通过 bash 语法检查', () => {
   const cfg = exampleConfig();
   const stamp = '20261018T120000Z';
+  const planned = planCacheInstall(discoverText([{
+    path: '/www/server/panel/vhost/nginx/124.221.56.38.conf',
+    body: baotaVhost,
+  }]), stamp);
   const scripts = [
     staticRemoteScript(cfg, stamp),
     apiRemoteScript(cfg, stamp),
@@ -141,6 +186,9 @@ test('远程脚本通过 bash 语法检查', () => {
     healthScript(cfg),
     listenScript(),
     dbHashScript(cfg),
+    cacheDiscoverScript(),
+    nginxReloadScript(cfg),
+    renderCacheApplyScript(cfg, planned),
   ];
   for (const script of scripts) {
     const file = path.join(os.tmpdir(), `fat-bash-${Math.random().toString(16).slice(2)}.sh`);
@@ -203,6 +251,10 @@ test('示例配置可以干跑且不连接', () => {
   assert.match(output, /正式库：本次不覆盖/);
   assert.match(output, /干跑完成/);
   assert.match(output, /不连接 SSH/);
+  assert.match(output, /静态缓存：入口文档 no-cache/);
+  assert.match(output, /expires -1/);
+  assert.match(output, /fat-static-cache\.conf/);
+  assert.match(output, /不得带大于 0 的 max-age/);
   assert.doesNotMatch(output, /81\.70\.76\.42/);
 });
 
@@ -239,6 +291,86 @@ test('正式库模式的计划会写明覆盖', () => {
   assert.match(output, /将覆盖远端正式库/);
   assert.match(output, /\/opt\/football-data\/app_latest\.db/);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('入口短缓存与指纹资源长缓存', () => {
+  assert.equal(assertHtmlCacheControl('no-cache'), 'no-cache');
+  assert.equal(assertHtmlCacheControl('max-age=0, must-revalidate'), 'max-age=0, must-revalidate');
+  assert.throws(() => assertHtmlCacheControl(''), /没有 Cache-Control/);
+  assert.throws(() => assertHtmlCacheControl('max-age=43200'), /大于 0/);
+  assert.throws(() => assertHtmlCacheControl('no-cache, max-age=31536000'), /大于 0/);
+  assert.throws(() => assertHtmlCacheControl('public, s-maxage=3600'), /s-maxage/);
+  assert.equal(
+    assertAssetCacheControl('public, max-age=31536000, immutable'),
+    'public, max-age=31536000, immutable',
+  );
+  assert.doesNotThrow(() => assertAssetCacheControl('max-age=2592000'));
+  assert.throws(() => assertAssetCacheControl('max-age=43200'), /30 天/);
+  assert.throws(() => assertAssetCacheControl(''), /30 天/);
+  const snippet = loadCacheSnippet();
+  assert.match(snippet, /expires -1/);
+  assert.match(snippet, /public, max-age=31536000, immutable/);
+  assert.doesNotMatch(snippet, /location\s+\/\s*\{/);
+});
+
+test('缓存片段只合并进含网站根的 server 块，并且可以重复执行', () => {
+  const redirect = `server {
+    listen 80;
+    server_name 124.221.56.38;
+    return 301 /;
+}
+`;
+  const merged = ensureStaticCacheInclude(`${redirect}${baotaVhost}`);
+  assert.equal(merged.changed, true);
+  assert.equal(merged.rootBlocks, 1);
+  assert.equal(merged.text.includes('proxy_pass http://127.0.0.1:8787/;'), true);
+  assert.equal(merged.text.split('fat-static-cache.conf').length - 1, 1);
+  const servers = splitTopLevelServers(merged.text).filter((part) => part.kind === 'server');
+  assert.equal(servers.length, 2);
+  assert.equal(servers[0].text.includes('fat-static-cache.conf'), false);
+  assert.equal(servers[0].text.includes('return 301 /;'), true);
+  assert.equal(servers[1].text.includes('return 200 "{";'), true);
+  assert.match(servers[1].text, /# 注释 \} 不能截断 server/);
+  const again = ensureStaticCacheInclude(merged.text);
+  assert.equal(again.changed, false);
+  assert.equal(again.text, merged.text);
+  const included = `server {
+    root /www/wwwroot/124.221.56.38;
+    include /www/server/panel/vhost/nginx/extension/124.221.56.38/*.conf;
+}
+`;
+  const kept = ensureStaticCacheInclude(included);
+  assert.equal(kept.changed, false);
+  assert.equal(kept.text, included);
+  assert.throws(
+    () => ensureStaticCacheInclude('server { root /www/wwwroot/124.221.56.38; }\n# 81.70.76.42\n'),
+    /禁止目标/,
+  );
+});
+
+test('站点配置探测结果可生成缓存安装计划', () => {
+  const stamp = '20261018T120000Z';
+  const stdout = discoverText([{
+    path: '/www/server/panel/vhost/nginx/124.221.56.38.conf',
+    body: baotaVhost,
+  }]);
+  const plan = planCacheInstall(stdout, stamp);
+  assert.equal(plan.vhosts.length, 1);
+  assert.equal(plan.vhosts[0].changed, true);
+  assert.equal(plan.vhosts[0].temp, '/tmp/fat-nginx-vhost-0.conf');
+  assert.match(plan.backupDir, /\/opt\/football-data\/backups\/nginx\/20261018T120000Z$/);
+  const probe = [
+    'PROBE / no-cache',
+    'PROBE /index.html max-age=0, must-revalidate',
+    'PROBE /assets/index-Abc.js public, max-age=31536000, immutable',
+    'CACHE_OK',
+  ].join('\n');
+  assert.equal(assertCacheProbeText(probe).skipped, false);
+  assert.throws(() => assertCacheProbeText('PROBE / max-age=43200\nPROBE /index.html no-cache\nPROBE /assets/a.js max-age=31536000\nCACHE_OK'), /大于 0/);
+  assert.equal(assertCacheProbeText('PROBE_SKIP\nCACHE_OK').skipped, true);
+  assert.throws(() => planCacheInstall('CANDIDATE_NONE\nDISCOVER_DONE', stamp), /没有自动合并/);
+  assert.doesNotMatch(cacheDiscoverScript(), /81\.70\.76\.42/);
+  assert.doesNotMatch(cacheDiscoverScript(), /duhongbo/i);
 });
 
 test('Git 忽略实配但保留示例', () => {

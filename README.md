@@ -240,7 +240,7 @@ npm run dev
 
 ## 大陆站一键发布
 
-只发布到大陆站 `124.221.56.38`。脚本会拒绝 `81.70.76.42` 和个人站目录。详细步骤、三种模式和回滚要点见 [`docs/cn-one-click-deploy.md`](docs/cn-one-click-deploy.md)。
+只发布到大陆站 `124.221.56.38`。脚本会拒绝 `81.70.76.42` 和个人站目录。静态发布会给入口文档加短缓存、给带哈希的 `/assets/` 加长缓存，更新后普通刷新即可看到新页面。详细步骤、缓存验收和回滚要点见 [`docs/cn-one-click-deploy.md`](docs/cn-one-click-deploy.md)。
 
 在 YuePC 或 MSI 上：
 

@@ -1,6 +1,7 @@
 import net from 'node:net';
 import { ALLOWED_HOST, DeployError } from './assert-host.mjs';
 import { bashQuote } from './bash.mjs';
+import { assertAssetCacheControl, assertHtmlCacheControl, normalizeAssetPath } from './nginx-cache.mjs';
 
 export function shanghaiDate(now = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
@@ -129,12 +130,47 @@ export function tcpClosed(host, port, timeoutMs = 5000) {
 async function fetchText(url) {
   let response;
   try {
-    response = await fetch(url, { signal: AbortSignal.timeout(20000), redirect: 'follow' });
+    response = await fetch(url, {
+      signal: AbortSignal.timeout(20000),
+      redirect: 'follow',
+      cache: 'no-store',
+    });
   } catch (error) {
     throw new DeployError(`请求 ${url} 失败：${error.message || error}`);
   }
   const text = await response.text();
-  return { status: response.status, text };
+  return {
+    status: response.status,
+    text,
+    cacheControl: response.headers.get('cache-control') || '',
+  };
+}
+
+async function fetchHead(url) {
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch (error) {
+    throw new DeployError(`请求 ${url} 失败：${error.message || error}`);
+  }
+  if (response.status === 405 || response.status === 501) {
+    response = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(20000),
+    });
+    await response.body?.cancel();
+  }
+  return {
+    status: response.status,
+    cacheControl: response.headers.get('cache-control') || '',
+  };
 }
 
 export function describeVerify(cfg, state) {
@@ -146,6 +182,8 @@ export function describeVerify(cfg, state) {
       ? `，并包含 ${state.assetRefs[0]}`
       : '（构建后核对首页里的资源指纹）';
     lines.push(`验收：公网 http://${cfg.host}/ 返回 200${finger}`);
+    lines.push('验收：公网 / 与 /index.html 为 no-cache 或 max-age=0，不得带大于 0 的 max-age');
+    lines.push('验收：公网 /assets/ 指纹文件至少缓存 30 天');
   }
   if (cfg.modes.includes('api') || cfg.modes.includes('db')) {
     lines.push('验收：服务器本机 http://127.0.0.1:8787/health 的 ok 为真');
@@ -191,6 +229,15 @@ export async function runVerify(ctx) {
     if (!home.text.includes(finger)) {
       throw new DeployError(`公网首页没有本次构建的资源 ${finger}`);
     }
+    const indexHead = await fetchHead(`http://${cfg.host}/index.html`);
+    if (indexHead.status !== 200) throw new DeployError(`公网 /index.html 状态码 ${indexHead.status}`);
+    assertHtmlCacheControl(home.cacheControl, '公网 /');
+    assertHtmlCacheControl(indexHead.cacheControl, '公网 /index.html');
+    const assetPath = normalizeAssetPath(finger);
+    const assetHead = await fetchHead(`http://${cfg.host}${assetPath}`);
+    if (assetHead.status !== 200) throw new DeployError(`公网资源 ${assetPath} 状态码 ${assetHead.status}`);
+    assertAssetCacheControl(assetHead.cacheControl, `公网 ${assetPath}`);
+    log('验收：入口为短缓存，指纹资源为长缓存');
   }
 
   if (cfg.modes.includes('api')) {
