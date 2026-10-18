@@ -11,6 +11,7 @@ const out = mkdtempSync(join(tmpdir(), 'alias-tip-'))
 compileWithTypeScript([
   'src/names/teamName.ts',
   'src/names/leagueShort.ts',
+  'src/names/shownName.ts',
   '--outDir', out,
   '--module', 'es2022',
   '--target', 'es2022',
@@ -20,6 +21,7 @@ compileWithTypeScript([
 writeFileSync(join(out, 'package.json'), '{"type":"module"}')
 const teams = await import(pathToFileURL(join(out, 'teamName.js')).href)
 const leagues = await import(pathToFileURL(join(out, 'leagueShort.js')).href)
+const shown = await import(pathToFileURL(join(out, 'shownName.js')).href)
 
 test('队名别名一行一个，不加前缀', () => {
   assert.equal(teams.teamAliasTip('全北现代'), '全北汽车')
@@ -54,6 +56,20 @@ test('赛事别名与队名同一套，一行一个', () => {
     leagues.leagueAliasTip('巴甲', '巴西甲级联赛', ['巴西甲级联赛']),
     '巴西甲\n巴西甲级联赛',
   )
+})
+
+test('赛程与数据表显示同一套常用名', () => {
+  assert.equal(shown.shownLeague('英格兰超级联赛', null), '英超')
+  assert.equal(shown.shownLeague('地方业余联赛', '西班牙甲级联赛'), '西甲')
+  assert.equal(shown.shownLeague('地方业余联赛', null), '地方业余联赛')
+  assert.equal(shown.shownLeague(null, null), null)
+  // 空字符串不是缺省，不回退到来源名，与原先 leagueShort(canonical ?? source) 一致。
+  assert.equal(shown.shownLeague('地方业余联赛', ''), null)
+  assert.equal(shown.shownTeam('全北汽车', null, '韩K联', null), '全北现代')
+  assert.equal(shown.shownTeam('曼彻斯特城', null, '英超', null), '曼彻斯特城')
+  assert.equal(shown.shownTeam('曼彻斯特城', '曼城', '英超', null), '曼城')
+  assert.equal(shown.shownTeam('原始主队', '曼城', '地方业余联赛', '西班牙甲级联赛'), '曼城')
+  assert.equal(shown.shownTeam('阿赫利', null, '沙特联', null), '吉达国民')
 })
 
 test('赛事没有别名时仍显示来源名，不返回空前缀', () => {
