@@ -1,15 +1,17 @@
 /**
  * 赛程页、当日消息预览和比赛详情页的赛事名、队名显示。
- * 优先读 GET /matches 的规范名（扁平字段与嵌套字段同值），再走数据表同一套简称和常用名。
- * 规范名字段缺席时才用来源文本。接口在没有规范名时已把该字段回退成来源文本，页面不再另造名称。
+ * 优先读 GET /matches 的规范名（扁平字段与嵌套字段同值），再经 shownLeague / shownTeam 显示。
+ * 这两个函数与数据表赛事、主队、客队列相同。规范名字段缺席时才用来源文本。
+ * 接口在没有规范名时已把该字段回退成来源文本，页面不再另造名称。
  * 悬停别名赛事走 leagueAliasTip，队名走 teamAliasTip，都是一行一个、不加前缀。
  * 球队待确认走 isTeamPending，优先用接口布尔值。
  * 赛事待确认走 isLeaguePending，优先用 league_pending_confirm。已升格的常用名不标星，临时名继续标星。
  */
 import type { Match } from '../api/types'
-import { leagueAliasTip, leagueShort } from './leagueShort.js'
+import { leagueAliasTip } from './leagueShort.js'
 import { isLeaguePending, leagueCanonicalForPending } from './leaguePending.js'
-import { isTeamPending, teamAliasTip, teamCommon } from './teamName.js'
+import { shownLeague, shownTeam } from './shownName.js'
+import { isTeamPending, teamAliasTip } from './teamName.js'
 
 /** 一支球队在页面上的显示结果。 */
 export interface TeamLabel {
@@ -55,11 +57,13 @@ function preferPending(
 function teamLabel(
   name: string | null | undefined,
   canonical: string | null | undefined,
-  leagueDisplay: string | null,
+  leagueSource: string | null | undefined,
+  leagueCanonical: string | null | undefined,
   apiPending: boolean | null | undefined,
 ): TeamLabel {
+  const leagueDisplay = shownLeague(leagueSource, leagueCanonical)
   return {
-    text: teamCommon(name, canonical, leagueDisplay),
+    text: shownTeam(name, canonical, leagueSource, leagueCanonical),
     tip: teamAliasTip(name, canonical, leagueDisplay),
     pending: isTeamPending(name, canonical, apiPending),
   }
@@ -69,7 +73,7 @@ function teamLabel(
 export function matchLabels(match: Match): MatchLabels {
   const sourceLeague = match.competition?.name
   const leagueCanonical = preferCanonical(match.league_canonical, match.competition?.canonical)
-  const league = leagueShort(leagueCanonical ?? sourceLeague)
+  const league = shownLeague(sourceLeague, leagueCanonical)
   return {
     league,
     leagueTitle: leagueAliasTip(league, sourceLeague, [sourceLeague, leagueCanonical]),
@@ -81,13 +85,15 @@ export function matchLabels(match: Match): MatchLabels {
     home: teamLabel(
       match.teams.home,
       preferCanonical(match.home_team_canonical, match.teams.home_canonical),
-      league,
+      sourceLeague,
+      leagueCanonical,
       preferPending(match.home_team_pending_confirm, match.teams_pending_confirm?.home),
     ),
     away: teamLabel(
       match.teams.away,
       preferCanonical(match.away_team_canonical, match.teams.away_canonical),
-      league,
+      sourceLeague,
+      leagueCanonical,
       preferPending(match.away_team_pending_confirm, match.teams_pending_confirm?.away),
     ),
   }
