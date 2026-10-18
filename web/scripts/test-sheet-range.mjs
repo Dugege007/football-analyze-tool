@@ -1,4 +1,5 @@
-// 数据表快捷日期：北京时间日历日，五个区间含首尾且不超过 31 天。
+// 数据表快捷日期：北京时间日历日。快捷区间含首尾仍不超过 31 日。
+// 查询上限是日历差 31 天（结束日 − 起始日）；超过时结束日收到起始日 + 31 天。
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -98,8 +99,12 @@ test('2024 年到 2028 年每一天的五个快捷区间都不超过 31 天', ()
     for (const preset of M.SHEET_RANGE_PRESETS) {
       const range = M.sheetRangePreset(preset.id, now)
       const days = M.inclusiveCalendarDays(range.from, range.to)
+      const diff = M.calendarDayDiff(range.from, range.to)
       assert.ok(range.from <= range.to, `${preset.id} ${range.from} > ${range.to}`)
-      assert.ok(days >= 1 && days <= M.SHEET_RANGE_MAX_INCLUSIVE_DAYS, `${preset.id} ${range.from}..${range.to} = ${days}`)
+      assert.equal(days, diff + 1)
+      assert.ok(diff >= 0 && diff <= M.SHEET_RANGE_MAX_DAY_DIFF, `${preset.id} ${range.from}..${range.to} 日历差 ${diff}`)
+      // 快捷区间本身仍不超过 31 个含首尾日历日。查询上限更宽：日历差 31 天对应含首尾 32 日。
+      assert.ok(days >= 1 && days <= 31, `${preset.id} ${range.from}..${range.to} = ${days}`)
     }
     const today = M.sheetRangePreset('today', now)
     assert.equal(M.inclusiveCalendarDays(today.from, today.to), 1)
@@ -116,4 +121,21 @@ test('2024 年到 2028 年每一天的五个快捷区间都不超过 31 天', ()
     assert.equal(month.from.slice(0, 7), today.from.slice(0, 7))
     cursor.setUTCDate(cursor.getUTCDate() + 1)
   }
+})
+
+test('日历差恰好 31 天不收短，超过 31 天时结束日改为起始日加 31 天', () => {
+  assert.equal(M.SHEET_RANGE_MAX_DAY_DIFF, 31)
+  assert.equal(M.calendarDayDiff('2026-01-01', '2026-02-01'), 31)
+  assert.equal(M.inclusiveCalendarDays('2026-01-01', '2026-02-01'), 32)
+  assert.deepEqual(M.clampSheetYmdRange('2026-01-01', '2026-02-01'), { from: '2026-01-01', to: '2026-02-01' })
+  assert.equal(M.calendarDayDiff('2026-01-01', '2026-02-02'), 32)
+  assert.deepEqual(M.clampSheetYmdRange('2026-01-01', '2026-02-02'), { from: '2026-01-01', to: '2026-02-01' })
+  assert.deepEqual(M.clampSheetYmdRange('2026-01-01', '2026-12-31'), { from: '2026-01-01', to: '2026-02-01' })
+  assert.deepEqual(M.clampSheetYmdRange('2026-10-01', '2026-10-31'), { from: '2026-10-01', to: '2026-10-31' })
+  assert.deepEqual(M.clampSheetYmdRange('2026-10-16', '2026-10-16'), { from: '2026-10-16', to: '2026-10-16' })
+  assert.deepEqual(M.clampSheetYmdRange('2025-12-15', '2026-03-01'), { from: '2025-12-15', to: '2026-01-15' })
+  assert.deepEqual(M.clampSheetYmdRange('2024-01-31', '2024-04-01'), { from: '2024-01-31', to: '2024-03-02' })
+  assert.deepEqual(M.clampSheetYmdRange('2026-01-31', '2026-04-01'), { from: '2026-01-31', to: '2026-03-03' })
+  assert.equal(M.calendarDayDiff('2024-01-31', '2024-03-02'), 31)
+  assert.equal(M.calendarDayDiff('2026-01-31', '2026-03-03'), 31)
 })

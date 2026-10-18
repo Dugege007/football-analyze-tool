@@ -7,7 +7,7 @@ export const COLUMN_WIDTHS = {
   'base.jcDay': 100, // 竞彩日
   'base.jcNo': 80, // 编号
   'base.kickoff': 100, // 开赛时间
-  'base.league': 90, // 赛事
+  'base.league': 110, // 赛事
   'base.home': 120, // 主队
   'base.away': 120, // 客队
   'base.score': 60, // 比分

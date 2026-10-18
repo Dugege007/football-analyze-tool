@@ -26,7 +26,7 @@ import { HelpTip } from '../components/HelpTip'
 import { renderJingcaiDateCell, useMatchDateMarks } from '../components/useMatchDateMarks'
 import { DEFAULT_STRATEGY } from '../api/strategies'
 import { apiBooks, loadRows, type DataMode } from '../sheet2/load'
-import { SHEET_RANGE_PRESETS, currentInstantMs, matchingSheetRangePresets, sheetRangePreset, type SheetRangePresetId } from '../sheet2/dateRangePresets'
+import { SHEET_RANGE_PRESETS, clampSheetYmdRange, currentInstantMs, matchingSheetRangePresets, sheetRangePreset, type SheetRangePresetId } from '../sheet2/dateRangePresets'
 import { ALL_SHEET_TABS, BOOK_TABS, buildSheetColumns, CMP_MARKET, OVERVIEW_TABS, type SheetTabId } from '../sheet2/tabColumns'
 import { BOOKS, BOOK_NAME, type Book, type Row } from '../sheet2/types'
 import '../sheet2/sheet2.css'
@@ -83,8 +83,12 @@ export default function SheetPage() {
   const [clockMs, setClockMs] = useState(() => Date.now())
   const [range, setRange] = useState<[Dayjs, Dayjs]>(() => {
     // 网址可带 from、to（YYYY-MM-DD）指定日期范围，便于核对和截图。缺省与「近7日」相同，按北京时间取今天往前共 7 天。
+    // 带入的区间日历差超过 31 天时，先把结束日收到起始日加 31 天，首屏请求才不会被接口拒绝。
     const f = sp.get('from'), t = sp.get('to')
-    if (f && t && dayjs(f).isValid() && dayjs(t).isValid()) return [dayjs(f), dayjs(t)]
+    if (f && t && dayjs(f).isValid() && dayjs(t).isValid()) {
+      const clamped = clampSheetYmdRange(dayjs(f).format('YYYY-MM-DD'), dayjs(t).format('YYYY-MM-DD'))
+      return [dayjs(clamped.from), dayjs(clamped.to)]
+    }
     const last7 = sheetRangePreset('last7', Date.now())
     return [dayjs(last7.from), dayjs(last7.to)]
   })
@@ -153,8 +157,10 @@ export default function SheetPage() {
   // 数据表只看竞彩场，不跟赛程页的范围切换。
   const matchDates = useMatchDateMarks('jingcai')
   // 手动选的范围和快捷按钮都只改这一处，加载效果跟着 range 走。
+  // 确认后的日历差超过 31 天时，结束日改为起始日加 31 天，起始日不动。
   const applyRange = (nextFrom: Dayjs, nextTo: Dayjs) => {
-    setRange([nextFrom, nextTo])
+    const clamped = clampSheetYmdRange(nextFrom.format('YYYY-MM-DD'), nextTo.format('YYYY-MM-DD'))
+    setRange([dayjs(clamped.from), dayjs(clamped.to)])
   }
   const applyPreset = (id: SheetRangePresetId) => {
     const at = currentInstantMs()
