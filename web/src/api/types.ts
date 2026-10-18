@@ -12,16 +12,30 @@ export interface Match {
   scope: 'jingcai' | 'extra'
   jc: JcInfo | null
   competition?: {
+    /** 来源文本，matches.competition_name，不改写。 */
     name?: string
+    /**
+     * 赛事规范名，与顶层 league_canonical 同值。
+     * 缺编号或缺规范名时，接口回退为 name。
+     */
+    canonical?: string | null
     type?: string
     stage?: string
-    /** 常用名尚未升格时为 true。league_id 为空或已填都不单独决定。 */
+    /** 常用名尚未升格时为 true。与顶层 league_pending_confirm 同值。 */
     league_pending_confirm?: boolean | null
   }
   kickoff_hour?: number
   kickoff_at?: string | null
   kickoff_minute_known?: boolean
-  teams: { home: string; away: string }
+  teams: {
+    /** 来源文本，不改写。 */
+    home: string
+    away: string
+    /** 主队规范名，与 home_team_canonical 同值。缺编号或缺规范名时回退 home。 */
+    home_canonical?: string | null
+    /** 客队规范名，与 away_team_canonical 同值。缺编号或缺规范名时回退 away。 */
+    away_canonical?: string | null
+  }
   /**
    * 主队、客队是否还认不出来。
    * 列表和详情接口都会返回；为 true 时队名旁显示待确认星号。
@@ -36,10 +50,19 @@ export interface Match {
    */
   league_pending_confirm?: boolean | null
   /**
-   * 赛事规范名。列表和详情目前通常不返回。
-   * 一旦返回，空值表示尚未映射，待确认判断不再改用赛事编号。
+   * 赛事规范名，与 competition.canonical 同值。
+   * 缺编号或缺规范名时，接口回退为来源赛事名。
+   * 字段缺席（旧响应）时，空值与未返回等价，待确认判断才改用赛事编号是否存在。
    */
   league_canonical?: string | null
+  /** 主队规范名，与 teams.home_canonical 同值。缺编号或缺规范名时回退来源队名。 */
+  home_team_canonical?: string | null
+  /** 客队规范名，与 teams.away_canonical 同值。缺编号或缺规范名时回退来源队名。 */
+  away_team_canonical?: string | null
+  /** 与 teams_pending_confirm.home 同值。为 true 时主队旁显示待确认星号。 */
+  home_team_pending_confirm?: boolean | null
+  /** 与 teams_pending_confirm.away 同值。为 true 时客队旁显示待确认星号。 */
+  away_team_pending_confirm?: boolean | null
   /**
    * 赛事编号。列表和详情已经返回。
    * 编号不是常用名升格。league_pending_confirm 缺席时，仍要看来源名或规范名是否已经升格。
