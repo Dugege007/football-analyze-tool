@@ -4,9 +4,10 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import sys
 import unicodedata
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 
 def match_uid(match: dict) -> str:
@@ -160,6 +161,249 @@ def _lookup_league_id(conn: sqlite3.Connection, key: str) -> int | None:
     return None
 
 
+# 单个竞彩日里，有名称但 home_team_id / away_team_id / league_id 为空的槽位占比超过该值即告警。
+# 查询正文见 docs/schema/v2_0_entity_id_null_rate.sql。
+NULL_ENTITY_ID_RATE_ALERT = 0.05
+
+_ENTITY_SLOTS = (
+    ("home_team", "home_team_id", "team"),
+    ("away_team", "away_team_id", "team"),
+    ("competition_name", "league_id", "competition"),
+)
+
+
+class EntityIdGateError(RuntimeError):
+    """一批写入会留下成片空身份编号，或导入批次号全空。"""
+
+
+def lookup_entity_id(conn: sqlite3.Connection, kind: str, name: str | None) -> int | None:
+    """只查不建。kind 为 team 或 competition。
+
+    先按规范化名、再按原文查别名表和规范名。不插入别名，不新建球队或赛事。
+    """
+    if kind not in ("team", "competition"):
+        raise ValueError("kind 只能是 team 或 competition")
+    norm = normalize_name(name)
+    if not norm:
+        return None
+    table = "teams" if kind == "team" else "leagues"
+    alias_table = "team_aliases" if kind == "team" else "league_aliases"
+    if not _has_table(conn, table) or not _has_table(conn, alias_table):
+        return None
+    raw = (str(name).strip() if name is not None else "") or None
+    lookup = _lookup_team_id if kind == "team" else _lookup_league_id
+    for key in dict.fromkeys([norm, raw] if raw and raw != norm else [norm]):
+        found = lookup(conn, key)
+        if found is not None:
+            return found
+    return None
+
+
+def _as_mapping(row: Any) -> dict:
+    if isinstance(row, dict):
+        return row
+    if isinstance(row, sqlite3.Row):
+        return {key: row[key] for key in row.keys()}
+    raise TypeError("实体编号门禁需要 dict 或 sqlite3.Row")
+
+
+def assess_entity_id_batch(rows: list[Any]) -> dict:
+    """按竞彩日统计有名称但身份编号为空的槽位。"""
+    by_date: dict[str, dict[str, float | int]] = {}
+    named = nulls = 0
+    batch_ids: list[Any] = []
+    for raw in rows:
+        row = _as_mapping(raw)
+        date = row.get("jingcai_date") or ""
+        bucket = by_date.setdefault(date, {"named_slots": 0, "null_slots": 0, "rate": 0.0})
+        for name_col, id_col, _kind in _ENTITY_SLOTS:
+            if not normalize_name(row.get(name_col)):
+                continue
+            bucket["named_slots"] = int(bucket["named_slots"]) + 1
+            named += 1
+            if row.get(id_col) is None:
+                bucket["null_slots"] = int(bucket["null_slots"]) + 1
+                nulls += 1
+        batch_ids.append(row.get("import_batch_id"))
+    for bucket in by_date.values():
+        slots = int(bucket["named_slots"])
+        bucket["rate"] = (int(bucket["null_slots"]) / slots) if slots else 0.0
+    return {
+        "by_date": by_date,
+        "named_slots": named,
+        "null_slots": nulls,
+        "rate": (nulls / named) if named else 0.0,
+        "all_import_batch_id_null": bool(rows) and all(value is None for value in batch_ids),
+        "rows": len(rows),
+    }
+
+
+def enforce_entity_id_gate(
+    rows: list[Any],
+    *,
+    label: str,
+    require_import_batch_id: bool = False,
+    fail_on_mass_null: bool = False,
+    stream: TextIO | None = None,
+) -> dict:
+    """空编号占比超过 5% 时向 stderr 告警。
+
+    导入批次若 import_batch_id 全空，或有名称的槽位全部为空，则拒绝静默提交。
+    竞彩场次构建对尚未进入别名表的名称只告警：场次行仍要留下，未匹配清单本来就允许空编号。
+    """
+    out = stream or sys.stderr
+    stats = assess_entity_id_batch(rows)
+    alerts: list[str] = []
+    for date, info in stats["by_date"].items():
+        if int(info["named_slots"]) and float(info["rate"]) > NULL_ENTITY_ID_RATE_ALERT:
+            shown = date or "（无日期）"
+            msg = (
+                f"WARN entity-id: {label} 竞彩日 {shown} "
+                f"有名称但身份编号为空 {int(info['null_slots'])}/{int(info['named_slots'])} "
+                f"（{float(info['rate']):.1%}），超过 {NULL_ENTITY_ID_RATE_ALERT:.0%}。"
+                "规范名会缺。回填脚本：api/scripts/backfill_match_entity_ids.py。"
+            )
+            print(msg, file=out)
+            alerts.append(msg)
+    if require_import_batch_id and rows and stats["all_import_batch_id_null"]:
+        raise EntityIdGateError(
+            f"REFUSE: {label} 本批 {len(rows)} 场 matches.import_batch_id 全为空，拒绝静默写入。"
+        )
+    if (
+        fail_on_mass_null
+        and int(stats["named_slots"]) >= 3
+        and int(stats["null_slots"]) == int(stats["named_slots"])
+    ):
+        raise EntityIdGateError(
+            f"REFUSE: {label} 本批有名称的身份槽全部为空"
+            f"（{int(stats['null_slots'])}/{int(stats['named_slots'])}），"
+            "拒绝静默写入空的 home_team_id/away_team_id/league_id。"
+        )
+    stats["alerts"] = alerts
+    return stats
+
+
+def _slot_value(row: Any, key: str, index: int) -> Any:
+    if isinstance(row, dict):
+        return row.get(key)
+    try:
+        return row[key]
+    except (IndexError, KeyError, TypeError):
+        return row[index]
+
+
+def fill_null_entity_ids(
+    conn: sqlite3.Connection,
+    match_id: int,
+    *,
+    home_team: str | None,
+    away_team: str | None,
+    competition_name: str | None,
+    jingcai_date: str | None = None,
+    label: str = "ingest",
+    fail_on_mass_null: bool = False,
+    require_import_batch_id: bool = False,
+) -> dict:
+    """写入前的身份解析：create=False，只填仍为空的槽，然后做空编号门禁。"""
+    names = {
+        "home_team": home_team,
+        "away_team": away_team,
+        "competition_name": competition_name,
+    }
+    if not _has_column(conn, "matches", "home_team_id"):
+        msg = (
+            f"WARN entity-id: {label} matches 缺少 home_team_id/away_team_id/league_id，"
+            "本批无法写入身份编号。"
+        )
+        print(msg, file=sys.stderr)
+        return {"alerts": [msg], "skipped": "no_columns"}
+    current = conn.execute(
+        "SELECT home_team_id, away_team_id, league_id FROM matches WHERE id = ?",
+        (match_id,),
+    ).fetchone()
+    if current is None:
+        raise EntityIdGateError(f"REFUSE: {label} 找不到 matches.id={match_id}，无法做身份编号门禁。")
+    resolved: dict[str, int | None] = {}
+    for index, (name_col, id_col, kind) in enumerate(_ENTITY_SLOTS):
+        existing = _slot_value(current, id_col, index)
+        if existing is not None:
+            resolved[id_col] = int(existing)
+            continue
+        found = lookup_entity_id(conn, kind, names[name_col])
+        resolved[id_col] = found
+        if found is None:
+            continue
+        sql = f"UPDATE matches SET {id_col} = ?"
+        if _has_column(conn, "matches", "updated_at"):
+            sql += ", updated_at = datetime('now')"
+        sql += f" WHERE id = ? AND {id_col} IS NULL"
+        conn.execute(sql, (found, match_id))
+    gate_row = {
+        **names,
+        **resolved,
+        "jingcai_date": jingcai_date,
+        "import_batch_id": None,
+    }
+    return enforce_entity_id_gate(
+        [gate_row],
+        label=label,
+        require_import_batch_id=require_import_batch_id,
+        fail_on_mass_null=fail_on_mass_null,
+    )
+
+
+def assert_batch_entity_ids(
+    conn: sqlite3.Connection,
+    batch_id: int,
+    expected_rows: int,
+    *,
+    label: str,
+) -> dict:
+    """月度导入和演示种子写完一批后调用：批次号全空或身份编号全空则拒绝提交。"""
+    if expected_rows <= 0:
+        return {"rows": 0, "alerts": [], "named_slots": 0, "null_slots": 0, "rate": 0.0}
+    if not _has_column(conn, "matches", "import_batch_id"):
+        raise EntityIdGateError(
+            f"REFUSE: {label} matches 没有 import_batch_id，无法确认本批已挂上批次。"
+        )
+    if not _has_column(conn, "matches", "home_team_id"):
+        raise EntityIdGateError(
+            f"REFUSE: {label} matches 没有身份编号列，拒绝整批空编号入库。"
+        )
+    rows = conn.execute(
+        """
+        SELECT jingcai_date, home_team, away_team, competition_name,
+               home_team_id, away_team_id, league_id, import_batch_id
+        FROM matches
+        WHERE import_batch_id = ?
+        """,
+        (batch_id,),
+    ).fetchall()
+    if not rows:
+        raise EntityIdGateError(
+            f"REFUSE: {label} 计划写入 {expected_rows} 场，"
+            f"但没有任何比赛挂上 import_batch_id={batch_id}。"
+            "这表示本批 import_batch_id 全为空，拒绝静默提交。"
+        )
+    if len(rows) < expected_rows:
+        msg = (
+            f"WARN entity-id: {label} 计划写入 {expected_rows} 场，"
+            f"挂上批次 {batch_id} 的只有 {len(rows)} 场。"
+        )
+        print(msg, file=sys.stderr)
+    else:
+        msg = ""
+    stats = enforce_entity_id_gate(
+        rows,
+        label=label,
+        require_import_batch_id=True,
+        fail_on_mass_null=True,
+    )
+    if msg:
+        stats["alerts"] = [msg, *stats["alerts"]]
+    return stats
+
+
 def resolve_or_create_team(
     conn: sqlite3.Connection,
     name: str | None,
@@ -174,23 +418,22 @@ def resolve_or_create_team(
     norm = normalize_name(name)
     if not norm:
         return None
-    for key in dict.fromkeys([norm, raw] if raw and raw != norm else [norm]):
-        tid = _lookup_team_id(conn, key)
-        if tid is not None:
-            # 确保规范名也有 alias
-            try:
+    tid = lookup_entity_id(conn, "team", name)
+    if tid is not None:
+        # 确保规范名也有 alias
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO team_aliases (alias, team_id, source) VALUES (?, ?, ?)",
+                (norm, tid, source),
+            )
+            if raw and raw != norm:
                 conn.execute(
                     "INSERT OR IGNORE INTO team_aliases (alias, team_id, source) VALUES (?, ?, ?)",
-                    (norm, tid, source),
+                    (raw, tid, source),
                 )
-                if raw and raw != norm:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO team_aliases (alias, team_id, source) VALUES (?, ?, ?)",
-                        (raw, tid, source),
-                    )
-            except sqlite3.IntegrityError:
-                pass
-            return tid
+        except sqlite3.IntegrityError:
+            pass
+        return tid
     if not create:
         return None
     try:
@@ -232,22 +475,21 @@ def resolve_or_create_league(
     norm = normalize_name(name)
     if not norm:
         return None
-    for key in dict.fromkeys([norm, raw] if raw and raw != norm else [norm]):
-        lid = _lookup_league_id(conn, key)
-        if lid is not None:
-            try:
+    lid = lookup_entity_id(conn, "competition", name)
+    if lid is not None:
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO league_aliases (alias, league_id, source) VALUES (?, ?, ?)",
+                (norm, lid, source),
+            )
+            if raw and raw != norm:
                 conn.execute(
                     "INSERT OR IGNORE INTO league_aliases (alias, league_id, source) VALUES (?, ?, ?)",
-                    (norm, lid, source),
+                    (raw, lid, source),
                 )
-                if raw and raw != norm:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO league_aliases (alias, league_id, source) VALUES (?, ?, ?)",
-                        (raw, lid, source),
-                    )
-            except sqlite3.IntegrityError:
-                pass
-            return lid
+        except sqlite3.IntegrityError:
+            pass
+        return lid
     if not create:
         return None
     try:
@@ -394,7 +636,8 @@ def insert_match(conn: sqlite3.Connection, item: dict, batch_id: int, *, write_p
     row = conn.execute("SELECT id FROM matches WHERE match_uid = ?", (uid,)).fetchone()
     match_id = int(row["id"])
     sync_kickoff_at(conn, match_id, match)
-    # v1.2：解析/创建队与联赛 id（软失败，不解则 NULL）
+    # 身份编号至少做 create=False 查找。月度导入仍用 create=True（查不到才新建），
+    # 避免整批名称都解不出时静默留下空编号。批次级门禁在 import_monthly_json / seed。
     sync_match_entity_ids(
         conn,
         match_id,

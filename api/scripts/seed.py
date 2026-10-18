@@ -45,7 +45,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app.db import DB_PATH, SCHEMA_PATH, apply_schema, connect  # noqa: E402
-from import_lib import insert_match, match_uid  # noqa: E402
+from import_lib import EntityIdGateError, assert_batch_entity_ids, insert_match, match_uid  # noqa: E402
 
 SAMPLE_PATH = Path(str(_REPO_ROOT / "docs/backfill-schema/json-v2-sample.json"))
 
@@ -73,6 +73,10 @@ def main() -> None:
             uid = match_uid(item["match"])
             mid = insert_match(conn, item, batch_id, write_prediction=True)
             print(f"imported match_id={mid} uid={uid}")
+        try:
+            assert_batch_entity_ids(conn, batch_id, len(sample), label="seed")
+        except EntityIdGateError as exc:
+            raise SystemExit(str(exc)) from exc
         conn.commit()
         print(f"DB ready: {DB_PATH}")
     finally:

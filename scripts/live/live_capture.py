@@ -1324,6 +1324,16 @@ def create_stub_match(conn, db: Path, D: str, r: dict, rep: dict):
         (m["match_uid"], "jingcai", D, code[:1], k.hour, code, int(code[1:]) if code[1:].isdigit() else None,
          m["league"], m["home"], m["away"], iso(k)))
     mid = conn.execute("SELECT id FROM matches WHERE match_uid=?", (m["match_uid"],)).fetchone()[0]
+    from import_lib import fill_null_entity_ids
+    fill_null_entity_ids(
+        conn,
+        int(mid),
+        home_team=m.get("home"),
+        away_team=m.get("away"),
+        competition_name=m.get("league"),
+        jingcai_date=D,
+        label="live_capture.create_stub_match",
+    )
     conn.execute("INSERT INTO match_meta (match_id, source_file, extras_json) VALUES (?,?,?)",
                  (mid, "live_capture", json.dumps({"source": "5df_live_capture_stub", "fixture_id": m["fixture_id"],
                                                    "kickoff_source": "5df", "jc_number": m["jc_number"],
