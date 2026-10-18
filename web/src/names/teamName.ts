@@ -1,3 +1,5 @@
+import { formatAliasLines } from './aliasTip.js'
+
 /**
  * Team display names for the 主队 and 客队 columns, following the naming standard 分析师 set on 2026-10-14.
  *
@@ -180,15 +182,22 @@ export function teamCommon(name: string | null | undefined, canonical?: string |
   return scopedTeam(base, leagueDisplay) ?? TEAM_DISPLAY[base] ?? base
 }
 
-/** Returns the hover text with the source name and the other recorded names, or undefined when there are none. */
+/**
+ * 队名悬停文案。收录常用名以外的已记录名称、来源名和规范名。
+ * 每条名称单独一行，不加前缀。没有别名时返回 undefined。
+ */
 export function teamAliasTip(name: string | null | undefined, canonical?: string | null, leagueDisplay?: string | null): string | undefined {
   const shown = teamCommon(name, canonical, leagueDisplay)
   if (!shown) return undefined
   const others = new Set<string>(TEAM_OTHER_NAMES[shown] ?? [])
-  if (name) others.add(name)
-  if (canonical) others.add(canonical)
+  const add = (value: string | null | undefined) => {
+    const text = value?.trim()
+    if (text && text !== shown) others.add(text)
+  }
+  add(name)
+  add(canonical)
   others.delete(shown)
-  return others.size ? `其他名称：${[...others].join('、')}` : undefined
+  return formatAliasLines(others)
 }
 
 /**

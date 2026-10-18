@@ -1,11 +1,12 @@
 /**
  * 赛程页、当日消息预览和比赛详情页的赛事名、队名显示。
- * 计算规则与数据表相同：赛事走 leagueShort，队名走 teamCommon，悬停走 teamAliasTip。
+ * 计算规则与数据表相同：赛事走 leagueShort，队名走 teamCommon。
+ * 悬停别名赛事走 leagueAliasTip，队名走 teamAliasTip，都是一行一个、不加前缀。
  * 球队待确认走 isTeamPending，优先用 teams_pending_confirm。
  * 赛事待确认走 isLeaguePending，优先用 league_pending_confirm。已升格的常用名不标星，临时名继续标星。
  */
 import type { Match } from '../api/types'
-import { leagueShort } from './leagueShort'
+import { leagueAliasTip, leagueShort } from './leagueShort'
 import { isLeaguePending, leagueCanonicalForPending } from './leaguePending'
 import { isTeamPending, teamAliasTip, teamCommon } from './teamName'
 
@@ -13,7 +14,7 @@ import { isTeamPending, teamAliasTip, teamCommon } from './teamName'
 export interface TeamLabel {
   /** 页面上显示的常用中文名。没有队名时为 null，由调用方显示占位符。 */
   text: string | null
-  /** 悬停时列出的其他名称。没有别名时为 undefined，不设置 title。 */
+  /** 悬停时列出的别名，一行一个。没有别名时为 undefined，不设置 Tooltip。 */
   tip: string | undefined
   /** 为 true 时在队名旁显示待确认星号。 */
   pending: boolean
@@ -23,7 +24,7 @@ export interface TeamLabel {
 export interface MatchLabels {
   /** 赛事简称。没有赛事名时为 null。 */
   league: string | null
-  /** 悬停时显示的赛事来源名，与数据表赛事列的 title 相同。 */
+  /** 悬停时列出的赛事别名，一行一个。没有别名时为来源名。与数据表赛事列相同。 */
   leagueTitle: string | undefined
   /** 为 true 时在赛事名旁显示待确认星号。 */
   leaguePending: boolean
@@ -49,7 +50,7 @@ export function matchLabels(match: Match): MatchLabels {
   const league = leagueShort(sourceLeague)
   return {
     league,
-    leagueTitle: sourceLeague || undefined,
+    leagueTitle: leagueAliasTip(league, sourceLeague, [sourceLeague, match.league_canonical]),
     leaguePending: isLeaguePending(
       sourceLeague,
       leagueCanonicalForPending(match.league_canonical, match.league_id),
