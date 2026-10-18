@@ -41,7 +41,7 @@
 
 提议别名表里没有升格标记的行，只是归并建议：只把尚不在常用名里的名称标星，不得把包内或正式库已经升格的常用名重新打成待确认。
 
-当前包内 `api/resources/name-standard/teams.csv` 与 `competitions.csv` 里，除明确标成临时名的行以外，记为 `legacy_high_confidence`。这批名称来自 2026-10-14 已采纳的高置信写法，不是雷速体育的新抓取。以后用雷速体育确认过的写法覆盖时，把对应行改成 `leisutiyu`。
+当前包内 `api/resources/name-standard/teams.csv` 与 `competitions.csv` 里，除明确标成临时名的行，以及已经按雷速常用名改写的行以外，记为 `legacy_high_confidence`。这批名称来自 2026-10-14 已采纳的高置信写法，不是雷速体育的新抓取。以后用雷速体育确认过的写法覆盖时，把对应行改成 `leisutiyu`。赛事显示以雷速常用名为准。巴西甲级联赛的页面显示名是「巴西甲」，「巴甲」仅作别名。
 
 ## 赛程列表上的规范名
 

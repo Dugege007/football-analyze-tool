@@ -94,6 +94,18 @@ test('扁平字段缺席时，嵌套规范名和待确认与扁平同值', () =>
   assert.equal(labels.away.pending, true)
 })
 
+test('巴西甲按雷速常用名显示，巴甲只出现在悬停别名里', () => {
+  const labels = matchLabels(match({
+    competition: { name: '巴西甲级联赛' },
+    league_canonical: '巴西甲',
+    league_pending_confirm: false,
+    teams: { home: '弗鲁米嫩塞', away: '圣保罗' },
+  }))
+  assert.equal(labels.league, '巴西甲')
+  assert.equal(labels.leagueTitle, '巴甲\n巴西甲级联赛')
+  assert.equal(labels.leaguePending, false)
+})
+
 test('规范名字段缺席时仍按数据表简称显示来源文本，编号不能单独取消星号', () => {
   const labels = matchLabels(match({
     competition: { name: '英格兰超级联赛' },
