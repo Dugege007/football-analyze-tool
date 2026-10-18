@@ -282,12 +282,9 @@ interface TripleSpec {
 /** Chinese names of the alert levels for the hover text. */
 const ALERT_NAME: Record<string, string> = { high: '高', medium: '中', light: '轻' }
 
-/** Hover text for cells with a null alert and a null or 0 sample count (wording from the backend change, 2026-10-14). */
-const NO_ALERT_TEXT = '盘口或抓取时刻缺失的格子不计算预警。'
-
-/** Hover text for the sample size behind an alert, written as a complete sentence. */
-function sampleText(n: number): string {
-  return n === 0 ? NO_ALERT_TEXT : `样本数：${n}。`
+/** 样本数为正时返回「样本数：N。」；为 0 时不返回提示。 */
+function sampleText(n: number): string | null {
+  return n > 0 ? `样本数：${n}。` : null
 }
 
 /** 一个阶段一组三列（主水 / 盘口 / 客水 等）；格子没有数据时左列跨三列显示状态文字。 */
@@ -314,10 +311,10 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
       const st = statusOf(cell as { cell_status?: CellStatus })
       if (!cell || st !== 'ok') {
         if (i !== 0) return null
-        // A cell without data still shows its sample size, for example 0 when there is no capture time.
+        // 空格子只在样本数为正时附上样本数；为 0 或缺失时不再附加说明。
         const emptyN = t.subs.some((x) => x.alert) ? ((cell as { alert_sample_n?: number | null } | undefined)?.alert_sample_n ?? null) : null
         const oddsReason = oddsCellReason(cell)
-        const stxTip = <StatusText st={st} reason={oddsReason.reason} reasonZh={oddsReason.reasonZh} extra={t.subs.some((x) => x.alert) ? (emptyN ? sampleText(emptyN) : NO_ALERT_TEXT) : null} />
+        const stxTip = <StatusText st={st} reason={oddsReason.reason} reasonZh={oddsReason.reasonZh} extra={t.subs.some((x) => x.alert) && emptyN ? sampleText(emptyN) : null} />
         return t.avg && cell?.avg_detail ? <AvgTip d={cell.avg_detail as AvgDetail} market={t.avg} phase={t.phase}>{stxTip}</AvgTip> : stxTip
       }
       const v = cell[sub.field] as number | null
@@ -327,7 +324,7 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
       // On alert cells, hovering shows the alert level and the sample size when the backend provides them.
       const sampleN = sub.alert ? ((cell as { alert_sample_n?: number | null }).alert_sample_n ?? null) : null
       const alertLv = sub.alert ? ((cell as { alert?: string | null }).alert ?? null) : null
-      const tipParts = [alertLv && t.phase !== 'open' ? `预警等级：${ALERT_NAME[alertLv] ?? alertLv}。` : null, sub.alert && !alertLv && !sampleN && ((cell as { line?: number | null }).line == null || !(cell as { recorded_at?: string | null }).recorded_at) ? NO_ALERT_TEXT : sampleN == null ? null : sampleText(sampleN)].filter(Boolean)
+      const tipParts = [alertLv && t.phase !== 'open' ? `预警等级：${ALERT_NAME[alertLv] ?? alertLv}。` : null, sampleN == null ? null : sampleText(sampleN)].filter(Boolean)
       const bodyTip = tipParts.length ? <Tooltip title={tipParts.join('')}><span className="alert-sample-tip">{body}</span></Tooltip> : body
       return t.avg ? <AvgTip d={cell.avg_detail as AvgDetail | null | undefined} market={t.avg} phase={t.phase}>{bodyTip}</AvgTip> : bodyTip
     },
