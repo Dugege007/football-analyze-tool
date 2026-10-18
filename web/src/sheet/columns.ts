@@ -5,7 +5,9 @@
  *            pred.* / res.* / 基本列用字段名。
  */
 import type { ColDef, ColGroupDef, TooltipCallbackParams, ValueFormatterParams } from 'ag-grid-community'
+import { createElement } from 'react'
 import dayjs from 'dayjs'
+import { DisplayLeague, DisplayTeam } from '../components/DisplayName'
 import type { AhBook, OpenInfo, Phase, SheetRow, ViewId } from './types'
 import { AH_BOOKS, BOOK_LABEL, EXCEPTION_DESC, PARALLEL_BOOK_LABEL, PHASE_HINT, PHASE_LABEL, SETTLE_LABEL, isCollectorEmpty } from './types'
 import { formatHandicapCn, formatHandicapLine, formatMove, lineMove } from './handicap'
@@ -895,7 +897,24 @@ export function buildColumnDefs({ view, presence: pr, books, showReal }: BuildOp
         sort: 'asc',
         sortIndex: 1,
       },
-      { colId: 'league', field: 'league', headerName: '联赛', width: 92, pinned: 'left', filter: 'agTextColumnFilter' },
+      {
+        colId: 'league',
+        field: 'league',
+        headerName: '联赛',
+        width: 92,
+        pinned: 'left',
+        filter: 'agTextColumnFilter',
+        cellRenderer: (p: { data?: SheetRow }) => {
+          const row = p.data
+          if (!row) return null
+          return createElement(DisplayLeague, {
+            name: row.league === '—' ? null : row.league,
+            title: row.leagueAliasTip,
+            pending: row.leaguePending,
+            empty: '—',
+          })
+        },
+      },
       {
         colId: 'home',
         field: 'home',
@@ -907,12 +926,24 @@ export function buildColumnDefs({ view, presence: pr, books, showReal }: BuildOp
           const name = (p.value as string) ?? '—'
           return p.data?.manualReview ? `${name} · 人工复核中` : name
         },
+        cellRenderer: (p: { data?: SheetRow; value?: unknown }) => {
+          const row = p.data
+          if (!row) return null
+          return createElement(
+            'span',
+            null,
+            createElement(DisplayTeam, {
+              label: { text: row.home === '—' ? null : row.home, tip: row.homeAliasTip, pending: row.homePending },
+              empty: '—',
+            }),
+            row.manualReview ? ' · 人工复核中' : null,
+          )
+        },
         cellClassRules: { 'hl-manual-review': (p) => p.data?.manualReview === true },
         tooltip: (p: TooltipCallbackParams<SheetRow>) => {
-          const r = p.data
-          if (!r) return null
-          if (!r.manualReview) return `${r.home} vs ${r.away}`
-          return `${r.home} vs ${r.away}；人工复核中，赛果与结算暂不显示${r.manualReviewReason ? `（后端原因：${r.manualReviewReason}）` : ''}`
+          const row = p.data
+          if (!row?.manualReview) return null
+          return `人工复核中，赛果与结算暂不显示${row.manualReviewReason ? `（后端原因：${row.manualReviewReason}）` : ''}`
         },
       },
       {
@@ -922,13 +953,15 @@ export function buildColumnDefs({ view, presence: pr, books, showReal }: BuildOp
         width: 100,
         pinned: 'left',
         filter: 'agTextColumnFilter',
-        valueFormatter: (p) => (p.value as string) ?? '—',
-        cellClassRules: { 'hl-manual-review': (p) => p.data?.manualReview === true },
-        tooltip: (p: TooltipCallbackParams<SheetRow>) => {
-          const r = p.data
-          if (!r) return null
-          return `${r.home} vs ${r.away}`
+        cellRenderer: (p: { data?: SheetRow }) => {
+          const row = p.data
+          if (!row) return null
+          return createElement(DisplayTeam, {
+            label: { text: row.away === '—' ? null : row.away, tip: row.awayAliasTip, pending: row.awayPending },
+            empty: '—',
+          })
         },
+        cellClassRules: { 'hl-manual-review': (p) => p.data?.manualReview === true },
       },
     ],
   })

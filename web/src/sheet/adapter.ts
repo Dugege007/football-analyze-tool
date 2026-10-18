@@ -8,6 +8,7 @@
 import { apiBase, metaDb, metaMismatch, type DbMeta } from '../api/dataSource'
 import dayjs from 'dayjs'
 import type { Direction } from '../api/types'
+import { labelsForTableMatch } from '../names/matchLabels'
 import { parseHandicap } from './handicap'
 import type {
   AhBook,
@@ -311,6 +312,52 @@ function kickoffNote(k: KickoffNoteInput): string | null {
   return lines.length ? lines.join('；') : null
 }
 
+function optionalBool(value: boolean | null | undefined): boolean | null | undefined {
+  return typeof value === 'boolean' ? value : value ?? undefined
+}
+
+/**
+ * 数据表上的赛事名和主客队名。
+ * 有规范名时显示规范名，没有规范名时显示来源文本。星号使用接口的待确认布尔值。
+ */
+function sheetNames(m: {
+  league?: string | null
+  league_canonical?: string | null
+  league_pending_confirm?: boolean | null
+  home?: string | null
+  away?: string | null
+  home_team_canonical?: string | null
+  away_team_canonical?: string | null
+  home_team_pending_confirm?: boolean | null
+  away_team_pending_confirm?: boolean | null
+}) {
+  const labels = labelsForTableMatch({
+    league: m.league,
+    league_canonical: m.league_canonical,
+    league_pending_confirm: optionalBool(m.league_pending_confirm),
+    home_team: m.home,
+    away_team: m.away,
+    home_team_canonical: m.home_team_canonical,
+    away_team_canonical: m.away_team_canonical,
+    home_team_pending_confirm: optionalBool(m.home_team_pending_confirm),
+    away_team_pending_confirm: optionalBool(m.away_team_pending_confirm),
+  })
+  const home = labels.home.text ?? '—'
+  const away = labels.away.text ?? '—'
+  return {
+    league: labels.league ?? '—',
+    leaguePending: labels.leaguePending,
+    leagueAliasTip: labels.leagueTitle,
+    home,
+    homePending: labels.home.pending,
+    homeAliasTip: labels.home.tip,
+    away,
+    awayPending: labels.away.pending,
+    awayAliasTip: labels.away.tip,
+    matchup: `${home} vs ${away}`,
+  }
+}
+
 function kickoffLabel(kickoffAt: string | null | undefined, hour: number | null | undefined): string {
   if (kickoffAt && /T\d{2}:\d{2}/.test(kickoffAt)) {
     const d = dayjs(kickoffAt)
@@ -402,7 +449,7 @@ export function normalizeTableRow(api: ApiTableRow, asOf: string | null = null):
     date: m.date,
     scope: m.scope,
     jcNo: m.jc_no ?? '—',
-    league: m.league ?? '—',
+    ...sheetNames(m),
     // 推迟场显示实际开赛（kickoff_actual；后端 kickoff_at 也是实际开赛）
     kickoffAt: (m.postponed ? m.kickoff_actual : null) ?? m.kickoff_at ?? null,
     kickoffLabel: kickoffLabel((m.postponed ? m.kickoff_actual : null) ?? m.kickoff_at, m.kickoff_hour),
@@ -436,9 +483,6 @@ export function normalizeTableRow(api: ApiTableRow, asOf: string | null = null):
     manualReviewReason: m.manual_review_reason ?? null,
     settlementHiddenReason: api.settlement_hidden_reason ?? null,
     ledgerNote: api.prediction?.ledger_note ?? null,
-    home: m.home,
-    away: m.away,
-    matchup: `${m.home} vs ${m.away}`,
     ah,
     ahMacau5df,
     phaseException: !!api.phase_exception,
@@ -748,6 +792,8 @@ export function fromBackendRow(be: BeTableRow): ApiTableRow {
       scope: m.scope === 'extra' ? 'extra' : 'jingcai',
       jc_no: m.jc_id ?? (m.jc_no != null ? String(m.jc_no) : null),
       league: m.league,
+      league_canonical: m.league_canonical ?? null,
+      league_pending_confirm: typeof m.league_pending_confirm === 'boolean' ? m.league_pending_confirm : undefined,
       kickoff_at: m.kickoff_at,
       kickoff_hour: null,
       kickoff_placeholder: be.kickoff_placeholder ?? m.kickoff_placeholder ?? null,
@@ -774,8 +820,12 @@ export function fromBackendRow(be: BeTableRow): ApiTableRow {
       manual_review: m.manual_review ?? null,
       manual_review_reason: m.manual_review_reason ?? null,
       daily_check: m.daily_check ?? null,
-      home: m.home_team ?? '—',
-      away: m.away_team ?? '—',
+      home: m.home_team ?? '',
+      away: m.away_team ?? '',
+      home_team_canonical: m.home_team_canonical ?? null,
+      away_team_canonical: m.away_team_canonical ?? null,
+      home_team_pending_confirm: typeof m.home_team_pending_confirm === 'boolean' ? m.home_team_pending_confirm : undefined,
+      away_team_pending_confirm: typeof m.away_team_pending_confirm === 'boolean' ? m.away_team_pending_confirm : undefined,
     },
     ah,
     x1x2,

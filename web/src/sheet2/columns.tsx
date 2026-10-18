@@ -1,7 +1,4 @@
-import { isTeamPending, teamAliasTip } from '../names/teamName'
-import { leagueAliasTip } from '../names/leagueShort'
-import { shownLeague, shownTeam } from '../names/shownName'
-import { isLeaguePending } from '../names/leaguePending'
+import { labelsForTableMatch } from '../names/matchLabels'
 import { NameHover } from '../components/DisplayName'
 import type { ColDef, ColGroupDef, ICellRendererParams } from 'ag-grid-community'
 import { Tag, Tooltip } from 'antd'
@@ -114,35 +111,39 @@ function baseChildren(): Col[] {
     },
     { colId: 'jcNo', headerName: '编号', width: w('base.jcNo'), pinned: 'left', valueGetter: (p) => p.data?.match.jc_id ?? '-', cellClass: (p) => dayClass(p.data), sort: 'asc', sortIndex: 1 },
     { colId: 'kickoff', headerName: '开赛时间', width: w('base.kickoff'), pinned: 'left', valueGetter: (p) => kickoffText(p.data?.match.kickoff_at ?? null) },
-    { colId: 'league', headerName: '赛事', width: w('base.league'), pinned: 'left', valueGetter: (p) => shownLeague(p.data?.match.league, p.data?.match.league_canonical) ?? '-',
+    { colId: 'league', headerName: '赛事', width: w('base.league'), pinned: 'left', valueGetter: (p) => (p.data ? labelsForTableMatch(p.data.match).league : null) ?? '-',
       // 格子里是常用名。有别名时悬停一行一个；没有别名时仍是来源赛事名。认不出的赛事在简称旁加待确认星号。
       cellRenderer: (p: P) => {
-        const source = p.data?.match.league
-        const canonical = p.data?.match.league_canonical
-        const shown = shownLeague(source, canonical)
+        const labels = p.data ? labelsForTableMatch(p.data.match) : null
         return (
           <span>
-            <NameHover tip={leagueAliasTip(shown, source, [source, canonical])}>{p.value}</NameHover>
-            {isLeaguePending(source, canonical, p.data?.match.league_pending_confirm) && <PendingMark />}
+            <NameHover tip={labels?.leagueTitle}>{p.value}</NameHover>
+            {labels?.leaguePending && <PendingMark />}
           </span>
         )
       } },
-    { colId: 'home', headerName: '主队', width: w('base.home'), pinned: 'left', valueGetter: (p) => shownTeam(p.data?.match.home_team, p.data?.match.home_team_canonical, p.data?.match.league, p.data?.match.league_canonical) ?? '-',
+    { colId: 'home', headerName: '主队', width: w('base.home'), pinned: 'left', valueGetter: (p) => (p.data ? labelsForTableMatch(p.data.match).home.text : null) ?? '-',
       // 格子里是常用名。悬停列出别名，一行一个，不加前缀。
-      cellRenderer: (p: P) => (
-        <span>
-          <NameHover tip={teamAliasTip(p.data?.match.home_team, p.data?.match.home_team_canonical, shownLeague(p.data?.match.league, p.data?.match.league_canonical))}>{p.value}</NameHover>
-          {isTeamPending(p.data?.match.home_team, p.data?.match.home_team_canonical, p.data?.match.home_team_pending_confirm) && <TeamPendingMark />}
-        </span>
-      ) },
-    { colId: 'away', headerName: '客队', width: w('base.away'), pinned: 'left', valueGetter: (p) => shownTeam(p.data?.match.away_team, p.data?.match.away_team_canonical, p.data?.match.league, p.data?.match.league_canonical) ?? '-',
+      cellRenderer: (p: P) => {
+        const labels = p.data ? labelsForTableMatch(p.data.match) : null
+        return (
+          <span>
+            <NameHover tip={labels?.home.tip}>{p.value}</NameHover>
+            {labels?.home.pending && <TeamPendingMark />}
+          </span>
+        )
+      } },
+    { colId: 'away', headerName: '客队', width: w('base.away'), pinned: 'left', valueGetter: (p) => (p.data ? labelsForTableMatch(p.data.match).away.text : null) ?? '-',
       // 格子里是常用名。悬停列出别名，一行一个，不加前缀。
-      cellRenderer: (p: P) => (
-        <span>
-          <NameHover tip={teamAliasTip(p.data?.match.away_team, p.data?.match.away_team_canonical, shownLeague(p.data?.match.league, p.data?.match.league_canonical))}>{p.value}</NameHover>
-          {isTeamPending(p.data?.match.away_team, p.data?.match.away_team_canonical, p.data?.match.away_team_pending_confirm) && <TeamPendingMark />}
-        </span>
-      ) },
+      cellRenderer: (p: P) => {
+        const labels = p.data ? labelsForTableMatch(p.data.match) : null
+        return (
+          <span>
+            <NameHover tip={labels?.away.tip}>{p.value}</NameHover>
+            {labels?.away.pending && <TeamPendingMark />}
+          </span>
+        )
+      } },
     {
       colId: 'score', headerName: '比分', width: w('base.score'), pinned: 'left',
       cellRenderer: (p: P) => {
