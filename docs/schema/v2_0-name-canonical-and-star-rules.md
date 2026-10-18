@@ -1,7 +1,7 @@
 # 常用名与待确认星号（v2.0）
 
 > 用户 2026-10-18 拍板。下面六条是名称和星号的产品规则，球队与赛事同一套。
-> 实现见 `api/app/team_pending.py`、`api/app/league_pending.py`，以及前端 `web/src/names/teamName.ts`、`web/src/names/leaguePending.ts`。
+> 实现见 `api/app/team_pending.py`、`api/app/league_pending.py`，赛程字段见 `api/app/main.py` 的 `build_match_obj`，以及前端 `web/src/names/teamName.ts`、`web/src/names/leaguePending.ts`。
 
 ## 规则
 
@@ -42,6 +42,22 @@
 提议别名表里没有升格标记的行，只是归并建议，按临时名标星。
 
 当前包内 `api/resources/name-standard/teams.csv` 与 `competitions.csv` 里，除明确标成临时名的行以外，记为 `legacy_high_confidence`。这批名称来自 2026-10-14 已采纳的高置信写法，不是雷速体育的新抓取。以后用雷速体育确认过的写法覆盖时，把对应行改成 `leisutiyu`。
+
+## 赛程列表上的规范名
+
+`GET /matches?date=YYYY-MM-DD` 和 `GET /matches/{match_id}` 共用 `build_match_obj`。`/dispatch/pending` 也走这个构造，字段相同。`competition.name`、`teams.home`、`teams.away` 仍是 `matches` 上的文本列，不改写。
+
+赛程页显示规范名时读下面任一路径。同一响应里，嵌套字段和扁平字段是同一个字符串。
+
+| 显示 | 嵌套路径 | 扁平路径（与 `GET /table/matches` 同名） |
+|---|---|---|
+| 赛事 | `match.competition.canonical` | `match.league_canonical` |
+| 主队 | `match.teams.home_canonical` | `match.home_team_canonical` |
+| 客队 | `match.teams.away_canonical` | `match.away_team_canonical` |
+
+来源是 `leagues.name_zh_canonical`、`teams.name_zh_canonical`，按 `league_id`、`home_team_id`、`away_team_id` 读取。编号为空、对不上标准名行，或规范名为空白时，上述字段回退到对应文本列，接口不因此返回 500。数据表在同样情况下把 `league_canonical` 等留空；赛程接口回退，是为了页面可以直接显示规范名字段。
+
+星号仍以布尔值为准，编号不单独加星，也不单独消星。`teams_pending_confirm.home` / `.away` 与 `home_team_pending_confirm` / `away_team_pending_confirm` 相同。`league_pending_confirm` 与 `competition.league_pending_confirm` 相同。判断把库内规范名（没有则为空，不把回退后的文本再传一遍）和来源文本一起交给名册，与数据表相同。
 
 ## 名册缺失
 

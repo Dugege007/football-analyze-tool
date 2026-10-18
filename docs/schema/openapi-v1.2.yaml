@@ -341,9 +341,16 @@ components:
         competition:
           type: object
           properties:
-            name: { type: string }
+            name: { type: string, description: 来源文本，matches.competition_name，不改写 }
+            canonical:
+              type: string
+              nullable: true
+              description: 赛事规范名，与 league_canonical 同值；缺编号或缺规范名时回退 name
             type: { type: string }
             stage: { type: string }
+            league_pending_confirm:
+              type: boolean
+              description: 与顶层 league_pending_confirm 同值
         kickoff_hour: { type: integer, minimum: 0, maximum: 23, description: 保留，供排序/旧脚本 }
         kickoff_at:
           type: string
@@ -359,10 +366,26 @@ components:
         teams:
           type: object
           required: [home, away]
-          description: 过渡期仍为文本（可存中文规范名）
+          description: home/away 为来源文本；*_canonical 为规范名，缺编号或缺规范名时回退文本
           properties:
             home: { type: string }
             away: { type: string }
+            home_canonical: { type: string, nullable: true, description: 与 home_team_canonical 同值 }
+            away_canonical: { type: string, nullable: true, description: 与 away_team_canonical 同值 }
+        teams_pending_confirm:
+          type: object
+          description: 常用名尚未升格时为 true。home/away 与扁平 home_team_pending_confirm、away_team_pending_confirm 同值
+          properties:
+            home: { type: boolean }
+            away: { type: boolean }
+        league_pending_confirm:
+          type: boolean
+          description: 赛事常用名尚未升格时为 true。league_id 为空不单独标星
+        league_canonical: { type: string, nullable: true, description: 赛事规范名，与 competition.canonical 同值 }
+        home_team_canonical: { type: string, nullable: true, description: 主队规范名，与 teams.home_canonical 同值 }
+        away_team_canonical: { type: string, nullable: true, description: 客队规范名，与 teams.away_canonical 同值 }
+        home_team_pending_confirm: { type: boolean, description: 与 teams_pending_confirm.home 同值 }
+        away_team_pending_confirm: { type: boolean, description: 与 teams_pending_confirm.away 同值 }
         home_team_id: { type: integer, nullable: true, description: "teams.id；逐步回填" }
         away_team_id: { type: integer, nullable: true, description: "teams.id；逐步回填" }
         league_id: { type: integer, nullable: true, description: "leagues.id；逐步回填" }

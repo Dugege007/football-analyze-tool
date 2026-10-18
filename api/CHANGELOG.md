@@ -1,5 +1,7 @@
 # CHANGELOG · match-analysis-api
 
+- 2026-10-18：`GET /matches`、`GET /matches/{match_id}` 以及共用 `build_match_obj` 的接口增加规范名。`competition.canonical` 与 `league_canonical` 同值，`teams.home_canonical` / `away_canonical` 与 `home_team_canonical` / `away_team_canonical` 同值，来源是 `leagues` / `teams.name_zh_canonical`；缺编号或缺规范名时回退文本列。待确认继续用 `teams_pending_confirm`、`league_pending_confirm`，并增加与数据表同值的 `home_team_pending_confirm`、`away_team_pending_confirm`。文本列不变。接口版本号保持 0.3.26。
+
 - 2026-10-14：库里没有球队编号（未映射）的场次，home_team_pending_confirm、away_team_pending_confirm 以及 match.teams_pending_confirm.home、away 一律返回 true（分析师审核口径）。
 
 ## 未发布 — 2026-10-14（分支 backend/team-pending-confirm-20261014，待分析师审核；接口版本号保持 0.3.26）
