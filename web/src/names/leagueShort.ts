@@ -1,3 +1,5 @@
+import { formatAliasLines } from './aliasTip.js'
+
 /**
  * League display names for the 赛事 column.
  *
@@ -90,4 +92,39 @@ export function leagueShort(name: string | null | undefined): string | null {
 export function leagueNameEstablished(name: string | null | undefined): boolean {
   if (!name) return false
   return ESTABLISHED_LEAGUE_NAMES.has(name.trim())
+}
+
+/** 简称对应的其他写法，顺序与 LEAGUE_DISPLAY 一致。常用名逻辑仍只走 leagueShort。 */
+const LEAGUE_OTHER_NAMES: Record<string, string[]> = {}
+for (const [alias, shortName] of Object.entries(LEAGUE_DISPLAY)) {
+  if (alias === shortName) continue
+  const list = LEAGUE_OTHER_NAMES[shortName] ?? []
+  list.push(alias)
+  LEAGUE_OTHER_NAMES[shortName] = list
+}
+
+/**
+ * 赛事名悬停文案，与队名同一套。
+ * 有别名时一行一个，不加前缀。
+ * 没有别名时返回 fallback（原来的来源名）；fallback 为空则不显示悬停。
+ */
+export function leagueAliasTip(
+  shown: string | null,
+  fallback?: string | null,
+  extra?: Array<string | null | undefined>,
+): string | undefined {
+  if (shown) {
+    const others = new Set<string>(LEAGUE_OTHER_NAMES[shown] ?? [])
+    for (const item of extra ?? []) {
+      const text = item?.trim()
+      if (text) others.add(text)
+    }
+    others.delete(shown)
+    const trimmed = shown.trim()
+    if (trimmed !== shown) others.delete(trimmed)
+    const lines = formatAliasLines(others)
+    if (lines) return lines
+  }
+  const rest = fallback?.trim()
+  return rest || undefined
 }

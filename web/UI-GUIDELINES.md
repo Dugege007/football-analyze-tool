@@ -19,7 +19,11 @@
 - 球队：数据表读 `home_team_pending_confirm`、`away_team_pending_confirm`。赛程、当日消息预览和比赛详情读同名扁平字段，与 `teams_pending_confirm.home` / `.away` 同值。字段缺席时才使用队名兜底名单。
 - 赛事：数据表、赛程列表、当日消息预览和比赛详情标题都读 `league_pending_confirm`。字段缺席时，来源赛事名有字且 `league_canonical` 为空则标星。规范名缺席时，`league_id` 为空与规范名为空等价。没有赛事名时不标星。
 - 赛程、当日消息和比赛详情的赛事、主队、客队优先显示规范名：`league_canonical`、`home_team_canonical`、`away_team_canonical`（嵌套的 `competition.canonical`、`teams.home_canonical`、`teams.away_canonical` 同值）。赛事再按数据表同一套简称显示。这些字段缺席时才用来源文本。页面不另造名称。
-- 赛事名原来的全称悬停保留。队名悬停仍按数据表列出其他名称。复制出去的当日消息不含这颗星，星号只出现在页面预览里。
+- 复制出去的当日消息不含这颗星，星号只出现在页面预览里。
+
+## 名称悬停
+
+赛事名和队名悬停时列出别名。每条别名单独占一行，前面不加「其他名称」或「别名」。没有别名时，队名不显示悬停；赛事名仍显示来源名，不出现空悬停。星号的悬停仍只显示「待确认」。
 
 ## 各页面说明（v0.1.6 从页面上移到问号里的内容）
 

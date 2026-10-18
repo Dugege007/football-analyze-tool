@@ -45,14 +45,14 @@ test('规范名覆盖来源文本，不采用客户端旧常用名', () => {
     away_team_pending_confirm: true,
   }))
   assert.equal(labels.league, '瑞典超')
-  assert.equal(labels.leagueTitle, '瑞超')
+  assert.equal(labels.leagueTitle, '瑞典超级联赛\n瑞超')
   assert.equal(labels.leaguePending, false)
   assert.equal(labels.home.text, '兹沃勒')
   assert.equal(labels.home.pending, false)
   assert.equal(labels.away.text, '利兹联')
   assert.equal(labels.away.pending, true)
-  assert.match(labels.home.tip, /PEC兹沃勒/)
-  assert.match(labels.away.tip, /利兹/)
+  assert.equal(labels.home.tip, 'PEC兹沃勒')
+  assert.equal(labels.away.tip, '利兹')
 })
 
 test('库普斯和阿拉维斯显示接口规范名，而不是旧表或来源队名', () => {
@@ -71,7 +71,7 @@ test('库普斯和阿拉维斯显示接口规范名，而不是旧表或来源�
   assert.equal(labels.away.text, '阿拉维斯')
   assert.equal(labels.home.pending, false)
   assert.equal(labels.away.pending, false)
-  assert.match(labels.home.tip, /KuPS/)
+  assert.equal(labels.home.tip, 'KuPS')
 })
 
 test('扁平字段缺席时，嵌套规范名和待确认与扁平同值', () => {
@@ -86,6 +86,7 @@ test('扁平字段缺席时，嵌套规范名和待确认与扁平同值', () =>
     teams_pending_confirm: { home: false, away: true },
   }))
   assert.equal(labels.league, '瑞典超')
+  assert.equal(labels.leagueTitle, '瑞典超级联赛\n瑞超')
   assert.equal(labels.leaguePending, true)
   assert.equal(labels.home.text, '兹沃勒')
   assert.equal(labels.home.pending, false)
