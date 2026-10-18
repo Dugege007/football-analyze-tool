@@ -90,6 +90,42 @@ test('31 天月份的最后一天，本月是 31 日，近30日从 2 日开始',
   assert.equal(M.inclusiveCalendarDays('2026-10-02', '2026-10-31'), 30)
 })
 
+test('结束日比起始日晚超过 31 天时，截成起始日加 31 天', () => {
+  assert.equal(M.SHEET_RANGE_MAX_SPAN_DAYS, 31)
+  assert.deepEqual(M.clampSheetYmdRange('2025-10-24', '2026-10-12'), { from: '2025-10-24', to: '2025-11-24' })
+  assert.deepEqual(M.clampSheetYmdRange('2025-10-24', '2025-11-25'), { from: '2025-10-24', to: '2025-11-24' })
+  assert.equal(M.inclusiveCalendarDays('2025-10-24', '2025-11-24'), 32)
+})
+
+test('相差正好 31 天或更短时不改起止', () => {
+  assert.deepEqual(M.clampSheetYmdRange('2025-10-24', '2025-11-24'), { from: '2025-10-24', to: '2025-11-24' })
+  assert.deepEqual(M.clampSheetYmdRange('2025-10-24', '2025-10-24'), { from: '2025-10-24', to: '2025-10-24' })
+  assert.deepEqual(M.clampSheetYmdRange('2025-10-24', '2025-11-01'), { from: '2025-10-24', to: '2025-11-01' })
+  assert.deepEqual(M.clampSheetYmdRange('2026-10-01', '2026-10-31'), { from: '2026-10-01', to: '2026-10-31' })
+})
+
+test('跨年与闰月按日历日加 31 天', () => {
+  assert.deepEqual(M.clampSheetYmdRange('2025-12-15', '2026-06-01'), { from: '2025-12-15', to: '2026-01-15' })
+  assert.deepEqual(M.clampSheetYmdRange('2024-01-31', '2024-06-01'), { from: '2024-01-31', to: '2024-03-02' })
+  assert.deepEqual(M.clampSheetYmdRange('2025-01-31', '2025-06-01'), { from: '2025-01-31', to: '2025-03-03' })
+})
+
+test('结束日不晚于起始日，或日期无法解析时，不改写', () => {
+  assert.deepEqual(M.clampSheetYmdRange('2025-11-24', '2025-10-24'), { from: '2025-11-24', to: '2025-10-24' })
+  assert.deepEqual(M.clampSheetYmdRange('not-a-date', '2026-01-01'), { from: 'not-a-date', to: '2026-01-01' })
+  assert.deepEqual(M.clampSheetYmdRange('2025-02-31', '2026-01-01'), { from: '2025-02-31', to: '2026-01-01' })
+})
+
+test('五个快捷区间经过同一截断后仍是原区间', () => {
+  const now = beijingNoon('2026-10-31')
+  for (const preset of M.SHEET_RANGE_PRESETS) {
+    const range = M.sheetRangePreset(preset.id, now)
+    assert.deepEqual(M.clampSheetYmdRange(range.from, range.to), range)
+    assert.ok(M.inclusiveCalendarDays(range.from, range.to) <= M.SHEET_RANGE_MAX_INCLUSIVE_DAYS)
+  }
+  assert.deepEqual(M.sheetRangePreset('month', now), { from: '2026-10-01', to: '2026-10-31' })
+})
+
 test('2024 年到 2028 年每一天的五个快捷区间都不超过 31 天', () => {
   const cursor = new Date(Date.UTC(2024, 0, 1))
   const end = Date.UTC(2028, 11, 31)

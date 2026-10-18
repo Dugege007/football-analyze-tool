@@ -144,6 +144,7 @@ assert.equal(textValue.xg_ft_home.value, null)
 assert.equal(xgCellView(textValue.xg_ft_home).text, '-')
 
 assert.equal(COLUMN_WIDTHS['fund.xg'], 60)
+assert.equal(COLUMN_WIDTHS['base.league'], 110)
 assert.deepEqual(OVERVIEW_TABS.map((t) => t.label), ['预测', '基本面', '亚盘对照', '大小对照', '欧赔对照'])
 assert.deepEqual(BOOK_TABS.map((t) => t.label), ['多家平均', '澳门', '皇冠', '平博', '威廉', 'Bet365', '竞彩'])
 

@@ -1,12 +1,17 @@
 /**
- * 数据表快捷日期。
+ * 数据表快捷日期，以及写入日期范围时的跨度截断。
  * 日历日按北京时间计算。北京时间是固定的 UTC+8，与时区名 Etc/GMT-8 相同，没有夏令时。
  * 快捷区间含首尾，并且都不超过 31 个日历日：今日 1 日，本周 7 日，近 7 日 7 日，本月最多 31 日，近 30 日 30 日。
- * 这里只算出起止日期，不改日期面板上哪些天可以点。
+ * 手动选择、快捷按钮、网址参数，凡是写入起止日期的路径都经过 clampSheetYmdRange。
+ * 结束日比起始日晚超过 31 个日历日时，结束日改为起始日加 31 天。例：2025-10-24 截成 2025-11-24。
+ * 这里只改写出去的起止日期，不改日期面板上哪些天可以点。
  */
 
 /** 数据表日期范围含首尾最多 31 个日历日。五个快捷区间都必须落在这个上限里。 */
 export const SHEET_RANGE_MAX_INCLUSIVE_DAYS = 31
+
+/** 结束日相对起始日最多晚 31 个日历日。超出时结束日改为起始日加这个天数。 */
+export const SHEET_RANGE_MAX_SPAN_DAYS = 31
 
 export type SheetRangePresetId = 'today' | 'week' | 'last7' | 'month' | 'last30'
 
@@ -86,6 +91,32 @@ export function inclusiveCalendarDays(from: string, to: string): number {
   return Math.round((end - start) / DAY_MS) + 1
 }
 
+function parseCivilYmd(iso: string): CivilDate | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
+  if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  if (month < 1 || month > 12 || day < 1 || day > lastDayOfMonth(year, month)) return null
+  return { year, month, day }
+}
+
+/**
+ * 结束日比起始日晚超过 31 个日历日时，把结束日改成起始日加 31 天。
+ * 例：2025-10-24 配上更晚的结束日，截成 2025-11-24。正好晚 31 天或更短时原样返回。
+ * 日期无法解析，或结束日不晚于起始日时，不改这两天。
+ */
+export function clampSheetYmdRange(from: string, to: string): SheetYmdRange {
+  const start = parseCivilYmd(from)
+  const end = parseCivilYmd(to)
+  if (!start || !end) return { from, to }
+  const latest = addCalendarDays(start, SHEET_RANGE_MAX_SPAN_DAYS)
+  if (utcMidnight(end) > utcMidnight(latest)) {
+    return { from: formatCivil(start), to: formatCivil(latest) }
+  }
+  return { from: formatCivil(start), to: formatCivil(end) }
+}
+
 /**
  * 算出某个快捷区间的闭区间。
  * 本周是包含今天的周一到周日，跨月、跨年时仍是连续 7 天。
@@ -109,7 +140,7 @@ export function sheetRangePreset(id: SheetRangePresetId, nowMs: number): SheetYm
     from = addCalendarDays(today, -29)
     to = today
   }
-  return { from: formatCivil(from), to: formatCivil(to) }
+  return clampSheetYmdRange(formatCivil(from), formatCivil(to))
 }
 
 /** 当前起止日期与哪些快捷区间完全相同。周日或 30 天月份的月末可能同时命中两个区间。 */
