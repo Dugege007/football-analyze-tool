@@ -67,6 +67,9 @@ export function formatPlan(cfg, { skipBuild }) {
       ? `正式库：将覆盖远端正式库 ${cfg.dbPath}`
       : '正式库：本次不覆盖',
   ];
+  if (cfg.modes.includes('static')) {
+    lines.push('静态缓存：入口文档 no-cache，/assets/ 长期缓存，不给整站统一长缓存');
+  }
   if (cfg.modes.includes('db')) lines.push(`本机正式库：${cfg.dbLocalPath}`);
   lines.push(`干跑：${cfg.dryRun ? '是' : '否'}`);
   lines.push(`跳过构建：${skipBuild ? '是' : '否'}`);

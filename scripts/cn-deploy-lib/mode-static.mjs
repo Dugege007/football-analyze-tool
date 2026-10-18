@@ -4,6 +4,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { FIXED, assertStamp, assertBackupPath, assertTempPath, DeployError } from './assert-host.mjs';
 import { bashQuote } from './bash.mjs';
+import {
+  assertCacheProbeText,
+  cacheDiscoverScript,
+  cacheRollback,
+  loadCacheSnippet,
+  nginxReloadScript,
+  planCacheInstall,
+  renderCacheApplyScript,
+  SNIPPET_REMOTE,
+} from './nginx-cache.mjs';
 import { collectDistEntries, packTarGz, readAssetRefs } from './pack.mjs';
 
 function runInherit(cmd, args, cwd) {
@@ -37,20 +47,6 @@ export function staticRemoteScript(cfg, stamp) {
   const stage = assertTempPath(`/tmp/fat-web-stage-${stamp}`);
   const tarball = assertTempPath('/tmp/fat-web.tgz');
   const webRoot = bashQuote(cfg.webRoot, '网站根');
-  const nginx = cfg.nginxCmd
-    ? cfg.nginxCmd
-    : [
-      'if [ -x /www/server/nginx/sbin/nginx ]; then',
-      '  /www/server/nginx/sbin/nginx -t',
-      '  /www/server/nginx/sbin/nginx -s reload',
-      'elif command -v nginx >/dev/null 2>&1; then',
-      '  nginx -t',
-      '  nginx -s reload',
-      'else',
-      '  echo "找不到 nginx，静态文件已覆盖，请按备份回滚" >&2',
-      '  exit 1',
-      'fi',
-    ].join('\n');
   return [
     'set -euo pipefail',
     'umask 022',
@@ -85,7 +81,6 @@ export function staticRemoteScript(cfg, stamp) {
     'find "$WEB_ROOT" -type f -exec chmod 644 {} +',
     'rm -rf "$STAGE"',
     'rm -f "$TGZ"',
-    nginx,
     'i=0',
     'for d in $(ls -1dt "$(dirname "$BACKUP")"/*/ 2>/dev/null || true); do',
     '  i=$((i+1))',
@@ -94,6 +89,61 @@ export function staticRemoteScript(cfg, stamp) {
     'echo "STATIC_OK $BACKUP"',
     '',
   ].join('\n');
+}
+
+async function uploadText(runner, content, remotePath, stamp, index) {
+  const local = path.join(os.tmpdir(), `fat-nginx-vhost-${index}-${stamp}.conf`);
+  fs.writeFileSync(local, content);
+  try {
+    await runner.upload(local, remotePath, 'temp');
+  } finally {
+    fs.rmSync(local, { force: true });
+  }
+}
+
+async function reloadNginxBestEffort(ctx) {
+  try {
+    await ctx.runner.ssh(nginxReloadScript(ctx.cfg), '静态：重载 Nginx');
+  } catch (error) {
+    ctx.log(`静态：Nginx 重载失败：${error.message || error}`);
+  }
+}
+
+export async function installStaticCache(ctx) {
+  const { cfg, runner, stamp, state, log } = ctx;
+  if (cfg.dryRun || cfg.printPlan) {
+    await runner.ssh(cacheDiscoverScript(), '静态：探测站点配置（实跑才执行）');
+    log(`静态：缓存片段将写入 ${SNIPPET_REMOTE}`);
+    log(loadCacheSnippet().trimEnd());
+    log('静态：含网站根的 server 块若还没有该 include，会先备份再插入。nginx -t 失败则还原。');
+    log('静态：随后在服务器本机探测 / 、/index.html 与 /assets/ 的 Cache-Control。');
+    return;
+  }
+  const discovered = await runner.ssh(cacheDiscoverScript(), '静态：探测站点配置', { quiet: true });
+  let plan;
+  try {
+    plan = planCacheInstall(discovered.stdout, stamp);
+  } catch (error) {
+    await reloadNginxBestEffort(ctx);
+    throw error;
+  }
+  for (const vhost of plan.vhosts) {
+    if (!vhost.changed) {
+      log(`静态：${vhost.path} 已包含缓存片段，只更新片段文件`);
+      continue;
+    }
+    log(`静态：将把缓存 include 合并进 ${vhost.path}`);
+    const index = plan.vhosts.indexOf(vhost);
+    await uploadText(runner, vhost.body, vhost.temp, stamp, index);
+  }
+  state.rollbacks.push(cacheRollback(plan.backupDir));
+  const applied = await runner.ssh(renderCacheApplyScript(cfg, plan), '静态：写入缓存片段并重载 Nginx');
+  if (!applied.stdout.includes('CACHE_OK')) {
+    throw new DeployError('缓存配置没有完成。');
+  }
+  const probe = assertCacheProbeText(applied.stdout);
+  if (probe.skipped) log('静态：服务器本机未能完成缓存探测，将改由公网验收确认。');
+  else log('静态：服务器本机已确认入口为短缓存，指纹资源为长缓存。');
 }
 
 export function staticRollback(backup) {
@@ -144,6 +194,7 @@ export async function runStatic(ctx) {
   if (cfg.dryRun) {
     log(`[干跑] 将打包 web/dist 并上传到 /tmp/fat-web.tgz，备份到 ${backup} 后覆盖 ${cfg.webRoot}`);
     await runner.ssh(staticRemoteScript(cfg, stamp), '静态：远端步骤预览');
+    await installStaticCache(ctx);
     return;
   }
 
@@ -153,11 +204,12 @@ export async function runStatic(ctx) {
   fs.writeFileSync(localTar, archive);
   try {
     await runner.upload(localTar, '/tmp/fat-web.tgz', 'temp');
-    const result = await runner.ssh(staticRemoteScript(cfg, stamp), '静态：远端备份、覆盖并重载 Nginx');
+    const result = await runner.ssh(staticRemoteScript(cfg, stamp), '静态：远端备份并覆盖网站根');
     if (!/STATIC_OK\s+\S+/.test(result.stdout)) {
       throw new DeployError(`静态发布没有返回备份路径。可手工回滚：\n${staticRollback(backup)}`);
     }
   } finally {
     fs.rmSync(localTar, { force: true });
   }
+  await installStaticCache(ctx);
 }
