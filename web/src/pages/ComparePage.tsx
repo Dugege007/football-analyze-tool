@@ -40,6 +40,7 @@ import {
   readLeakSuspect,
   type LeakInfo,
   labelCompareStatus,
+  labelDirection,
   labelResultCode,
   labelReused,
   labelScope,
@@ -436,7 +437,7 @@ export default function ComparePage() {
     const conflicts = result?.stack?.conflicts ?? []
     return conflicts.map((c, idx) => {
       const dirs = (c.legs ?? [])
-        .map((leg) => `${leg.strategy_key ?? '—'}：${leg.side ?? '—'}`)
+        .map((leg) => `${leg.strategy_key ?? '—'}：${labelDirection(leg.side)}`)
         .join('；')
       const datePart = (c.jingcai_date ?? '').trim()
       const kick = formatKickoffAt(c.kickoff_at)
@@ -741,7 +742,7 @@ export default function ComparePage() {
       },
     },
     {
-      title: '下注数',
+      title: '方向数',
       width: 72,
       render: (_, r) => num(r.summary?.bet_count) ?? '—',
     },
@@ -776,7 +777,7 @@ export default function ComparePage() {
       render: (_, r) => r.directionsLabel,
     },
     {
-      title: '双边下注',
+      title: '双边方向',
       width: 96,
       render: (_, r) =>
         r.conflict.staked_both == null
@@ -799,7 +800,7 @@ export default function ComparePage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
           <Title level={3} style={{ marginTop: 0 }}>
             对比
-            <HelpTip tip="多选方案后拉取对比数据。可以打开方案叠加和结算灵敏度：结算灵敏度用同一批注单按真实水位结算，作为副表，用不同颜色的曲线叠加显示。" />
+            <HelpTip tip="多选方案后拉取对比数据。可以打开方案叠加和结算灵敏度：结算灵敏度用同一批记录按真实水位结算，作为副表，用不同颜色的曲线叠加显示。" />
           </Title>
         </div>
         <Space wrap style={{ width: '100%', marginBottom: 12 }} align="start">
@@ -833,7 +834,7 @@ export default function ComparePage() {
             />
             <Text type="secondary">
               结算灵敏度
-              <HelpTip tip="用同一批注单按真实水位重新结算，作为副表，用不同颜色的曲线叠加显示。" />
+              <HelpTip tip="用同一批记录按真实水位重新结算，作为副表，用不同颜色的曲线叠加显示。" />
             </Text>
             <Switch
               checked={includeSettlementSensitivity}
@@ -904,7 +905,7 @@ export default function ComparePage() {
                 </Tag>
               ) : null}
               {result.stake_mode ? (
-                <Tag>注额 {labelStakeMode(result.stake_mode)}</Tag>
+                <Tag>份数 {labelStakeMode(result.stake_mode)}</Tag>
               ) : null}
               {stackActive ? (
                 <Tag color="red">
@@ -960,7 +961,7 @@ export default function ComparePage() {
             message={
               <LabelWithHelp
                 label={FALLBACK_RATE_WARN_HINT}
-                tip="回落比例偏高时，真实水位副表只能作为同一批注单的灵敏度参考，不要当作主要的对比结论。"
+                tip="回落比例偏高时，真实水位副表只能作为同一批记录的灵敏度参考，不要当作主要的对比结论。"
               />
             }
           />
@@ -1018,7 +1019,7 @@ export default function ComparePage() {
             result.stack?.summary &&
             num(result.stack.summary.conflict_count) != null ? (
               <Text type="secondary">
-                冲突 {String(result.stack.summary.conflict_count)} · 双边下注{' '}
+                冲突 {String(result.stack.summary.conflict_count)} · 双边方向{' '}
                 {String(result.stack.summary.conflict_staked_both_count ?? '—')} · 冲突净盈亏{' '}
                 {formatPnlAmount(result.stack.summary.conflict_net_pnl)}
               </Text>

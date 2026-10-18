@@ -35,11 +35,11 @@ import { DisplayLeague, DisplayTeam } from '../components/DisplayName'
 import { matchLabels } from '../names/matchLabels'
 
 const PICK_TIPS: Record<string, string> = {
-  ah: '亚盘按雷速体育的规则显示：+ 表示所下注的一方让球，- 表示所下注的一方受让。\nx 后面的数字是下注份数；份数后面带 * 表示冻结预测没有记录份数，份数是按方案规则推算的，复制出去的消息不带 *。\n不下注显示「-」。',
-  '1x2': '欧盘方向，例如「(欧) 胜 x3」「(欧) 平负 x1」；前面的「(欧)」用来和竞彩胜平负区分。x 后面的数字是下注份数。不下注显示「-」。',
-  ou: '大小球方向，例如「2.25大 x2」；x 后面的数字是下注份数。不下注显示「-」。',
-  jc_had: '竞彩胜平负方向，例如「(竞) 胜 x3」「(竞) 平负 x1」；前面的「(竞)」用来和欧盘区分。x 后面的数字是下注份数。不下注显示「-」。',
-  jc_hhad: '竞彩让球按竞彩官方的规则显示：+ 表示主队受让，- 表示主队让球，例如「-1让负 x2」。不下注显示「-」。',
+  ah: '亚盘按雷速体育的规则显示：+ 表示方案倾向的一方让球，- 表示方案倾向的一方受让。\nx 后面的数字是份数；份数后面带 * 表示冻结预测没有记录份数，份数是按方案规则推算的，复制出去的文本不带 *。\n没有方向时显示「-」。',
+  '1x2': '欧盘方向，例如「(欧) 胜 x3」「(欧) 平负 x1」；前面的「(欧)」用来和竞彩胜平负区分。x 后面的数字是份数。没有方向时显示「-」。',
+  ou: '大小球方向，例如「2.25大 x2」；x 后面的数字是份数。没有方向时显示「-」。',
+  jc_had: '竞彩胜平负方向，例如「(竞) 胜 x3」「(竞) 平负 x1」；前面的「(竞)」用来和欧盘区分。x 后面的数字是份数。没有方向时显示「-」。',
+  jc_hhad: '竞彩让球按竞彩官方的规则显示：+ 表示主队受让，- 表示主队让球，例如「-1让负 x2」。没有方向时显示「-」。',
 }
 
 const SHOW_PICKS_KEY = 'schedule.showPredictionColumns'
@@ -81,7 +81,7 @@ function formatKickoff(row: MatchListItem): string {
  */
 function DailyMessagePreview({ matches }: { matches: MessageMatch[] }) {
   const visible = matches.filter((match) => messageDirections(match.picks).length > 0)
-  if (!visible.length) return <>这一天没有下注的场次。</>
+  if (!visible.length) return <>这一天没有给出方向的场次。</>
   return (
     <>
       {visible.map((match, index) => (
@@ -323,8 +323,8 @@ export default function MatchListPage() {
             key: 'msg',
             label: (
               <span>
-                当日消息预览（{countBetMatches(messageMatches)} 场下注）
-                <HelpTip tip="消息只在页面上显示和复制，不会自动发送。「只复制未开赛」只复制当前时间还没有开赛的场次。" />
+                当日方向预览（{countBetMatches(messageMatches)} 场有方向）
+                <HelpTip tip="只在页面上显示和复制，不会自动发送。「只复制未开赛」只复制当前时间还没有开赛的场次。" />
               </span>
             ),
             extra: (
@@ -357,7 +357,7 @@ export default function MatchListPage() {
         <Switch checked={showPicks} onChange={toggleShowPicks} />
         <span>
           显示预测方向
-          <HelpTip tip="展开亚盘、欧盘、大小、竞彩、竞彩让球五列。方向来自当时正式方案的冻结预测，不下注显示「-」。" />
+          <HelpTip tip="展开亚盘、欧盘、大小、竞彩、竞彩让球五列。方向来自当时正式方案的冻结预测，没有方向时显示「-」。" />
         </span>
       </Space>
 

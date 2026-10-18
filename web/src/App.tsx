@@ -24,7 +24,7 @@ dayjs.locale('zh-cn')
 // 数据表页依赖 AG Grid，按需加载，避免拖慢其它页面
 const SheetPage = lazy(() => import('./pages/SheetPage'))
 
-const { Header, Content } = Layout
+const { Header, Content, Footer } = Layout
 const { Text } = Typography
 
 function navKey(pathname: string): string {
@@ -54,7 +54,7 @@ function AppShell() {
         }}
       >
         <Text style={{ color: '#fff', fontSize: 16, fontWeight: 600, whiteSpace: 'nowrap' }}>
-          比赛分析工具
+          足球公开数据分析
         </Text>
         <Menu
           theme="dark"
@@ -64,7 +64,7 @@ function AppShell() {
           items={[
             { key: 'matches', label: <Link to="/">赛程</Link> },
             { key: 'sheet', label: <Link to="/sheet">数据表</Link> },
-            { key: 'bankroll', label: <Link to="/bankroll">注额</Link> },
+            { key: 'bankroll', label: <Link to="/bankroll">份数</Link> },
             { key: 'schemes', label: <Link to="/schemes">方案</Link> },
             { key: 'validate', label: <Link to="/validate">验证</Link> },
             { key: 'compare', label: <Link to="/compare">对比</Link> },
@@ -74,7 +74,7 @@ function AppShell() {
       </Header>
       <Content
         style={{
-          padding: '24px 24px 48px',
+          padding: '24px 24px var(--site-footer-offset)',
           // 赛程页展开五个预测方向列后需要更宽的版面，其他页面保持 1100 像素。
           maxWidth: location.pathname.startsWith('/sheet') ? 'none' : location.pathname === '/' ? 1560 : 1100,
           width: '100%',
@@ -102,6 +102,28 @@ function AppShell() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Content>
+      <Footer
+        className="site-disclaimer"
+        style={{
+          position: 'fixed',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          zIndex: 100,
+          margin: 0,
+          padding: '8px 16px',
+          background: '#fff',
+          borderTop: '1px solid #e6e8ee',
+          color: 'rgba(0, 0, 0, 0.65)',
+          fontSize: 12,
+          lineHeight: 1.55,
+          textAlign: 'center',
+        }}
+      >
+        本站基于公开网络数据做足球比赛分析与展示，仅供个人学习与研究，不构成任何投注建议。
+        <br />
+        请理性看球；如需参与中国体育彩票竞彩，请前往官方线下门店。
+      </Footer>
     </Layout>
   )
 }

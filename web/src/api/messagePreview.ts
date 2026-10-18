@@ -29,7 +29,7 @@ export function formatAhMessageLine(
   stake: number | null | undefined,
 ): string | null {
   if (!direction) return null
-  if (direction === '不下注') return '不下注'
+  if (direction === '不下注') return '无方向'
   if (homeHandicap == null || Number.isNaN(homeHandicap)) {
     const core = direction
     return stake != null && stake > 0 ? `${core}  x${stake}` : core

@@ -1142,7 +1142,11 @@ export function buildColumnDefs({ view, presence: pr, books, showReal }: BuildOp
       headerName: '方向',
       width: 76,
       filter: 'agTextColumnFilter',
-      valueFormatter: (p) => (p.value ?? '—') as string,
+      valueFormatter: (p) => {
+        const v = p.value as string | null | undefined
+        if (v == null || v === '') return '—'
+        return v === '不下注' ? '无方向' : v
+      },
       cellClassRules: {
         'sheet-dir-home': (p) => p.value === '主',
         'sheet-dir-away': (p) => p.value === '客',

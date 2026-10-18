@@ -593,7 +593,7 @@ export const RULES: RuleDef[] = [
     name: '结算颜色',
     views: ['snapshot', 'health', 'review'],
     columns: ['settle', 'pnl'],
-    condition: '赢 绿 / 赢半 浅绿 / 走 灰 / 输半 浅红 / 输 红 / 不下注、推迟作废 灰斜体（字色，不填充）',
+    condition: '赢 绿 / 赢半 浅绿 / 走 灰 / 输半 浅红 / 输 红 / 无方向、推迟作废 灰斜体（字色，不填充）',
     style: { kind: 'font', levels: [] },
     defaultOn: true,
     available: true,

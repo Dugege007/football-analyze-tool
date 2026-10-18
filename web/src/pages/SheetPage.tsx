@@ -254,7 +254,7 @@ export default function SheetPage() {
       {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 8 }} />}
       {!error && !loading && rows.length === 0 && <Alert type="info" showIcon message="所选日期内没有比赛数据。" style={{ marginBottom: 8 }} />}
 
-      <div style={{ height: 'calc(100vh - 230px)', minHeight: 420 }}>
+      <div style={{ height: 'calc(100vh - 230px - var(--site-footer-offset))', minHeight: 420 }}>
         <AgGridReact<Row>
           theme={themeQuartz.withParams({ fontSize: 13, headerFontSize: 13, spacing: 5, rowHeight: 32, headerHeight: 34 })}
           localeText={AG_GRID_LOCALE_CN}
