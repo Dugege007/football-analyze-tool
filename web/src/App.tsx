@@ -41,9 +41,17 @@ function navKey(pathname: string): string {
 function AppShell() {
   const location = useLocation()
   const selected = navKey(location.pathname)
+  // 数据表锁在一屏里：页脚回到文档流，表格用内容区剩余高度，不再猜顶栏和筛选行有多高。
+  const sheetFill = location.pathname.startsWith('/sheet')
 
   return (
-    <Layout style={{ minHeight: '100vh', background: '#f5f7fb' }}>
+    <Layout
+      style={{
+        minHeight: '100vh',
+        background: '#f5f7fb',
+        ...(sheetFill ? { height: '100vh', overflow: 'hidden' } : {}),
+      }}
+    >
       <Header
         style={{
           display: 'flex',
@@ -74,11 +82,15 @@ function AppShell() {
       </Header>
       <Content
         style={{
-          padding: '24px 24px var(--site-footer-offset)',
+          // 数据表底边只留 8px，页脚紧接在内容区下面。其他页仍留出固定页脚的占位。
+          padding: sheetFill ? '24px 24px 8px' : '24px 24px var(--site-footer-offset)',
           // 赛程页展开五个预测方向列后需要更宽的版面，其他页面保持 1100 像素。
           maxWidth: location.pathname.startsWith('/sheet') ? 'none' : location.pathname === '/' ? 1560 : 1100,
           width: '100%',
           margin: '0 auto',
+          ...(sheetFill
+            ? { flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }
+            : {}),
         }}
       >
         <Routes>
@@ -105,11 +117,6 @@ function AppShell() {
       <Footer
         className="site-disclaimer"
         style={{
-          position: 'fixed',
-          left: 0,
-          right: 0,
-          bottom: 0,
-          zIndex: 100,
           margin: 0,
           padding: '8px 16px',
           background: '#fff',
@@ -118,6 +125,10 @@ function AppShell() {
           fontSize: 12,
           lineHeight: 1.55,
           textAlign: 'center',
+          // 数据表页页脚在文档流底部，高度随文案变化；其他页继续固定在视口底部。
+          ...(sheetFill
+            ? { position: 'static', flex: '0 0 auto' }
+            : { position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 100 }),
         }}
       >
         本站基于公开网络数据做足球比赛分析与展示，仅供个人学习与研究，不构成任何投注建议。
