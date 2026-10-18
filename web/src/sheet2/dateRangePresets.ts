@@ -1,12 +1,14 @@
 /**
  * 数据表快捷日期。
  * 日历日按北京时间计算。北京时间是固定的 UTC+8，与时区名 Etc/GMT-8 相同，没有夏令时。
- * 快捷区间含首尾，并且都不超过 31 个日历日：今日 1 日，本周 7 日，近 7 日 7 日，本月最多 31 日，近 30 日 30 日。
+ * 快捷区间含首尾：今日 1 日，本周 7 日，近 7 日 7 日，本月最多 31 日，近 30 日 30 日。
+ * 查询上限按日历差计算，与 GET /table/matches 一致：结束日减起始日最多 31 天，恰好 31 天仍可查询。
+ * 超过 31 天时结束日改为起始日加 31 天，起始日不变。含首尾天数比日历差多 1，最长因此是 32 个日历日。
  * 这里只算出起止日期，不改日期面板上哪些天可以点。
  */
 
-/** 数据表日期范围含首尾最多 31 个日历日。五个快捷区间都必须落在这个上限里。 */
-export const SHEET_RANGE_MAX_INCLUSIVE_DAYS = 31
+/** 竞彩日闭区间的日历差上限。结束日减起始日大于该值时收短；恰好等于该值仍然合法。 */
+export const SHEET_RANGE_MAX_DAY_DIFF = 31
 
 export type SheetRangePresetId = 'today' | 'week' | 'last7' | 'month' | 'last30'
 
@@ -79,11 +81,30 @@ function daysSinceMonday(date: CivilDate): number {
   return weekday === 0 ? 6 : weekday - 1
 }
 
+function ymdToUtcMs(iso: string): number {
+  return Date.parse(`${iso}T00:00:00Z`)
+}
+
+/** 日历差：结束日减起始日的天数。日期串必须是 YYYY-MM-DD。与含首尾天数相差 1。 */
+export function calendarDayDiff(from: string, to: string): number {
+  return Math.round((ymdToUtcMs(to) - ymdToUtcMs(from)) / DAY_MS)
+}
+
 /** 含首尾的日历日天数。日期串必须是 YYYY-MM-DD。 */
 export function inclusiveCalendarDays(from: string, to: string): number {
-  const start = Date.parse(`${from}T00:00:00Z`)
-  const end = Date.parse(`${to}T00:00:00Z`)
-  return Math.round((end - start) / DAY_MS) + 1
+  return calendarDayDiff(from, to) + 1
+}
+
+/**
+ * 日历差大于 31 天时，把结束日收到起始日加 31 天，起始日不动。
+ * 差恰好 31 天或更短时原样返回。
+ */
+export function clampSheetYmdRange(from: string, to: string): SheetYmdRange {
+  if (calendarDayDiff(from, to) > SHEET_RANGE_MAX_DAY_DIFF) {
+    const [year, month, day] = from.split('-').map(Number)
+    return { from, to: formatCivil(addCalendarDays({ year, month, day }, SHEET_RANGE_MAX_DAY_DIFF)) }
+  }
+  return { from, to }
 }
 
 /**
