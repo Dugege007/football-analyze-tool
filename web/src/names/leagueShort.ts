@@ -8,8 +8,9 @@ import { formatAliasLines } from './aliasTip.js'
  * The link from the backend's full name to that manual name comes from
  * odds-data/research/jingcai-competition-whitelist/competition_alias_seed.csv (canonical_status legacy),
  * which matched every legacy name to the 竞彩 and 5DollarFootballAPI names.
- * Where that file conflicts with the user's decision documents, the decision documents win
- * (docs/schema/v2_0-0316-followup-decisions.md: 巴西甲级联赛 is shown as 巴甲).
+ * Where that file conflicts with the user's decision documents, the decision documents win.
+ * 雷速常用名后来覆盖了其中一条：巴西甲级联赛显示为巴西甲，巴甲只作别名
+ * （docs/schema/v2_0-name-canonical-and-star-rules.md）。
  * Updated on 2026-10-14 from the finalised standard approved by 分析师:
  * odds-data/research/name-standard-2026-10-14/competitions.csv (with README.md); every alias in its aliases column maps to its canonical name.
  * Copied by hand into this file on 2026-10-14. When the backend API returns standard names, delete this table and read the API field instead.
@@ -39,8 +40,8 @@ const LEAGUE_DISPLAY: Record<string, string> = {
   "南美超级杯": '南美优胜者杯',
   "国冠杯": '国际冠军杯',
   "墨西哥冠军杯": '墨冠杯',
-  "巴西甲": '巴甲',
-  "巴西甲级联赛": '巴甲',
+  "巴甲": '巴西甲',
+  "巴西甲级联赛": '巴西甲',
   "德国乙级联赛": '德乙',
   "德国甲级联赛": '德甲',
   "意大利甲级联赛": '意甲',

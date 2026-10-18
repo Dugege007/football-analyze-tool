@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import csv
 import sqlite3
 import sys
 from pathlib import Path
@@ -29,6 +30,27 @@ def test_known_league_is_false_without_id():
     assert lp.is_pending("", "  意大利甲级联赛  ", idx) is False
     assert lp.is_pending(None, "德国甲级联赛", idx) is False
     assert lp.is_pending(28, "英格兰超级联赛", idx) is False
+
+
+def test_brazil_serie_a_canonical_follows_leisu():
+    """雷速常用名是巴西甲。巴甲与巴西甲级联赛只作别名，缺编号也不标星。"""
+    rows = list(csv.DictReader(tp.PACKAGED_COMPETITIONS.open(encoding="utf-8-sig", newline="")))
+    hits = [
+        row for row in rows
+        if row["canonical"] in ("巴甲", "巴西甲")
+        or "巴甲" in (row.get("aliases") or "").split("|")
+        or "巴西甲" in (row.get("aliases") or "").split("|")
+    ]
+    assert len(hits) == 1
+    row = hits[0]
+    assert row["canonical"] == "巴西甲"
+    assert row["promotion"] == "leisutiyu"
+    aliases = (row["aliases"] or "").split("|")
+    assert "巴甲" in aliases
+    assert "巴西甲级联赛" in aliases
+    idx = tp.load_league_index()
+    for name in ("巴西甲", "巴甲", "巴西甲级联赛"):
+        assert lp.is_pending(None, name, idx) is False
 
 
 def test_unmapped_league_is_true_and_blank_is_false():

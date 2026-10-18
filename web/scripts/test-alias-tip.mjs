@@ -53,13 +53,19 @@ test('赛事别名与队名同一套，一行一个', () => {
     'USA US Open Cup\n公开赛杯\n美国公开赛杯\n联合足协美国公开杯',
   )
   assert.equal(
-    leagues.leagueAliasTip('巴甲', '巴西甲级联赛', ['巴西甲级联赛']),
-    '巴西甲\n巴西甲级联赛',
+    leagues.leagueAliasTip('巴西甲', '巴西甲级联赛', ['巴西甲级联赛']),
+    '巴甲\n巴西甲级联赛',
   )
+  assert.equal(leagues.leagueShort('巴西甲'), '巴西甲')
+  assert.equal(leagues.leagueShort('巴甲'), '巴西甲')
+  assert.equal(leagues.leagueShort('巴西甲级联赛'), '巴西甲')
 })
 
 test('赛程与数据表显示同一套常用名', () => {
   assert.equal(shown.shownLeague('英格兰超级联赛', null), '英超')
+  assert.equal(shown.shownLeague('巴西甲级联赛', '巴西甲'), '巴西甲')
+  assert.equal(shown.shownLeague('巴甲', null), '巴西甲')
+  assert.equal(shown.shownLeague(null, '巴西甲'), '巴西甲')
   assert.equal(shown.shownLeague('地方业余联赛', '西班牙甲级联赛'), '西甲')
   assert.equal(shown.shownLeague('地方业余联赛', null), '地方业余联赛')
   assert.equal(shown.shownLeague(null, null), null)
