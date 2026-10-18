@@ -29,8 +29,15 @@ export const RESULT_CODE_LABEL: Record<string, string> = {
   push: '走水',
   lose_half: '输半',
   lose: '输',
-  skip: '不下注',
-  no_stake: '未下注',
+  skip: '无方向',
+  no_stake: '无份数',
+}
+
+/** 方向在页面上的写法。接口取值「不下注」只用于识别，展示为「无方向」。 */
+export function labelDirection(direction: string | null | undefined): string {
+  if (!direction) return '—'
+  if (direction === '不下注') return '无方向'
+  return direction
 }
 
 export const RUN_STATUS_LABEL: Record<string, string> = {
@@ -174,16 +181,16 @@ export function isSampleInsufficient(hits: unknown, minHits: number = L1_MIN_HIT
 
 /** 影子方案规则卡中文名（仅 status=shadow 时展示；勿用于日用白名单） */
 export const SHADOW_SCHEME_LABEL: Record<string, string> = {
-  S1: '实力相符·水位平稳买下',
-  S2: '升盘路径选边',
+  S1: '实力相符·水位平稳倾向受让',
+  S2: '升盘路径选方向',
   S8: '看不清就过滤',
   N1: '顺分布抬水排除让球',
   N2: '平赔低于中庸（暂不启用）',
-  N3: '单拉平阻',
-  N4: '高水深开阻／浅开诱',
+  N3: '平赔单边抬高',
+  N4: '高水深开偏高／浅开偏低',
   // 0.3.19：输入口径改为真实水位后的新台账（SHADOW_S2_V2 / SHADOW_N4_V2）；旧 S2 / N4 冻结
-  'S2-V2': '升盘路径选边（真实水位口径）',
-  'N4-V2': '高水深开阻／浅开诱（真实水位口径）',
+  'S2-V2': '升盘路径选方向（真实水位口径）',
+  'N4-V2': '高水深开偏高／浅开偏低（真实水位口径）',
   N5: '泊松相对市场偏差',
   'N5-PIN': '泊松相对平博偏差',
   'IP-B': '滚球状态校准（stub）',

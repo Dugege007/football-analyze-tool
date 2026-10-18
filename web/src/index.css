@@ -13,6 +13,19 @@ body {
   background: #f5f7fb;
 }
 
+/* 固定页脚免责声明占用的高度。内容区和数据表高度都留出这段，避免挡住最后一行。 */
+:root {
+  --site-footer-offset: 72px;
+}
+
+.site-disclaimer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 100;
+}
+
 a {
   color: inherit;
 }

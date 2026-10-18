@@ -25,7 +25,7 @@ import {
   getMatchPrediction,
   type DataSource,
 } from '../api/client'
-import { LEAK_SUSPECT_TAG, labelDataSource, labelSettleBook, readLedgerNote, readLeakSuspect } from '../labels'
+import { LEAK_SUSPECT_TAG, labelDataSource, labelDirection, labelSettleBook, readLedgerNote, readLeakSuspect } from '../labels'
 import { DEFAULT_STRATEGY, STRATEGY_WHITELIST } from '../api/strategies'
 import OddsWaterTimelineChart from '../components/OddsWaterTimelineChart'
 import { HelpTip, LabelWithHelp } from '../components/HelpTip'
@@ -354,7 +354,7 @@ export default function MatchDetailPage() {
           <LabelWithHelp
             label="预测结论"
             tip={
-              '仅供参考，不保证输赢。\n没有写明结算盘时，平博临盘优先，没有再用澳门。\n下面的结算盘口是这一行自己的记录。已经冻结的预测可能仍是澳门临盘，和没有写明时的默认口径不是一回事。'
+              '方案方向仅供对照，不代表比赛结果。\n没有写明结算盘时，平博临盘优先，没有再用澳门。\n下面的结算盘口是这一行自己的记录。已经冻结的预测可能仍是澳门临盘，和没有写明时的默认口径不是一回事。'
             }
           />
         }
@@ -373,7 +373,7 @@ export default function MatchDetailPage() {
               onChange={setStrategy}
             />
             {prediction ? (
-              <Tag color={directionColor[prediction.direction]}>{prediction.direction}</Tag>
+              <Tag color={directionColor[prediction.direction]}>{labelDirection(prediction.direction)}</Tag>
             ) : null}
             {prediction && readLedgerNote(prediction) ? (
               <Tooltip title={readLedgerNote(prediction)}>

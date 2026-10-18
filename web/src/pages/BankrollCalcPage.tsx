@@ -67,10 +67,10 @@ export default function BankrollCalcPage() {
 
   const limitsText = useMemo(() => {
     if (!result) {
-      return '单注≥50、≤剩余资金 50%；单场≤3 份、单日≤10 份；1 份 = 基数 × 0.5%'
+      return '单笔≥50、≤剩余资金 50%；单场≤3 份、单日≤10 份；1 份 = 基数 × 0.5%'
     }
     const { amount_limits: a, caps, unit_amount, unit_fraction } = result
-    return `1 份 = ${unit_amount}（基数 × ${(unit_fraction * 100).toFixed(1)}%）；单注≥${a.min_stake_amount}、≤剩余 ${(a.max_stake_pct_of_remaining * 100).toFixed(0)}%；单场≤${caps.per_match} 份、单日≤${caps.per_day} 份`
+    return `1 份 = ${unit_amount}（基数 × ${(unit_fraction * 100).toFixed(1)}%）；单笔≥${a.min_stake_amount}、≤剩余 ${(a.max_stake_pct_of_remaining * 100).toFixed(0)}%；单场≤${caps.per_match} 份、单日≤${caps.per_day} 份`
   }, [result])
 
   const onCalc = async () => {
@@ -101,7 +101,7 @@ export default function BankrollCalcPage() {
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <div>
         <Title level={3} style={{ marginBottom: 4 }}>
-          注额计算器
+          份数换算
           <HelpTip tip="只把份数换算成金额来展示，不修改已经入库的预测。多个方案对比时请分开计算，避免共用同一天的 10 份上限。" />
         </Title>
       </div>

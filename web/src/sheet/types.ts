@@ -869,7 +869,7 @@ export const SETTLE_LABEL: Record<SettleCode, string> = {
   push: '走',
   lose_half: '输半',
   lose: '输',
-  no_bet: '不下注',
+  no_bet: '无方向',
   void_postponed: '推迟作废',
 }
 

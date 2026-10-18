@@ -171,11 +171,11 @@ export async function calcBankroll(body: {
     })
     if (!res.ok) {
       const text = await res.text()
-      throw new Error(text || `注额计算失败 HTTP ${res.status}`)
+      throw new Error(text || `份数换算失败 HTTP ${res.status}`)
     }
     return { data: (await res.json()) as CalcResponse, source: 'api' }
   } catch (e) {
-    throw e instanceof Error ? e : new Error('注额计算请求失败')
+    throw e instanceof Error ? e : new Error('份数换算请求失败')
   }
 }
 
