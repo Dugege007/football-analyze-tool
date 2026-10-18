@@ -194,9 +194,14 @@ const MODEL_TEXT: Record<string, string> = { poisson: '泊松模型' }
 const EXCLUDE_TEXT: Record<string, string> = { deviation_too_large: '偏离多数盘口过大', conversion_failed: '模型算不出换算结果' }
 const GE_SOURCE_TEXT: Record<string, string> = { ou_median_same_phase: '同一阶段各家大小球盘口的中位数（不含威廉）', default: '没有大小球数据，取默认值' }
 
-/** 多家平均格悬停：按约定第 7.2 节字段显示（第 3 版字段缺失时退回第 2 版字段）。 */
-function AvgTip({ d, market, phase, children }: { d: AvgDetail | null | undefined; market: Market; phase?: Phase; children: ReactNode }) {
-  if (!d) return <>{children}</>
+/** 多家平均格悬停：按约定第 7.2 节字段显示（第 3 版字段缺失时退回第 2 版字段）。预警等级与样本数写在同一气泡顶部。 */
+function AvgTip({ d, market, phase, notes, children }: { d: AvgDetail | null | undefined; market: Market; phase?: Phase; notes?: readonly string[]; children: ReactNode }) {
+  const noteLines = (notes ?? []).filter((line) => line)
+  // 没有平均明细时，预警说明仍单独悬停，避免把等级和样本数丢掉。
+  if (!d) {
+    if (!noteLines.length) return <>{children}</>
+    return <Tooltip title={noteLines.join('')}><span className="alert-sample-tip">{children}</span></Tooltip>
+  }
   const name = (b: string) => BOOK_NAME[b as Book] ?? b
   const names = (xs: string[] | undefined) => (xs && xs.length ? xs.map(name).join('、') : '无')
   const lineText = (v: number | null | undefined) => (v == null ? '-' : market === 'ah' ? ahLineText(v) : fmtNum(v))
@@ -207,6 +212,7 @@ function AvgTip({ d, market, phase, children }: { d: AvgDetail | null | undefine
   const srcBooks = Object.keys(srcs).sort((a, b) => BOOK_ORDER.indexOf(a) - BOOK_ORDER.indexOf(b))
   const tip = (
     <div className="avg-tip">
+      {noteLines.map((line) => <div key={line}>{line}</div>)}
       {phase === 'open' && (Object.keys(srcs).length === 0 || Object.values(srcs).some((x) => !x?.recorded_at)) && <div>初盘开盘时间不详，各机构开盘时刻可能不同</div>}
       {market !== 'x1x2' && <div>多数盘口：{lineText(d.majority_line)}</div>}
       {tie && <div>平票处理：{tie}{d.median_line != null ? `（中位数 ${market === 'ah' && d.median_line > 0 ? '+' : ''}${Number(d.median_line.toFixed(3))}）` : ''}</div>}
@@ -321,12 +327,12 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
       const text = (sub.fmt ?? fmtNum)(v)
       const pre = sub.key === 'line' && t.prefix ? t.prefix(r) : null
       const body = <>{pre}<Mv text={text} dir={move?.[sub.key] as MoveDir | undefined} colored={t.phase !== 'open'} /></>
-      // On alert cells, hovering shows the alert level and the sample size when the backend provides them.
+      // 盘口列在接口给出预警等级或正样本数时附上说明。多家平均并入来源气泡，单机构仍用独立悬停。
       const sampleN = sub.alert ? ((cell as { alert_sample_n?: number | null }).alert_sample_n ?? null) : null
       const alertLv = sub.alert ? ((cell as { alert?: string | null }).alert ?? null) : null
-      const tipParts = [alertLv && t.phase !== 'open' ? `预警等级：${ALERT_NAME[alertLv] ?? alertLv}。` : null, sampleN == null ? null : sampleText(sampleN)].filter(Boolean)
-      const bodyTip = tipParts.length ? <Tooltip title={tipParts.join('')}><span className="alert-sample-tip">{body}</span></Tooltip> : body
-      return t.avg ? <AvgTip d={cell.avg_detail as AvgDetail | null | undefined} market={t.avg} phase={t.phase}>{bodyTip}</AvgTip> : bodyTip
+      const tipParts = [alertLv && t.phase !== 'open' ? `预警等级：${ALERT_NAME[alertLv] ?? alertLv}。` : null, sampleN == null ? null : sampleText(sampleN)].filter((x): x is string => Boolean(x))
+      if (t.avg) return <AvgTip d={cell.avg_detail as AvgDetail | null | undefined} market={t.avg} phase={t.phase} notes={tipParts}>{body}</AvgTip>
+      return tipParts.length ? <Tooltip title={tipParts.join('')}><span className="alert-sample-tip">{body}</span></Tooltip> : body
     },
   }))
   return { groupId: t.id, headerName: t.title, headerClass: t.first ? SEC : undefined, children }
