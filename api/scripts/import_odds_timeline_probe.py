@@ -57,6 +57,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app.collection_schedule import (  # noqa: E402
     TZ_CN,
@@ -191,6 +192,23 @@ def ensure_probe_match(conn: sqlite3.Connection, fx: dict, fixture_id: str) -> i
     ]
     home = fx["teams"]["home"]["name"]
     away = fx["teams"]["away"]["name"]
+    league_name = (fx.get("league") or {}).get("name")
+
+    def _bind_ids(mid: int) -> int:
+        """写入场次后立刻做 create=False 身份解析，只填空槽。"""
+        from import_lib import fill_null_entity_ids
+
+        fill_null_entity_ids(
+            conn,
+            mid,
+            home_team=home,
+            away_team=away,
+            competition_name=league_name,
+            jingcai_date=jingcai_date,
+            label="import_odds_timeline_probe.ensure_probe_match",
+        )
+        return mid
+
     extras = {
         "source": "probe_d1",
         "fixture_id": str(fixture_id),
@@ -213,7 +231,7 @@ def ensure_probe_match(conn: sqlite3.Connection, fx: dict, fixture_id: str) -> i
                 h,
                 jc_id,
                 _iso(kick_utc),
-                (fx.get("league") or {}).get("name"),
+                league_name,
                 mid,
             ),
         )
@@ -222,7 +240,7 @@ def ensure_probe_match(conn: sqlite3.Connection, fx: dict, fixture_id: str) -> i
                ON CONFLICT(match_id) DO UPDATE SET extras_json=excluded.extras_json""",
             (mid, json.dumps(extras, ensure_ascii=False)),
         )
-        return mid
+        return _bind_ids(mid)
 
     cur = conn.execute(
         """INSERT INTO matches (
@@ -237,7 +255,7 @@ def ensure_probe_match(conn: sqlite3.Connection, fx: dict, fixture_id: str) -> i
             h,
             jc_id,
             None,
-            (fx.get("league") or {}).get("name"),
+            league_name,
             home,
             away,
             _iso(kick_utc),
@@ -248,7 +266,7 @@ def ensure_probe_match(conn: sqlite3.Connection, fx: dict, fixture_id: str) -> i
         "INSERT INTO match_meta (match_id, extras_json) VALUES (?,?)",
         (mid, json.dumps(extras, ensure_ascii=False)),
     )
-    return mid
+    return _bind_ids(mid)
 
 
 def pre_match_ticks(ticks: list[dict], kickoff: datetime) -> list[dict]:

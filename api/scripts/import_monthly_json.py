@@ -51,7 +51,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app.db import DB_PATH, apply_schema, connect  # noqa: E402
-from import_lib import infer_scope, insert_match, match_uid  # noqa: E402
+from import_lib import EntityIdGateError, assert_batch_entity_ids, infer_scope, insert_match, match_uid  # noqa: E402
 
 DEFAULT_FILES = [
     Path(str(_ODDS_DATA_DIR / "imports/2026/2606.json")),
@@ -92,6 +92,10 @@ def import_file(conn, path: Path) -> tuple[int, dict]:
         "UPDATE import_batches SET row_count = ? WHERE id = ?",
         (counts["total"], batch_id),
     )
+    try:
+        assert_batch_entity_ids(conn, batch_id, counts["total"], label=path.name)
+    except EntityIdGateError as exc:
+        raise SystemExit(str(exc)) from exc
     return batch_id, counts
 
 

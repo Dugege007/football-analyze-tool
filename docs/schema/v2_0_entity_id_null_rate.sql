@@ -1,0 +1,21 @@
+-- 告警：按 jingcai_date 统计有名称但身份编号为空的槽位。占比大于 5% 即告警。
+-- 对应 api/scripts/import_lib.py 的 NULL_ENTITY_ID_RATE_ALERT（0.05）。
+-- 本文件只作查询说明，不进自动迁移。
+-- 历史空槽回填（默认 dry-run，只查不建，只填空槽）：
+--   api/scripts/backfill_match_entity_ids.py --db PATH
+--
+-- SELECT jingcai_date,
+--        SUM(
+--          (CASE WHEN TRIM(COALESCE(home_team, '')) != '' AND home_team_id IS NULL THEN 1 ELSE 0 END)
+--          + (CASE WHEN TRIM(COALESCE(away_team, '')) != '' AND away_team_id IS NULL THEN 1 ELSE 0 END)
+--          + (CASE WHEN TRIM(COALESCE(competition_name, '')) != '' AND league_id IS NULL THEN 1 ELSE 0 END)
+--        ) AS null_slots,
+--        SUM(
+--          (CASE WHEN TRIM(COALESCE(home_team, '')) != '' THEN 1 ELSE 0 END)
+--          + (CASE WHEN TRIM(COALESCE(away_team, '')) != '' THEN 1 ELSE 0 END)
+--          + (CASE WHEN TRIM(COALESCE(competition_name, '')) != '' THEN 1 ELSE 0 END)
+--        ) AS named_slots
+-- FROM matches
+-- GROUP BY jingcai_date
+-- HAVING named_slots > 0 AND (null_slots * 1.0 / named_slots) > 0.05
+-- ORDER BY jingcai_date;

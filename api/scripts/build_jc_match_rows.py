@@ -17,8 +17,9 @@ live_capture 暂存行的 match_uid 同一格式。幂等：INSERT ... ON CONFLI
 - exception_rule / phase_exception / kickoff_jc_conflict 由 API 读时按 jc_id + kickoff_at 计算，不落列；
 - kickoff_jc（竞彩官方时刻）：只有竞彩月度 JSON / 竞彩官网有，5DF CSL 时刻就是 fixture 开赛，
   不能当独立的竞彩时刻 → 置 NULL（与 add_kickoff_jc.py「找不到竞彩条目 → NULL」一致）；
-- 队名/联赛：先查 v2d3 teams/team_aliases、leagues/league_aliases（只查不建）；查到用规范名 + id，
-  查不到保留 5DF 中文名、id 置 NULL，并列入未匹配清单。
+- 队名/联赛：先查 teams/team_aliases、leagues/league_aliases（只查不建，与 import_lib.lookup_entity_id 同一条路径）；
+  查到用规范名 + id，查不到保留 5DF 中文名、id 置 NULL，并列入未匹配清单。
+  新写入的一批里，若某个竞彩日有名称但身份编号为空的槽位超过 5%，向 stderr 和日志告警，不静默放过。
 
 安全：拒绝写现网 data/app.db；要求 DUAL_WRITE_ODDS_ASIAN 关；写前 sqlite backup 整库备份；
 每次写入出 manifest（插入的 match id），可 rollback（只删本脚本建的、且没有挂任何子表数据的行）。
@@ -94,7 +95,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from app import collection_schedule as cs  # noqa: E402
+from import_lib import enforce_entity_id_gate, lookup_entity_id  # noqa: E402
 
 TZ = timezone(timedelta(hours=8))
 REPLICA_DB = _V2D3_DB  # 来自路径配置：合并后=正式库 app.db；未合并=V2D3_DB_PATH/默认 data/v2d3/app.db
@@ -133,16 +136,14 @@ def norm(name):
 
 
 def lookup(conn, kind: str, name):
-    """只查不建：alias 精确 → 规范名精确（原文 + NFKC 两种键）。返回 (id, canonical) 或 (None, None)。"""
-    tbl, atbl, fk = ("teams", "team_aliases", "team_id") if kind == "team" else ("leagues", "league_aliases", "league_id")
-    for key in dict.fromkeys([k for k in (norm(name), (name or "").strip() or None) if k]):
-        r = conn.execute(f"SELECT {fk} FROM {atbl} WHERE alias=?", (key,)).fetchone()
-        if not r:
-            r = conn.execute(f"SELECT id FROM {tbl} WHERE name_zh_canonical=?", (key,)).fetchone()
-        if r:
-            c = conn.execute(f"SELECT name_zh_canonical FROM {tbl} WHERE id=?", (r[0],)).fetchone()
-            return int(r[0]), (c[0] if c else key)
-    return None, None
+    """只查不建。编号走 import_lib.lookup_entity_id（create=False），再取规范名。"""
+    entity_kind = "team" if kind == "team" else "competition"
+    found = lookup_entity_id(conn, entity_kind, name)
+    if found is None:
+        return None, None
+    tbl = "teams" if kind == "team" else "leagues"
+    canonical = conn.execute(f"SELECT name_zh_canonical FROM {tbl} WHERE id=?", (found,)).fetchone()
+    return found, (canonical[0] if canonical else norm(name))
 
 
 def load_proposed() -> dict[str, str]:
@@ -285,7 +286,24 @@ def run(since: str, apply: bool, db: Path = REPLICA_DB, quiet=False) -> dict:
         res = build_rows(conn, cands)
     finally:
         conn.close()
+    # 新行在写入前已经按 create=False 解析过。超过 5% 的空槽只告警：未匹配名称仍要建场次行。
+    entity_gate = enforce_entity_id_gate(
+        [
+            {
+                "jingcai_date": n["row"].get("jingcai_date"),
+                "home_team": n["row"].get("home_team"),
+                "away_team": n["row"].get("away_team"),
+                "competition_name": n["row"].get("competition_name"),
+                "home_team_id": n["row"].get("home_team_id"),
+                "away_team_id": n["row"].get("away_team_id"),
+                "league_id": n["row"].get("league_id"),
+            }
+            for n in res["new"]
+        ],
+        label="build_jc_match_rows",
+    )
     rep = {"at": iso(now_cn()), "mode": "apply" if apply else "dry-run", "db": str(db), "since": since,
+           "entity_id_alerts": entity_gate["alerts"],
            "candidates": len(cands), "would_insert" if not apply else "inserted": len(res["new"]),
            "existing_skipped": len(res["existing"]),
            "by_jingcai_date": {}, "drift": res["drift"], "problems": problems,
@@ -334,7 +352,10 @@ def run(since: str, apply: bool, db: Path = REPLICA_DB, quiet=False) -> dict:
         new=rep.get("inserted", rep.get("would_insert")), existing=rep["existing_skipped"],
         by_jingcai_date=rep["by_jingcai_date"], drift=len(rep["drift"]), problems=len(problems),
         unmatched_team=len(rep["unmatched_team"]), unmatched_league=len(rep["unmatched_league"]),
+        entity_id_alerts=len(rep["entity_id_alerts"]),
         backup=rep["backup"], manifest=rep["manifest"])
+    for msg in rep["entity_id_alerts"]:
+        log("entity_id_alert", message=msg)
     for d in rep["drift"]:
         log("drift", **d)
     return rep
