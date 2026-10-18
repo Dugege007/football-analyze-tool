@@ -40,7 +40,7 @@ test('接口字段缺席时，定稿常用名不标星，名册外的来源名�
   assert.equal(pending.isLeaguePending('德国甲级联赛', null, null), false)
 })
 
-test('没有来源名，或已经有规范名时，不标待确认', () => {
+test('已经升格的常用名不标待确认，临时名继续标星', () => {
   assert.equal(pending.isLeaguePending(null, null, undefined), false)
   assert.equal(pending.isLeaguePending('', null, undefined), false)
   assert.equal(pending.isLeaguePending('   ', null, undefined), false)
@@ -48,9 +48,12 @@ test('没有来源名，或已经有规范名时，不标待确认', () => {
   assert.equal(pending.isLeaguePending('英超', '英超', undefined), false)
   assert.equal(pending.isLeaguePending('英格兰超级联赛', ' 英超 ', undefined), false)
   assert.equal(pending.isLeaguePending(null, '英超', undefined), false)
+  assert.equal(pending.isLeaguePending('地方联赛', '英超', undefined), false)
+  assert.equal(pending.isLeaguePending('地方联赛', '临时联赛', undefined), true)
+  assert.equal(pending.isLeaguePending(null, '临时联赛', undefined), true)
 })
 
-test('列表和详情没有规范名时，用赛事编号表示已经映射', () => {
+test('列表和详情没有规范名时，赛事编号不能单独取消星号', () => {
   assert.equal(pending.leagueCanonicalForPending(undefined, 12), '12')
   assert.equal(pending.leagueCanonicalForPending(undefined, null), null)
   assert.equal(pending.leagueCanonicalForPending(undefined, undefined), null)
@@ -59,6 +62,7 @@ test('列表和详情没有规范名时，用赛事编号表示已经映射', ()
   assert.equal(pending.leagueCanonicalForPending('', 12), null)
   assert.equal(pending.leagueCanonicalForPending('  芬超  ', null), '芬超')
   assert.equal(pending.isLeaguePending('地方联赛', pending.leagueCanonicalForPending(undefined, null), undefined), true)
+  assert.equal(pending.isLeaguePending('地方联赛', pending.leagueCanonicalForPending(undefined, 3), undefined), true)
   assert.equal(pending.isLeaguePending('英超', pending.leagueCanonicalForPending(undefined, 3), undefined), false)
   assert.equal(pending.isLeaguePending('英超', pending.leagueCanonicalForPending(undefined, null), false), false)
 })

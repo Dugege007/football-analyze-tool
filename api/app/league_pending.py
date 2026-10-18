@@ -1,39 +1,22 @@
 """赛事「待确认」标记。
 
-与球队同一套常用名规则（2026-10-18）：常用名已经确定则不标星，尚未确定才标星。
-不再用「有来源名且 league_id 为空」作为标星条件。来源名已经对应到定稿常用名或正式库别名时，
-即使赛事编号还没填，也不标星。没有来源名时不标星。
-
-全量赛事名册读入之后，名册和正式库里都没有的来源名标为未映射。
-名称表里标了 pending_confirm 的，即使已经写了赛事编号，仍然标星。
+与球队共用 docs/schema/v2_0-name-canonical-and-star-rules.md 的同一套机制。
+已经升格的常用名不标星。临时名、待确认和尚未升格的名称继续标星。
+league_id 为空或已填都不单独决定星号。没有来源名、也没有规范名时不标星。
 """
 from __future__ import annotations
 
 from app import team_pending as tp
 
 
-def _source_present(name) -> bool:
-    """来源名去掉首尾空白后仍有内容，才算有赛事来源名。"""
-    return bool(tp.norm(name))
-
-
-def _id_empty(league_id) -> bool:
-    """赛事编号为空：缺失、None，或去掉空白后的空字符串。数字 0 不算空。"""
-    if league_id is None:
-        return True
-    if isinstance(league_id, str) and league_id.strip() == "":
-        return True
-    return False
-
-
 def is_pending(league_id, source_name, index: tp.NameIndex | None = None, canonical=None) -> bool:
-    """常用名尚未确定时返回 True。
+    """常用名尚未升格时返回 True。
 
-    index 缺省时使用包内赛事名册，并在调用方已经并入正式库时沿用那份索引。
+    league_id 保留给调用方，不参与判断。index 缺省时使用包内赛事名册。
     """
+    _ = league_id
     idx = index if isinstance(index, tp.NameIndex) else tp.load_league_index()
-    mapped = not _id_empty(league_id)
-    return idx.is_pending(source_name, canonical, mapped=mapped)
+    return idx.is_pending(source_name, canonical)
 
 
 def from_row(row, index: tp.NameIndex | None = None) -> bool:

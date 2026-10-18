@@ -153,7 +153,7 @@ def build_match_obj(row: sqlite3.Row, meta_extras: dict | None = None, pending: 
             "home": tp.is_pending(row_get(row, "home_team_id"), None, pending, row["home_team"]),
             "away": tp.is_pending(row_get(row, "away_team_id"), None, pending, row["away_team"]),
         },
-        # 与队名同一套常用名规则。来源名已经映射到常用名时为 false，即使 league_id 仍为空。
+        # 与队名同一套升格规则。league_id 不单独取消星号。
         "league_pending_confirm": league_flag,
         "home_team_id": row_get(row, "home_team_id"),
         "away_team_id": row_get(row, "away_team_id"),

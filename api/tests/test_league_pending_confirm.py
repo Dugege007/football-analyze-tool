@@ -1,7 +1,8 @@
-"""赛事待确认与球队同一套常用名规则。
+"""赛事待确认与球队共用常用名升格规则。
 
-英超、英格兰超级联赛已经有常用名，league_id 为空也不标星。
-全量名册里没有的赛事名标星。外部球队定稿缺失不得把赛事改成全员待确认。
+英超、英格兰超级联赛已经升格，league_id 为空也不标星。
+临时名和名册外的赛事名继续标星。赛事编号不能单独取消星号。
+外部球队定稿缺失不得把已升格的名称改成全员待确认。
 """
 from __future__ import annotations
 
@@ -38,12 +39,13 @@ def test_unmapped_league_is_true_and_blank_is_false():
 
 
 def test_explicit_pending_wins_over_league_id():
-    idx = tp.NameIndex({"英超"}, {tp.norm("待定杯")}, [], authoritative=True)
+    idx = tp.NameIndex({"英超"}, {tp.norm("待定杯"), tp.norm("临时杯")}, [], authoritative=True)
     assert lp.is_pending(5, "待定杯", idx) is True
     assert lp.is_pending(None, "待定杯", idx) is True
-    assert lp.is_pending(0, "陌生杯", idx) is False  # 数字 0 不是空编号，已映射到正式身份
+    assert lp.is_pending(0, "陌生杯", idx) is True  # 编号不是升格
     assert lp.is_pending(None, "陌生杯", idx) is True
-    assert lp.is_pending(None, "英超", idx) is False
+    assert lp.is_pending(4, "临时杯", idx, "临时杯") is True
+    assert lp.is_pending(4, "英超", idx) is False
 
 
 def test_from_row_uses_common_name_not_empty_id():
@@ -112,7 +114,7 @@ def test_match_object_stars_only_unestablished_names(tmp_path, monkeypatch):
         {},
         pending,
     )
-    assert linked["league_pending_confirm"] is False
+    assert linked["league_pending_confirm"] is True  # 只有编号，来源名尚未升格
     assert linked["teams_pending_confirm"] == {"home": False, "away": False}
 
     blank = build_match_obj(

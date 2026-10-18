@@ -1,23 +1,16 @@
 """球队与赛事「待确认」标记。
 
-用户规则（2026-10-18）：只有常用名尚未确定时才标星。已经能解析到常用名的，不再标星。
-队名和赛事名用同一套判断。
+规则全文见 docs/schema/v2_0-name-canonical-and-star-rules.md（用户 2026-10-18）。
+队名和赛事名共用本索引。
 
-常用名算已经确定的情况：
-- 包内名称表、外部定稿或正式库的规范名、别名里能找到这个名称，并且没有标成待确认；
-- 赛事已经写了 league_id（由赛事模块解释），表示已经对应到正式库里的赛事身份。
+已经升格的常用名不标星。升格来源只有三种：雷速体育写法、人工明确定稿、旧分析仓库里的高置信名称。
+只是归并到临时名、名称表标了待确认、别名来源以 _pending_confirm 结尾、或待定池仍开放的，继续标星。
+男子与女子、一线队与青年队等相近名称不能借用另一个实体的常用名把星号消掉。
+身份编号不是升格。外部研究表缺失时只记警告，不得把全部名称标成待确认。
 
-常用名算尚未确定的情况：
-- 名称表里 pending_confirm 为真，或别名来源以 _pending_confirm 结尾；
-- 待定池里这条名称仍是 pending 或 ambiguous，并且还没有常用名；
-- 全量名册已经加载，名称却不在名册里（not_found）。
-
-球队的包内表只是已确认的子集，不是全量名册。外部定稿缺失时记警告，未收录的队名保持不标星，
-禁止再因为表文件缺失把全部球队标成待确认。外部定稿成功读入后，它才是球队全量名册。
-赛事的包内表来自 2026-10-14 定稿常用名，读入成功后即作为赛事全量名册。
-
-正式库只读 teams / team_aliases、leagues / league_aliases，以及已经建好的 alias_pool_entry。
-表不存在时跳过，不把全部名称标成待确认。不写库。
+球队包内表是已升格子集，不是全量名册。外部定稿成功读入后，它才是球队全量名册，未收录的队名标为未映射。
+赛事包内表是当前已升格的赛事名册，未收录的赛事名标为尚未升格。
+正式库只读 teams / team_aliases、leagues / league_aliases，以及已经建好的 alias_pool_entry。表不存在时跳过。不写库。
 """
 from __future__ import annotations
 
@@ -59,6 +52,19 @@ ENV_LEAGUE_FINAL = "APP_LEAGUE_FINAL_FILE"
 _TEAM_SEED_TABLES = frozenset(("teams", "team_aliases"))
 _LEAGUE_SEED_TABLES = frozenset(("leagues", "league_aliases"))
 
+# 升格后的常用名。雷速体育优先，其次是人工定稿和旧分析仓库的高置信名称。
+_ESTABLISHED_PROMOTION = frozenset((
+    "leisutiyu",
+    "leisu",
+    "雷速",
+    "雷速体育",
+    "human_finalize",
+    "legacy_high_confidence",
+    "established",
+))
+# 已归并但还没升格的临时名。前端必须继续标星。
+_TEMPORARY_PROMOTION = frozenset(("temporary", "provisional", "临时"))
+
 _team_cache: dict[tuple, "NameIndex"] = {}
 _league_cache: dict[tuple, "NameIndex"] = {}
 _overlay_cache: dict[str, object] = {}
@@ -88,17 +94,23 @@ class NameIndex:
         self.league: NameIndex | None = None
 
     def reason(self, *names, mapped: bool = False) -> str | None:
-        """返回 None 表示不待确认。
+        """返回 None 表示不标星。
 
-        原因：final_pending_confirm（名称表或别名来源明确标了待确认）、
+        原因：final_pending_confirm（临时名、待确认标记或未升格来源）、
+        ambiguous_not_promoted（相近名称可能是另一个实体，不能并进已有常用名）、
         alias_pool_open（待定池仍开放）、not_found（全量名册里没有）。
         表文件缺失不再返回 table_missing，也不再因此把全部名称标成待确认。
-        mapped 为真表示赛事编号已经对应到正式身份，且名称本身没有待确认标记。
+        mapped 保留给旧调用，身份编号不是常用名升格，不参与判断。
         """
+        _ = mapped
         ns = {norm(n) for n in names if norm(n)}
         if ns & self.pending:
             return "final_pending_confirm"
-        if (ns & self.known) or mapped:
+        # 先看尚未单独升格的歧义名称，避免「切尔西女」因为同时传来「切尔西」而消掉星号。
+        for item in ns:
+            if item not in self.known and _ambiguous(item):
+                return "ambiguous_not_promoted"
+        if ns & self.known:
             return None
         if not ns:
             return None
@@ -115,6 +127,28 @@ class NameIndex:
 def _rows(p: Path):
     with open(p, encoding="utf-8-sig", newline="") as f:
         yield from csv.DictReader(f)
+
+
+def _is_temporary_row(row: dict) -> bool:
+    """这一行是临时名或待确认时返回 True。没有 promotion 列且未标待确认时，视为已经升格。"""
+    if _true(row.get("pending_confirm")):
+        return True
+    promotion = norm(row.get("promotion"))
+    if not promotion:
+        return False
+    if promotion in _ESTABLISHED_PROMOTION:
+        return False
+    if promotion in _TEMPORARY_PROMOTION:
+        return True
+    # 无法识别的升格标记不能当成常用名。
+    return True
+
+
+def _ambiguous(name: str) -> bool:
+    """男子/女子、一线队/青年队、已点名的同名实体。延迟导入，避免和待定池模块循环依赖。"""
+    from app.alias_pool import detect_ambiguity
+
+    return detect_ambiguity(name) is not None
 
 
 def _apply(known: set[str], pending: set[str], names, flag: bool) -> None:
@@ -137,14 +171,17 @@ def _consume(path: Path, role: str, known: set[str], pending: set[str],
     for r in rows:
         if role == "final":
             names = [r.get("canonical")] + (r.get("aliases") or "").split("|")
-            flag = _true(r.get("pending_confirm"))
+            flag = _is_temporary_row(r)
         elif role == "proposed":
-            names, flag = [r.get("alias"), r.get("team_canonical")], False
+            # 提议表只是归并建议。没有写明已经升格时，先映射到临时名，星号保留。
+            names = [r.get("alias"), r.get("team_canonical")]
+            marked = str(r.get("promotion") or "").strip() or str(r.get("pending_confirm") or "").strip()
+            flag = _is_temporary_row(r) if marked else True
         else:
             if seed_tables is not None and r.get("table") not in seed_tables:
                 continue
             names = [r.get("name_zh_canonical"), r.get("alias")]
-            flag = _true(r.get("pending_confirm"))
+            flag = _is_temporary_row(r)
         _apply(known, pending, names, flag)
     return True
 

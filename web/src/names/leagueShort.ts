@@ -86,7 +86,7 @@ export function leagueShort(name: string | null | undefined): string | null {
   return LEAGUE_DISPLAY[name.trim()] ?? name
 }
 
-/** 来源名或简称已经在 2026-10-14 赛事定稿里时，常用名视为已经确定。 */
+/** 来源名或简称已经在升格后的赛事常用名里。规则见 docs/schema/v2_0-name-canonical-and-star-rules.md。 */
 export function leagueNameEstablished(name: string | null | undefined): boolean {
   if (!name) return false
   return ESTABLISHED_LEAGUE_NAMES.has(name.trim())

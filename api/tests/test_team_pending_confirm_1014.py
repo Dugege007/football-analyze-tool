@@ -29,7 +29,7 @@ def test_found_in_each_table_is_false(tmp_path):
     idx = tp.load_index(_files(tmp_path))
     assert tp.is_pending(None, None, idx, "萨尔茨堡") is False
     assert tp.is_pending(None, None, idx, "RB Salzburg") is False  # 别名列
-    assert tp.is_pending(None, None, idx, "博塔弗戈") is False  # 提议表
+    assert tp.is_pending(None, None, idx, "博塔弗戈") is True  # 提议表只是临时归并，尚未升格
     assert tp.is_pending(None, None, idx, "济州SK") is False  # 种子表
     assert tp.is_pending(5, None, idx, "完全陌生队") is True  # 有编号也找不到 → true（不看编号）
     assert tp.reason(None, None, idx, "完全陌生队") == "not_found"
@@ -82,7 +82,7 @@ def test_cache_reloads_on_change(tmp_path):
     Path(fs["proposed"]).write_text("alias,team_canonical\n新队,新队\n", encoding="utf-8")
     os.utime(fs["proposed"], ns=(1, 1))
     b = tp.load_index(fs)
-    assert b is not a and tp.is_pending(None, None, b, "新队") is False
+    assert b is not a and tp.is_pending(None, None, b, "新队") is True  # 新读入的提议名仍是临时名
 
 
 def test_match_obj_uses_names(tmp_path, monkeypatch):
@@ -175,3 +175,30 @@ def test_formal_db_alias_and_pool_without_fail_closed(tmp_path, monkeypatch):
     bare = tp.load_pending(empty)
     assert tp.is_pending(None, None, bare, "切尔西") is False
     assert tp.is_pending(None, None, bare, "没有这支队") is False
+
+
+def test_temporary_name_stays_starred_until_promoted(tmp_path):
+    final = tmp_path / "teams.csv"
+    final.write_text(
+        "canonical,aliases,note,pending_confirm,promotion\n"
+        "切尔西,,,false,leisutiyu\n"
+        "北部联,北部联赛,,false,temporary\n"
+        "杜连斯,,,true,temporary\n",
+        encoding="utf-8",
+    )
+    idx = tp.load_index({"final": str(final), "proposed": "", "seed": ""})
+    assert tp.is_pending(None, None, idx, "切尔西") is False
+    assert tp.is_pending(9, "北部联", idx, "北部联赛") is True
+    assert tp.reason(None, None, idx, "杜连斯") == "final_pending_confirm"
+
+
+def test_lookalike_does_not_inherit_established_name(tmp_path, monkeypatch):
+    monkeypatch.setenv(tp.ENV_PATHS["final"], str(tmp_path / "missing-final.csv"))
+    monkeypatch.setenv(tp.ENV_PATHS["proposed"], str(tmp_path / "missing-proposed.csv"))
+    monkeypatch.setenv(tp.ENV_PATHS["seed"], str(tmp_path / "missing-seed.csv"))
+    idx = tp.load_index()
+    assert tp.is_pending(None, None, idx, "切尔西") is False
+    assert tp.reason(None, "切尔西", idx, "切尔西女") == "ambiguous_not_promoted"
+    assert tp.is_pending(None, None, idx, "切尔西女") is True
+    assert tp.is_pending(None, None, idx, "曼联青年") is True
+    assert tp.is_pending(None, None, idx, "曼联") is False
