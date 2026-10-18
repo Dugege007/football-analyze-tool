@@ -105,10 +105,41 @@ function median(xs: number[]): number {
   return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2
 }
 
+/** 相对开赛时刻的东八区时间。初盘提前一天，中盘提前 8 小时，临盘提前 1 小时，各家再错开几分钟。 */
+const PHASE_LEAD_MIN: Record<Phase, number> = { open: 24 * 60, mid: 8 * 60, close: 60 }
+function cnIso(ms: number): string {
+  const b = new Date(ms + 8 * 3600e3)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${b.getUTCFullYear()}-${p(b.getUTCMonth() + 1)}-${p(b.getUTCDate())}T${p(b.getUTCHours())}:${p(b.getUTCMinutes())}:00+08:00`
+}
+function mockSources(books: readonly string[], kickoff: string, phase: Phase): NonNullable<AvgDetail['sources']> {
+  const kick = new Date(kickoff).getTime()
+  const out: NonNullable<AvgDetail['sources']> = {}
+  books.forEach((book, i) => {
+    out[book] = {
+      // 初盘用开盘数据；临盘、中盘在实时采集与快照之间交替，悬停来源列能看出区别。
+      source: phase === 'open' ? '5df_live_opening' : (i % 2 === 0 ? '5df_live' : 'odds_snapshot/actual'),
+      recorded_at: Number.isNaN(kick) ? kickoff : cnIso(kick - (PHASE_LEAD_MIN[phase] + i * 5) * 60e3),
+    }
+  })
+  return out
+}
+
+/** 亚盘换算用的总进球期望：同一阶段除威廉外大小球盘口的中位数；没有盘口时取 2.6。没有机构参与平均时不写。 */
+function attachGoalExpectation(detail: AvgDetail, ouLines: number[]) {
+  if (!detail.averaged_books?.length) return
+  if (ouLines.length) {
+    detail.goal_expectation = median(ouLines)
+    detail.goal_expectation_source = 'ou_median_same_phase'
+  } else {
+    detail.goal_expectation = 2.6
+    detail.goal_expectation_source = 'default'
+  }
+}
+
 function avgLine<C extends { line: number | null; cell_status?: string | null; cell_status_reason?: string | null }>(
-  market: 'ah' | 'ou', p: Phase, get: (b: Book) => C | null | undefined, water: (c: C) => [number, number],
+  market: 'ah' | 'ou', p: Phase, get: (b: Book) => C | null | undefined, water: (c: C) => [number, number], kickoff: string,
 ): { ok: boolean; line: number | null; w: [number, number]; detail: AvgDetail; st: object } {
-  void p
   const have = REAL_BOOKS.filter((b) => get(b)?.cell_status === 'ok') as Book[]
   const missing = REAL_BOOKS.filter((b) => !have.includes(b as Book)).map((b) => ({ book: b as string, reason: get(b)?.cell_status_reason ?? 'not_captured' }))
   const voting = market === 'ou' ? have.filter((b) => b !== 'william') : have
@@ -144,6 +175,7 @@ function avgLine<C extends { line: number | null; cell_status?: string | null; c
     converted: conversions.filter((c) => c.steps > 0).map((c) => ({ book: c.book, raw_line: c.original_line, raw: c.original_water, converted: c.converted_water, method: 'power_poisson' })),
     min_books: 3, devig_method: 'power', conversion_model: 'poisson', voting_books: voting, averaged_books: averaged,
     excluded_books: excluded, missing_books: missing, tie_break: tie, median_line: tie === 'none' ? null : med, conversions, averaged_count: averaged.length,
+    sources: mockSources(have, kickoff, p),
   }
   if (averaged.length < 2) return { ok: false, line: null, w: [0, 0], detail, st: { cell_status: 'insufficient', cell_status_reason: 'too_few_books', avg_detail: detail } }
   const mean = (i: 0 | 1) => +(conversions.reduce((t, c) => t + c.converted_water[i], 0) / conversions.length).toFixed(2)
@@ -188,9 +220,16 @@ function build(s: Spec): Row {
   const avgO: Phased<OuCell> = {}
   const avgE: Phased<X1x2Cell> = {}
   PH.forEach((p) => {
-    const ahRes = avgLine('ah', p, (b) => ahM[b]?.[p], (c) => [c.home_water!, c.away_water!])
-    avgA[p] = ahRes.ok ? ah(ahRes.line!, ahRes.w[0], ahRes.w[1], { avg_detail: ahRes.detail }) : nilAh(ahRes.st)
-    const ouRes = avgLine('ou', p, (b) => ouM[b]?.[p], (c) => [c.over!, c.under!])
+    const ahRes = avgLine('ah', p, (b) => ahM[b]?.[p], (c) => [c.home_water!, c.away_water!], s.ko)
+    const ouExpect = REAL_BOOKS.filter((b) => b !== 'william').flatMap((b) => {
+      const c = ouM[b]?.[p]
+      return c?.cell_status === 'ok' && c.line != null ? [c.line] : []
+    })
+    attachGoalExpectation(ahRes.detail, ouExpect)
+    // 三001 临盘同时带预警和正样本数，用来核对它们与来源明细出现在同一个气泡里。
+    const avgAlert = p === 'close' && s.id === '三001' && s.alert ? { alert: s.alert, alert_sample_n: 168 } : {}
+    avgA[p] = ahRes.ok ? ah(ahRes.line!, ahRes.w[0], ahRes.w[1], { avg_detail: ahRes.detail, ...avgAlert }) : nilAh(ahRes.st)
+    const ouRes = avgLine('ou', p, (b) => ouM[b]?.[p], (c) => [c.over!, c.under!], s.ko)
     avgO[p] = ouRes.ok ? ou(ouRes.line!, ouRes.w[0], ouRes.w[1], { avg_detail: ouRes.detail }) : nilOu(ouRes.st)
     // 欧赔：直接平均，不换算（约定 7.6）
     const used = REAL_BOOKS.filter((b) => euM[b]?.[p]?.cell_status === 'ok') as Book[]
@@ -200,6 +239,7 @@ function build(s: Spec): Row {
       devig_method: 'power', conversion_model: null, voting_books: [], averaged_books: used, excluded_books: [], missing_books: missing,
       tie_break: 'none', median_line: null, averaged_count: used.length,
       conversions: used.map((b) => { const c = euM[b]![p]!; return { book: b, original_line: null, steps: 0, original_water: [c.home!, c.draw!, c.away!], converted_water: [c.home!, c.draw!, c.away!], margin: 0.05 } }),
+      sources: mockSources(used, s.ko, p),
     }
     if (used.length < 2) avgE[p] = nilEu({ cell_status: 'insufficient', cell_status_reason: 'too_few_books', avg_detail: det })
     else {
