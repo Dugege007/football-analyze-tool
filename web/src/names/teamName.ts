@@ -192,16 +192,13 @@ export function teamAliasTip(name: string | null | undefined, canonical?: string
 }
 
 /**
- * Teams that cannot be identified yet. Rule from the user via 分析师 on 2026-10-14: such a team shows its source name
- * with a small 待确认 marker next to it.
- * The API field match.home_team_pending_confirm / match.away_team_pending_confirm (backend branch
- * backend/team-pending-confirm-20261014) decides first. Only when that field is absent does this fallback list apply,
- * taken from the pending_confirm column of odds-data/research/name-standard-2026-10-14/teams.csv (rows marked true) on 2026-10-14.
- * Delete this set once the API field is served everywhere.
+ * 尚未升格为常用名的球队。规则见 docs/schema/v2_0-name-canonical-and-star-rules.md。
+ * 接口给出布尔值时以接口为准。字段缺席时，只对已知的临时名标星，避免把已有常用名的队整页标星。
+ * 杜连斯来自 2026-10-14 定稿里的 pending_confirm，目前仍是临时名。
  */
 const PENDING_TEAMS = new Set<string>(['杜连斯'])
 
-/** Returns true when the team is not yet identified and should carry the 待确认 marker. */
+/** 常用名尚未升格时返回 true。临时名即使已经有展示名，也要标星。 */
 export function isTeamPending(name: string | null | undefined, canonical?: string | null, apiPending?: boolean | null): boolean {
   if (typeof apiPending === 'boolean') return apiPending
   return [name, canonical].some((n) => !!n && PENDING_TEAMS.has(n.trim()))

@@ -21,7 +21,8 @@ from app import shadow_evaluable as shadow_ev  # N5/N5-PIN 不可评估记账
 from app import collection_schedule
 from app import leak_suspect as _leak  # 0.3.20
 from app import odds_timeline_chart as otc  # 0.3.23
-from app import team_pending as tp  # 2026-10-14 待确认球队
+from app import league_pending as lp  # 2026-10-18 赛事常用名尚未确定才标星
+from app import team_pending as tp  # 2026-10-14 待确认球队；2026-10-18 改为常用名规则
 
 DEFAULT_STRATEGY = "CFFXDJ_5_V3"
 TZ_CN = timezone(timedelta(hours=8))
@@ -105,10 +106,22 @@ def row_get(row: sqlite3.Row, key: str, default: Any = None) -> Any:
     return row[key] if key in row.keys() else default
 
 
+def _league_pending_confirm(row: sqlite3.Row, pending) -> bool:
+    """赛事常用名尚未确定时为 True。索引优先用 load_pending 附带的赛事名册。"""
+    league_idx = getattr(pending, "league", None) if isinstance(pending, tp.NameIndex) else None
+    return lp.is_pending(
+        row_get(row, "league_id"),
+        row_get(row, "competition_name"),
+        league_idx,
+        row_get(row, "league_canonical"),
+    )
+
+
 def build_match_obj(row: sqlite3.Row, meta_extras: dict | None = None, pending: tuple | None = None) -> dict:
     extras = meta_extras or {}
     kickoff_at = row_get(row, "kickoff_at") or extras.get("kickoff_at")
     minute_known = row_get(row, "kickoff_minute_known")
+    league_flag = _league_pending_confirm(row, pending)
     jc = None
     if row["jc_id"]:
         no = f"{row['jc_no']:03d}" if row["jc_no"] is not None else None
@@ -129,16 +142,19 @@ def build_match_obj(row: sqlite3.Row, meta_extras: dict | None = None, pending: 
             "name": row["competition_name"],
             "type": row["competition_type"],
             "stage": row["competition_stage"],
+            "league_pending_confirm": league_flag,
         },
         "kickoff_hour": row["kickoff_hour"],
         "kickoff_at": kickoff_at,
         "kickoff_minute_known": bool(minute_known) if minute_known is not None else False,
         "teams": {"home": row["home_team"], "away": row["away_team"]},
-        # 2026-10-14：认不出的球队按来源原名写，true 时前端在队名旁加标记、悬停显示「待确认」
+        # 常用名尚未确定时为 true，前端在队名旁加标记、悬停显示「待确认」。
         "teams_pending_confirm": {
             "home": tp.is_pending(row_get(row, "home_team_id"), None, pending, row["home_team"]),
             "away": tp.is_pending(row_get(row, "away_team_id"), None, pending, row["away_team"]),
         },
+        # 与队名同一套升格规则。league_id 不单独取消星号。
+        "league_pending_confirm": league_flag,
         "home_team_id": row_get(row, "home_team_id"),
         "away_team_id": row_get(row, "away_team_id"),
         "league_id": row_get(row, "league_id"),
