@@ -1,16 +1,23 @@
-"""球队「待确认」标记（用户规则 2026-10-14：认不出的球队按来源原名写，前端在队名旁加标记，悬停显示「待确认」）。
+"""球队与赛事「待确认」标记。
 
-2026-10-14 分析师改规则（按名称判断，主队、客队各自判断）：
-- 队名（包括常用名和来源原名）经规范化后，能在下面三张表里找到，返回 false；
-  1. 定稿表 name-standard-2026-10-14/teams.csv（canonical 列和 aliases 列，别名用竖线分隔）；
-  2. 提议表 dc_train/team_aliases_proposed.csv（alias 列和 team_canonical 列）；
-  3. 种子表：名称导入包 name-standard-2026-10-14/import/import_rows.csv 里 table 为 teams 或 team_aliases 的行
-     （name_zh_canonical 列和 alias 列）。赛事种子表 competition_alias_seed.csv 只有赛事名，不含球队，所以不读。
-- 三张表都找不到，或者定稿表、种子表里这支队标了 pending_confirm=true，返回 true。
-- 任何一张表文件缺失或读不出来，全部返回 true，并记一条警告日志，不抛异常。
-- 不再用球队编号是否为空来判断：现在大多数场次还没有导入球队编号，按编号判断会让绝大多数场次都标星。
-  名称导入正式库以后，再改回按球队编号判断。
-表文件按路径和修改时间缓存，文件改动后自动重读。路径可以用环境变量覆盖。
+用户规则（2026-10-18）：只有常用名尚未确定时才标星。已经能解析到常用名的，不再标星。
+队名和赛事名用同一套判断。
+
+常用名算已经确定的情况：
+- 包内名称表、外部定稿或正式库的规范名、别名里能找到这个名称，并且没有标成待确认；
+- 赛事已经写了 league_id（由赛事模块解释），表示已经对应到正式库里的赛事身份。
+
+常用名算尚未确定的情况：
+- 名称表里 pending_confirm 为真，或别名来源以 _pending_confirm 结尾；
+- 待定池里这条名称仍是 pending 或 ambiguous，并且还没有常用名；
+- 全量名册已经加载，名称却不在名册里（not_found）。
+
+球队的包内表只是已确认的子集，不是全量名册。外部定稿缺失时记警告，未收录的队名保持不标星，
+禁止再因为表文件缺失把全部球队标成待确认。外部定稿成功读入后，它才是球队全量名册。
+赛事的包内表来自 2026-10-14 定稿常用名，读入成功后即作为赛事全量名册。
+
+正式库只读 teams / team_aliases、leagues / league_aliases，以及已经建好的 alias_pool_entry。
+表不存在时跳过，不把全部名称标成待确认。不写库。
 """
 from __future__ import annotations
 
@@ -24,15 +31,37 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+_API_ROOT = Path(__file__).resolve().parents[1]
+_PACKAGE = _API_ROOT / "resources" / "name-standard"
 _RESEARCH = Path("/workspace/odds-data/research")
-DEFAULT_PATHS = {
+
+PACKAGED_TEAMS = _PACKAGE / "teams.csv"
+PACKAGED_COMPETITIONS = _PACKAGE / "competitions.csv"
+
+# 外部研究目录只作可选补充。文件不在时不得把全部名称标成待确认。
+EXTERNAL_TEAM_PATHS = {
     "final": _RESEARCH / "name-standard-2026-10-14" / "teams.csv",
     "proposed": _RESEARCH / "dc_train" / "team_aliases_proposed.csv",
     "seed": _RESEARCH / "name-standard-2026-10-14" / "import" / "import_rows.csv",
 }
-ENV_PATHS = {"final": "APP_TEAM_FINAL_FILE", "proposed": "APP_TEAM_PROPOSED_FILE", "seed": "APP_TEAM_SEED_FILE"}
+EXTERNAL_LEAGUE_FINAL = _RESEARCH / "name-standard-2026-10-14" / "competitions.csv"
 
-_cache: dict[tuple, "NameIndex"] = {}
+# 与既有调用、环境变量名保持一致。DEFAULT_PATHS 仍指向外部研究目录，供显式覆盖；
+# 缺省加载会先读包内表，再尝试这些路径。
+DEFAULT_PATHS = dict(EXTERNAL_TEAM_PATHS)
+ENV_PATHS = {
+    "final": "APP_TEAM_FINAL_FILE",
+    "proposed": "APP_TEAM_PROPOSED_FILE",
+    "seed": "APP_TEAM_SEED_FILE",
+}
+ENV_LEAGUE_FINAL = "APP_LEAGUE_FINAL_FILE"
+
+_TEAM_SEED_TABLES = frozenset(("teams", "team_aliases"))
+_LEAGUE_SEED_TABLES = frozenset(("leagues", "league_aliases"))
+
+_team_cache: dict[tuple, "NameIndex"] = {}
+_league_cache: dict[tuple, "NameIndex"] = {}
+_overlay_cache: dict[str, object] = {}
 
 
 def norm(name) -> str:
@@ -48,30 +77,39 @@ def _true(v) -> bool:
 
 
 class NameIndex:
-    def __init__(self, known: set[str], pending: set[str], missing: list[str]):
-        self.known, self.pending, self.missing = known, pending, missing
+    def __init__(self, known: set[str], pending: set[str], missing: list[str],
+                 authoritative: bool = False, pool: set[str] | None = None):
+        self.known = set(known)
+        self.pending = set(pending)
+        self.missing = list(missing)
+        # True 表示全量名册已经读入：名册里没有的名称才是未映射。
+        self.authoritative = bool(authoritative)
+        self.pool = set(pool or ())
+        self.league: NameIndex | None = None
 
-    def reason(self, *names) -> str | None:
-        """返回 None 表示不待确认；否则返回原因：table_missing、final_pending_confirm、not_found。"""
-        if self.missing:
-            return "table_missing"
+    def reason(self, *names, mapped: bool = False) -> str | None:
+        """返回 None 表示不待确认。
+
+        原因：final_pending_confirm（名称表或别名来源明确标了待确认）、
+        alias_pool_open（待定池仍开放）、not_found（全量名册里没有）。
+        表文件缺失不再返回 table_missing，也不再因此把全部名称标成待确认。
+        mapped 为真表示赛事编号已经对应到正式身份，且名称本身没有待确认标记。
+        """
         ns = {norm(n) for n in names if norm(n)}
         if ns & self.pending:
             return "final_pending_confirm"
-        if ns & self.known:
+        if (ns & self.known) or mapped:
             return None
-        return "not_found"
+        if not ns:
+            return None
+        if ns & self.pool:
+            return "alias_pool_open"
+        if self.authoritative:
+            return "not_found"
+        return None
 
-    def is_pending(self, *names) -> bool:
-        return self.reason(*names) is not None
-
-
-def _paths(paths: dict | None) -> dict[str, Path]:
-    out = {}
-    for k, d in DEFAULT_PATHS.items():
-        v = (paths or {}).get(k) or os.environ.get(ENV_PATHS[k], "").strip()
-        out[k] = Path(v) if v else d
-    return out
+    def is_pending(self, *names, mapped: bool = False) -> bool:
+        return self.reason(*names, mapped=mapped) is not None
 
 
 def _rows(p: Path):
@@ -79,51 +117,269 @@ def _rows(p: Path):
         yield from csv.DictReader(f)
 
 
-def load_index(paths: dict | None = None) -> NameIndex:
-    ps = _paths(paths)
-    key = []
-    for k, p in ps.items():
-        try:
-            key.append((k, str(p), p.stat().st_mtime_ns))
-        except OSError:
-            key.append((k, str(p), None))
-    key = tuple(key)
-    if key in _cache:
-        return _cache[key]
+def _apply(known: set[str], pending: set[str], names, flag: bool) -> None:
+    ns = {norm(n) for n in names if norm(n)}
+    if flag:
+        pending.update(ns)
+    else:
+        known.update(ns)
+
+
+def _consume(path: Path, role: str, known: set[str], pending: set[str],
+             seed_tables: frozenset[str] | None, *, warn: bool) -> bool:
+    """读入一张名称表。成功返回 True。失败时记警告并返回 False，不抛异常。"""
+    try:
+        rows = list(_rows(path))
+    except (OSError, csv.Error, UnicodeDecodeError) as e:
+        if warn:
+            log.warning("名称表读取失败，已跳过，不把全部名称标成待确认：%s（%s）", path, e)
+        return False
+    for r in rows:
+        if role == "final":
+            names = [r.get("canonical")] + (r.get("aliases") or "").split("|")
+            flag = _true(r.get("pending_confirm"))
+        elif role == "proposed":
+            names, flag = [r.get("alias"), r.get("team_canonical")], False
+        else:
+            if seed_tables is not None and r.get("table") not in seed_tables:
+                continue
+            names = [r.get("name_zh_canonical"), r.get("alias")]
+            flag = _true(r.get("pending_confirm"))
+        _apply(known, pending, names, flag)
+    return True
+
+
+def _stat_key(label: str, path: Path | None) -> tuple:
+    if path is None:
+        return (label, "", None)
+    try:
+        return (label, str(path), path.stat().st_mtime_ns)
+    except OSError:
+        return (label, str(path), None)
+
+
+def _env_path(env_name: str, default: Path) -> tuple[Path, bool]:
+    raw = os.environ.get(env_name, "").strip()
+    if raw:
+        return Path(raw), True
+    return default, False
+
+
+def _finish(known: set[str], pending: set[str], missing: list[str], authoritative: bool) -> NameIndex:
+    # 明确标了待确认的名称，即使另一张表把它写成了常用名，仍然待确认。
+    return NameIndex(known - pending, pending, missing, authoritative=authoritative)
+
+
+def _load_explicit(paths: dict, seed_tables: frozenset[str]) -> NameIndex:
     known: set[str] = set()
     pending: set[str] = set()
     missing: list[str] = []
-    for k, p in ps.items():
-        try:
-            for r in _rows(p):
-                if k == "final":
-                    names = [r.get("canonical")] + (r.get("aliases") or "").split("|")
-                    flag = _true(r.get("pending_confirm"))
-                elif k == "proposed":
-                    names, flag = [r.get("alias"), r.get("team_canonical")], False
-                else:
-                    if r.get("table") not in ("teams", "team_aliases"):
-                        continue
-                    names = [r.get("name_zh_canonical"), r.get("alias")]
-                    flag = _true(r.get("pending_confirm"))
-                ns = {norm(n) for n in names if norm(n)}
-                (pending if flag else known).update(ns)
-        except (OSError, csv.Error, UnicodeDecodeError) as e:
-            log.warning("球队名称表读取失败，全部球队按待确认处理：%s（%s）", p, e)
-            missing.append(k)
-    idx = NameIndex(known - pending, pending, missing)
-    _cache.clear()
-    _cache[key] = idx
+    final_ok = False
+    for role in ("final", "proposed", "seed"):
+        raw = paths.get(role)
+        if not raw:
+            continue
+        ok = _consume(Path(raw), role, known, pending, seed_tables if role == "seed" else None, warn=True)
+        if role == "final" and ok:
+            final_ok = True
+        if not ok:
+            missing.append(role)
+    return _finish(known, pending, missing, final_ok)
+
+
+def _load_default_teams() -> NameIndex:
+    known: set[str] = set()
+    pending: set[str] = set()
+    missing: list[str] = []
+    if not _consume(PACKAGED_TEAMS, "final", known, pending, None, warn=True):
+        missing.append("packaged")
+    final_path, final_set = _env_path(ENV_PATHS["final"], EXTERNAL_TEAM_PATHS["final"])
+    # 包内表不是全量名册。只有外部定稿真正读入，未收录的队名才标成未映射。
+    # 默认研究路径本来就不在部署机上时，不记「读取失败」，只说明未收录的队名不标星。
+    final_present = final_set or final_path.exists()
+    if _consume(final_path, "final", known, pending, None, warn=final_present):
+        authoritative = True
+    else:
+        authoritative = False
+        missing.append("final")
+        if not final_present:
+            log.warning("外部球队定稿不存在（%s），已使用包内名称表；未收录的队名不标成待确认", final_path)
+    for role, tables in (("proposed", None), ("seed", _TEAM_SEED_TABLES)):
+        path, env_set = _env_path(ENV_PATHS[role], EXTERNAL_TEAM_PATHS[role])
+        warn = env_set or path.exists()
+        if not _consume(path, role, known, pending, tables, warn=warn):
+            if warn:
+                missing.append(role)
+    return _finish(known, pending, missing, authoritative)
+
+
+def _load_default_leagues() -> NameIndex:
+    known: set[str] = set()
+    pending: set[str] = set()
+    missing: list[str] = []
+    authoritative = _consume(PACKAGED_COMPETITIONS, "final", known, pending, None, warn=True)
+    if not authoritative:
+        missing.append("packaged")
+        log.warning("包内赛事名称表缺失（%s），未收录的赛事名不标成待确认", PACKAGED_COMPETITIONS)
+    final_path, final_set = _env_path(ENV_LEAGUE_FINAL, EXTERNAL_LEAGUE_FINAL)
+    if final_set or final_path.exists():
+        if _consume(final_path, "final", known, pending, None, warn=True):
+            authoritative = True
+        else:
+            missing.append("final")
+    return _finish(known, pending, missing, authoritative)
+
+
+def _team_cache_key(paths: dict | None) -> tuple:
+    if paths is not None:
+        return tuple(_stat_key(role, Path(paths[role]) if paths.get(role) else None) for role in ("final", "proposed", "seed"))
+    parts = [_stat_key("packaged", PACKAGED_TEAMS)]
+    for role in ("final", "proposed", "seed"):
+        path, _env_set = _env_path(ENV_PATHS[role], EXTERNAL_TEAM_PATHS[role])
+        parts.append(_stat_key(role, path))
+    return tuple(parts)
+
+
+def _league_cache_key(paths: dict | None) -> tuple:
+    if paths is not None:
+        return ("explicit",) + tuple(
+            _stat_key(role, Path(paths[role]) if paths.get(role) else None) for role in ("final", "proposed", "seed")
+        )
+    path, _env_set = _env_path(ENV_LEAGUE_FINAL, EXTERNAL_LEAGUE_FINAL)
+    return ("default", _stat_key("packaged", PACKAGED_COMPETITIONS), _stat_key("final", path))
+
+
+def load_index(paths: dict | None = None) -> NameIndex:
+    """加载球队名称索引。传入 paths 时只读调用方给出的表，成功读入定稿表后视为全量名册。"""
+    key = _team_cache_key(paths)
+    cached = _team_cache.get(key)
+    if cached is not None:
+        return cached
+    idx = _load_explicit(paths, _TEAM_SEED_TABLES) if paths is not None else _load_default_teams()
+    _team_cache.clear()
+    _team_cache[key] = idx
+    _overlay_cache.clear()
     return idx
 
 
+def load_league_index(paths: dict | None = None) -> NameIndex:
+    """加载赛事名称索引。缺省使用包内定稿；包内表读入成功后，未收录的赛事名标为未映射。"""
+    key = _league_cache_key(paths)
+    cached = _league_cache.get(key)
+    if cached is not None:
+        return cached
+    if paths is not None:
+        idx = _load_explicit(paths, _LEAGUE_SEED_TABLES)
+    else:
+        idx = _load_default_leagues()
+    _league_cache.clear()
+    _league_cache[key] = idx
+    _overlay_cache.clear()
+    return idx
+
+
+def _clone(idx: NameIndex) -> NameIndex:
+    return NameIndex(set(idx.known), set(idx.pending), list(idx.missing),
+                     authoritative=idx.authoritative, pool=set(idx.pool))
+
+
+def _table_names(conn: sqlite3.Connection) -> set[str]:
+    try:
+        return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    except sqlite3.Error as e:
+        log.warning("读取正式库表名失败，名称待确认不改按全员处理：%s", e)
+        return set()
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    try:
+        return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    except sqlite3.Error as e:
+        log.warning("读取表结构失败，已跳过 %s：%s", table, e)
+        return set()
+
+
+def _overlay_identity(conn: sqlite3.Connection, idx: NameIndex, kind: str) -> None:
+    """把正式库里的规范名和别名并进索引。表不存在或读失败时保持原索引，不标成全员待确认。"""
+    tables = _table_names(conn)
+    if kind == "team":
+        standard, aliases, pool_kind = "teams", "team_aliases", "team"
+    else:
+        standard, aliases, pool_kind = "leagues", "league_aliases", "competition"
+    if standard in tables:
+        cols = _columns(conn, standard)
+        if "name_zh_canonical" in cols:
+            pending_col = "pending_confirm" in cols
+            sql = (
+                f"SELECT name_zh_canonical, pending_confirm FROM {standard}"
+                if pending_col
+                else f"SELECT name_zh_canonical, NULL AS pending_confirm FROM {standard}"
+            )
+            try:
+                for name, flag in conn.execute(sql):
+                    _apply(idx.known, idx.pending, [name], _true(flag))
+            except sqlite3.Error as e:
+                log.warning("读取%s失败，不把全部名称标成待确认：%s", standard, e)
+    if aliases in tables:
+        cols = _columns(conn, aliases)
+        if "alias" in cols:
+            has_source = "source" in cols
+            sql = (
+                f"SELECT alias, source FROM {aliases}"
+                if has_source
+                else f"SELECT alias, NULL AS source FROM {aliases}"
+            )
+            try:
+                for alias, source in conn.execute(sql):
+                    flagged = str(source or "").endswith("_pending_confirm")
+                    _apply(idx.known, idx.pending, [alias], flagged)
+            except sqlite3.Error as e:
+                log.warning("读取%s失败，不把全部名称标成待确认：%s", aliases, e)
+    if "alias_pool_entry" in tables:
+        try:
+            rows = conn.execute(
+                "SELECT norm_key, raw_name FROM alias_pool_entry "
+                "WHERE kind = ? AND status IN ('pending', 'ambiguous')",
+                (pool_kind,),
+            )
+            for norm_key, raw_name in rows:
+                idx.pool.update(n for n in (norm(norm_key), norm(raw_name)) if n)
+        except sqlite3.Error as e:
+            log.warning("读取待定池失败，不把全部名称标成待确认：%s", e)
+    idx.known -= idx.pending
+
+
+def _changes(conn: sqlite3.Connection | None):
+    if conn is None:
+        return None
+    try:
+        return int(conn.total_changes)
+    except sqlite3.Error:
+        return None
+
+
 def load_pending(conn: sqlite3.Connection | None = None, paths: dict | None = None) -> NameIndex:
-    """兼容旧调用：conn 不再使用（不按库里的球队编号判断）。"""
-    return load_index(paths)
+    """球队索引，并在 league 属性上附带赛事索引。conn 用来并入正式库别名和待定池，不再按编号空否判断。"""
+    teams = load_index(paths)
+    leagues = load_league_index()
+    token = (id(teams), id(leagues), id(conn) if conn is not None else None, _changes(conn))
+    if _overlay_cache.get("token") == token:
+        cached = _overlay_cache.get("value")
+        if isinstance(cached, NameIndex):
+            return cached
+    out = _clone(teams)
+    league = _clone(leagues)
+    if conn is not None:
+        _overlay_identity(conn, out, "team")
+        _overlay_identity(conn, league, "competition")
+    out.league = league
+    _overlay_cache["token"] = token
+    _overlay_cache["value"] = out
+    return out
 
 
 def is_pending(team_id, canonical, pending: NameIndex | None, display=None) -> bool:
-    """team_id 保留参数位置但不参与判断；名称导入正式库以后再改回按球队编号判断。"""
+    """team_id 保留参数位置但不参与判断。名称导入情况由索引决定，编号为空不再导致标星。"""
     idx = pending if isinstance(pending, NameIndex) else load_index()
     return idx.is_pending(canonical, display)
 

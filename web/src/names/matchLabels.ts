@@ -2,7 +2,7 @@
  * 赛程页、当日消息预览和比赛详情页的赛事名、队名显示。
  * 计算规则与数据表相同：赛事走 leagueShort，队名走 teamCommon，悬停走 teamAliasTip。
  * 球队待确认走 isTeamPending，优先用 teams_pending_confirm。
- * 赛事待确认走 isLeaguePending，优先用 league_pending_confirm；字段缺席时，规范名缺席则用 league_id 是否为空代替。
+ * 赛事待确认走 isLeaguePending，优先用 league_pending_confirm；字段缺席时，定稿常用名不标星，其余再看规范名或赛事编号。
  */
 import type { Match } from '../api/types'
 import { leagueShort } from './leagueShort'

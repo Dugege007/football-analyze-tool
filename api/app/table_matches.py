@@ -41,7 +41,8 @@ from app import kickoff_drift as kd
 from app import leak_suspect as leak
 from app import reason_codes
 from app import fundamentals as fund  # 0.3.21
-from app import team_pending as tp  # 2026-10-14 待确认球队
+from app import league_pending as lp  # 2026-10-18 赛事常用名尚未确定才标星
+from app import team_pending as tp  # 2026-10-14 待确认球队；2026-10-18 改为常用名规则
 from app import open_status as osx  # opening status and source fields (user rule 2026-10-10)
 from app import avg_cells  # 多家平均三格（接口约定第 3 版第 7 节）
 from app import alert_baseline as alb  # 预警档位按每格抓取时刻固定基准（2026-10-14）
@@ -2102,8 +2103,9 @@ class MatchInfo(_M_):
     away_team: Optional[str] = None
     home_team_canonical: Optional[str] = None
     away_team_canonical: Optional[str] = None
-    home_team_pending_confirm: bool = False  # 2026-10-14：认不出的球队（按来源原名写），前端悬停「待确认」
+    home_team_pending_confirm: bool = False  # 常用名尚未确定时为 true，前端悬停「待确认」
     away_team_pending_confirm: bool = False
+    league_pending_confirm: bool = False  # 与队名同一套常用名规则
 
 
 class Schedule(_M_):
@@ -3200,6 +3202,9 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 "home_team_canonical": row["home_canonical"], "away_team_canonical": row["away_canonical"],
                 "home_team_pending_confirm": tp.is_pending(row["home_team_id"], row["home_canonical"], _pending, row["home_team"]),
                 "away_team_pending_confirm": tp.is_pending(row["away_team_id"], row["away_canonical"], _pending, row["away_team"]),
+                "league_pending_confirm": lp.is_pending(
+                    _rowv(row, "league_id"), row["competition_name"], getattr(_pending, "league", None), row["league_canonical"]
+                ),
             },
             "phase_exception": exc,
             "schedule": {k: v for k, v in sched.items() if k != "live_rule_1110_target_time"},

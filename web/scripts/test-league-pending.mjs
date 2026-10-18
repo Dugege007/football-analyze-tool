@@ -28,12 +28,16 @@ test('接口 league_pending_confirm 为 true 或 false 时，以接口为准', (
   assert.equal(pending.isLeaguePending(null, null, false), false)
 })
 
-test('接口字段缺席时，有来源名且规范名为空则待确认', () => {
+test('接口字段缺席时，定稿常用名不标星，名册外的来源名才待确认', () => {
   assert.equal(pending.isLeaguePending('地方联赛', null, undefined), true)
   assert.equal(pending.isLeaguePending('地方联赛', '', undefined), true)
   assert.equal(pending.isLeaguePending('地方联赛', '   ', undefined), true)
   assert.equal(pending.isLeaguePending('地方联赛', null, null), true)
   assert.equal(pending.isLeaguePending('  地方联赛  ', null, undefined), true)
+  assert.equal(pending.isLeaguePending('英超', null, undefined), false)
+  assert.equal(pending.isLeaguePending('英格兰超级联赛', null, undefined), false)
+  assert.equal(pending.isLeaguePending('日本J联赛', '', undefined), false)
+  assert.equal(pending.isLeaguePending('德国甲级联赛', null, null), false)
 })
 
 test('没有来源名，或已经有规范名时，不标待确认', () => {

@@ -22,9 +22,9 @@ export interface Match {
    */
   teams_pending_confirm?: { home?: boolean | null; away?: boolean | null } | null
   /**
-   * 赛事是否还认不出来。
+   * 赛事常用名是否尚未确定。
    * 列表和详情返回 true 时，赛事名旁显示待确认星号。
-   * 字段缺席时，有来源赛事名且规范名为空才标星。
+   * 字段缺席时，来源名已是定稿常用名则不标星；有来源名且规范名为空、又不在定稿里，才标星。
    */
   league_pending_confirm?: boolean | null
   /**
@@ -34,7 +34,7 @@ export interface Match {
   league_canonical?: string | null
   /**
    * 赛事编号。列表和详情已经返回。
-   * league_pending_confirm 与 league_canonical 都缺席时，编号为空且来源赛事名有字则标星。
+   * league_pending_confirm 与 league_canonical 都缺席时，编号有值表示已经映射；编号为空时再看定稿常用名。
    */
   league_id?: number | string | null
   ids?: Record<string, unknown>

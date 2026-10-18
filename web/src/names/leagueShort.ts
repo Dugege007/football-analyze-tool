@@ -74,8 +74,20 @@ const LEAGUE_DISPLAY: Record<string, string> = {
   "韩国K联赛附加赛": '韩K联附加赛',
 }
 
+/** 定稿里已经有常用名的赛事：简称本身，以及会映射到简称的来源名。 */
+const ESTABLISHED_LEAGUE_NAMES = new Set<string>([
+  ...Object.keys(LEAGUE_DISPLAY),
+  ...Object.values(LEAGUE_DISPLAY),
+])
+
 /** Returns the manual league name, or the source name when there is no manual record. */
 export function leagueShort(name: string | null | undefined): string | null {
   if (!name) return null
   return LEAGUE_DISPLAY[name.trim()] ?? name
+}
+
+/** 来源名或简称已经在 2026-10-14 赛事定稿里时，常用名视为已经确定。 */
+export function leagueNameEstablished(name: string | null | undefined): boolean {
+  if (!name) return false
+  return ESTABLISHED_LEAGUE_NAMES.has(name.trim())
 }
