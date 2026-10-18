@@ -254,7 +254,8 @@ export default function SheetPage() {
       {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 8 }} />}
       {!error && !loading && rows.length === 0 && <Alert type="info" showIcon message="所选日期内没有比赛数据。" style={{ marginBottom: 8 }} />}
 
-      <div style={{ height: 'calc(100vh - 230px - var(--site-footer-offset))', minHeight: 420 }}>
+      {/* 吃掉筛选行以下的剩余高度，底边贴页脚。筛选行变高时这里跟着缩短。 */}
+      <div className="sheet2-grid">
         <AgGridReact<Row>
           theme={themeQuartz.withParams({ fontSize: 13, headerFontSize: 13, spacing: 5, rowHeight: 32, headerHeight: 34 })}
           localeText={AG_GRID_LOCALE_CN}

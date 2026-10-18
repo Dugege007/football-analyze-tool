@@ -1,3 +1,18 @@
+/* 外层内容区是纵向 flex。本页撑满剩余高度，表格再撑满筛选行以下的空间。 */
+.sheet2 {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sheet2-grid {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .sheet2 .ag-cell { display: flex; align-items: center; }
 .sheet2 .t-gray { color: #999; }
 .sheet2 .t-yellow { color: #d4a106; font-weight: 600; }
