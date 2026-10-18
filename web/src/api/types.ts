@@ -11,7 +11,13 @@ export interface Match {
   weekday?: string
   scope: 'jingcai' | 'extra'
   jc: JcInfo | null
-  competition?: { name?: string; type?: string; stage?: string }
+  competition?: {
+    name?: string
+    type?: string
+    stage?: string
+    /** 有赛事来源名且 league_id 为空时为 true；没有来源名或已挂上 league_id 时为 false。 */
+    league_pending_confirm?: boolean | null
+  }
   kickoff_hour?: number
   kickoff_at?: string | null
   kickoff_minute_known?: boolean
@@ -22,7 +28,8 @@ export interface Match {
    */
   teams_pending_confirm?: { home?: boolean | null; away?: boolean | null } | null
   /**
-   * 赛事常用名是否尚未确定。
+   * 与 competition.league_pending_confirm 一致。
+   * 有赛事来源名且 league_id 为空时为 true；没有来源名，或已经挂上 league_id 时为 false。
    * 列表和详情返回 true 时，赛事名旁显示待确认星号。
    * 字段缺席时，已升格的常用名不标星；临时名和还没有常用名的来源名继续标星。
    */
