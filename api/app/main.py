@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import hashlib
 import json
+import logging
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 import math
@@ -23,6 +24,8 @@ from app import leak_suspect as _leak  # 0.3.20
 from app import odds_timeline_chart as otc  # 0.3.23
 from app import league_pending as lp  # 2026-10-18 赛事常用名尚未确定才标星
 from app import team_pending as tp  # 2026-10-14 待确认球队；2026-10-18 改为常用名规则
+
+log = logging.getLogger(__name__)
 
 DEFAULT_STRATEGY = "CFFXDJ_5_V3"
 TZ_CN = timezone(timedelta(hours=8))
@@ -106,22 +109,146 @@ def row_get(row: sqlite3.Row, key: str, default: Any = None) -> Any:
     return row[key] if key in row.keys() else default
 
 
-def _league_pending_confirm(row: sqlite3.Row, pending) -> bool:
-    """赛事常用名尚未确定时为 True。索引优先用 load_pending 附带的赛事名册。"""
+def _nonblank(value: Any) -> str | None:
+    """空白规范名视为缺失。非空时保留原文，与数据表选出的 name_zh_canonical 一致。"""
+    if value is None:
+        return None
+    text = str(value)
+    if text.strip() == "":
+        return None
+    return text
+
+
+def _id_key(value: Any) -> int | None:
+    """把球队或赛事编号收成 int。空值和非数字不查表。"""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        token = value.strip()
+        if token.lstrip("-").isdigit() and token not in ("", "-"):
+            try:
+                return int(token)
+            except ValueError:
+                return None
+    return None
+
+
+class CanonicalNames:
+    """teams / leagues 的 id → name_zh_canonical。缺表时两个字典都空。"""
+
+    def __init__(self, teams: dict[int, str] | None = None, leagues: dict[int, str] | None = None):
+        self.teams = dict(teams or ())
+        self.leagues = dict(leagues or ())
+
+    def team(self, team_id: Any) -> str | None:
+        key = _id_key(team_id)
+        if key is None:
+            return None
+        return self.teams.get(key)
+
+    def league(self, league_id: Any) -> str | None:
+        key = _id_key(league_id)
+        if key is None:
+            return None
+        return self.leagues.get(key)
+
+
+def _load_id_names(conn: sqlite3.Connection, table: str) -> dict[int, str]:
+    """读取一张标准名表。表或列不存在、读失败时返回空字典，不抛给接口。"""
+    try:
+        names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if table not in names:
+            return {}
+        cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if "id" not in cols or "name_zh_canonical" not in cols:
+            return {}
+        out: dict[int, str] = {}
+        for row in conn.execute(f"SELECT id, name_zh_canonical FROM {table}"):
+            key = _id_key(row[0])
+            label = _nonblank(row[1])
+            if key is None or label is None:
+                continue
+            out[key] = label
+        return out
+    except sqlite3.Error as exc:
+        log.warning("读取%s规范名失败，赛程规范名回退到文本列：%s", table, exc)
+        return {}
+
+
+def load_canonical_names(conn: sqlite3.Connection | None) -> CanonicalNames:
+    """按编号装载球队、赛事规范名。只读，不写库。"""
+    if conn is None:
+        return CanonicalNames()
+    return CanonicalNames(teams=_load_id_names(conn, "teams"), leagues=_load_id_names(conn, "leagues"))
+
+
+def _joined_canonical(row: sqlite3.Row, looked_up: str | None, *columns: str) -> str | None:
+    """规范名原文。编号查到的非空 name_zh_canonical 优先，其次用行上已有列。"""
+    found = _nonblank(looked_up)
+    if found is not None:
+        return found
+    keys = row.keys()
+    for column in columns:
+        if column in keys:
+            found = _nonblank(row[column])
+            if found is not None:
+                return found
+    return None
+
+
+def _display_canonical(raw: str | None, source_text: Any) -> Any:
+    """给赛程页直接显示。没有规范名时回退到来源文本，文本本身不改写。"""
+    if raw is not None:
+        return raw
+    return source_text
+
+
+def _league_pending_confirm(row: sqlite3.Row, pending, canonical) -> bool:
+    """赛事常用名尚未确定时为 True。索引优先用 load_pending 附带的赛事名册。
+
+    canonical 是回退前的规范名，没有则为空。league_id 不参与判断。
+    """
     league_idx = getattr(pending, "league", None) if isinstance(pending, tp.NameIndex) else None
     return lp.is_pending(
         row_get(row, "league_id"),
         row_get(row, "competition_name"),
         league_idx,
-        row_get(row, "league_canonical"),
+        canonical,
     )
 
 
-def build_match_obj(row: sqlite3.Row, meta_extras: dict | None = None, pending: tuple | None = None) -> dict:
+def build_match_obj(
+    row: sqlite3.Row,
+    meta_extras: dict | None = None,
+    pending: tuple | None = None,
+    *,
+    canonicals: CanonicalNames | None = None,
+) -> dict:
+    """赛程 match 对象。文本列保持原样；规范名与数据表一样来自 name_zh_canonical。
+
+    缺编号、缺行或缺规范名时，规范名字段回退到文本列。待确认判断使用回退前的规范名
+    （没有则为空）和来源文本，与 GET /table/matches 相同；编号本身不决定星号。
+    """
     extras = meta_extras or {}
+    names = canonicals if isinstance(canonicals, CanonicalNames) else CanonicalNames()
     kickoff_at = row_get(row, "kickoff_at") or extras.get("kickoff_at")
     minute_known = row_get(row, "kickoff_minute_known")
-    league_flag = _league_pending_confirm(row, pending)
+    home_raw = _joined_canonical(
+        row, names.team(row_get(row, "home_team_id")), "home_canonical", "home_team_canonical",
+    )
+    away_raw = _joined_canonical(
+        row, names.team(row_get(row, "away_team_id")), "away_canonical", "away_team_canonical",
+    )
+    league_raw = _joined_canonical(row, names.league(row_get(row, "league_id")), "league_canonical")
+    home_display = _display_canonical(home_raw, row["home_team"])
+    away_display = _display_canonical(away_raw, row["away_team"])
+    league_display = _display_canonical(league_raw, row["competition_name"])
+    # 与数据表相同：把库内规范名和来源文本一起交给名册。不用回退后的显示名再判一次。
+    home_flag = tp.is_pending(row_get(row, "home_team_id"), home_raw, pending, row["home_team"])
+    away_flag = tp.is_pending(row_get(row, "away_team_id"), away_raw, pending, row["away_team"])
+    league_flag = _league_pending_confirm(row, pending, league_raw)
     jc = None
     if row["jc_id"]:
         no = f"{row['jc_no']:03d}" if row["jc_no"] is not None else None
@@ -140,6 +267,7 @@ def build_match_obj(row: sqlite3.Row, meta_extras: dict | None = None, pending: 
         "jc": jc,
         "competition": {
             "name": row["competition_name"],
+            "canonical": league_display,
             "type": row["competition_type"],
             "stage": row["competition_stage"],
             "league_pending_confirm": league_flag,
@@ -147,14 +275,22 @@ def build_match_obj(row: sqlite3.Row, meta_extras: dict | None = None, pending: 
         "kickoff_hour": row["kickoff_hour"],
         "kickoff_at": kickoff_at,
         "kickoff_minute_known": bool(minute_known) if minute_known is not None else False,
-        "teams": {"home": row["home_team"], "away": row["away_team"]},
-        # 常用名尚未确定时为 true，前端在队名旁加标记、悬停显示「待确认」。
-        "teams_pending_confirm": {
-            "home": tp.is_pending(row_get(row, "home_team_id"), None, pending, row["home_team"]),
-            "away": tp.is_pending(row_get(row, "away_team_id"), None, pending, row["away_team"]),
+        "teams": {
+            "home": row["home_team"],
+            "away": row["away_team"],
+            "home_canonical": home_display,
+            "away_canonical": away_display,
         },
+        # 常用名尚未确定时为 true，前端在队名旁加标记、悬停显示「待确认」。
+        "teams_pending_confirm": {"home": home_flag, "away": away_flag},
         # 与队名同一套升格规则。league_id 不单独取消星号。
         "league_pending_confirm": league_flag,
+        # 扁平别名与上面的嵌套字段同值，键名对齐 GET /table/matches。
+        "league_canonical": league_display,
+        "home_team_canonical": home_display,
+        "away_team_canonical": away_display,
+        "home_team_pending_confirm": home_flag,
+        "away_team_pending_confirm": away_flag,
         "home_team_id": row_get(row, "home_team_id"),
         "away_team_id": row_get(row, "away_team_id"),
         "league_id": row_get(row, "league_id"),
@@ -680,13 +816,15 @@ def list_matches(
                 (DEFAULT_STRATEGY, date, scope),
             ).fetchall()
 
+        pending = tp.load_pending(conn)
+        canonicals = load_canonical_names(conn)
         items = []
         for row in rows:
             extras = meta_extras(conn, row["id"])
             items.append(
                 {
                     "id": row["match_uid"],
-                    "match": build_match_obj(row, extras, tp.load_pending(conn)),
+                    "match": build_match_obj(row, extras, pending, canonicals=canonicals),
                     "has_prediction": bool(row["pred_count"]),
                     "direction": row["direction"],
                     "result": build_result(conn, row["id"]),
@@ -770,7 +908,9 @@ def get_match(match_id: str) -> dict:
         row = resolve_match_row(conn, match_id)
         extras = meta_extras(conn, row["id"])
         return {
-            "match": build_match_obj(row, extras, tp.load_pending(conn)),
+            "match": build_match_obj(
+                row, extras, tp.load_pending(conn), canonicals=load_canonical_names(conn),
+            ),
             "result": build_result(conn, row["id"]),
             "stats": build_stats(conn, row["id"]),
             "odds": build_odds(conn, row["id"]),
@@ -927,6 +1067,8 @@ def dispatch_pending(
                 "SELECT * FROM matches WHERE scope = ?", (scope,)
             ).fetchall()
 
+        pending = tp.load_pending(conn)
+        canonicals = load_canonical_names(conn)
         items = []
         for row in rows:
             extras = meta_extras(conn, row["id"])
@@ -969,7 +1111,7 @@ def dispatch_pending(
             items.append(
                 {
                     "id": row["match_uid"],
-                    "match": build_match_obj(row, extras, tp.load_pending(conn)),
+                    "match": build_match_obj(row, extras, pending, canonicals=canonicals),
                     "kickoff_at_resolved": kick.isoformat(),
                     "mid_collect_at": mid_at.isoformat(),
                     "close_collect_at": close_at.isoformat(),

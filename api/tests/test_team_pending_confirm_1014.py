@@ -192,6 +192,65 @@ def test_temporary_name_stays_starred_until_promoted(tmp_path):
     assert tp.reason(None, None, idx, "杜连斯") == "final_pending_confirm"
 
 
+def test_proposed_does_not_repend_packaged_established_names(tmp_path, monkeypatch):
+    """提议表写出包内已升格常用名时，不得把这些常用名打回待确认。未入 known 的临时别名仍标星。"""
+    proposed = tmp_path / "proposed.csv"
+    proposed.write_text(
+        "action,alias,team_canonical\n"
+        "merge,切尔西,切尔西\n"
+        "merge,曼联,曼彻斯特联\n"
+        "merge,利兹联,利兹联\n"
+        "merge,切尔西临时译名,切尔西\n"
+        "new_team,某未升格临时队,某未升格临时队\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(tp.ENV_PATHS["final"], str(tmp_path / "missing-final.csv"))
+    monkeypatch.setenv(tp.ENV_PATHS["proposed"], str(proposed))
+    monkeypatch.setenv(tp.ENV_PATHS["seed"], str(tmp_path / "missing-seed.csv"))
+    idx = tp.load_index()
+    assert tp.norm("切尔西") not in idx.pending
+    assert tp.norm("曼联") not in idx.pending
+    assert tp.norm("利兹联") not in idx.pending
+    assert tp.is_pending(None, None, idx, "切尔西") is False
+    assert tp.is_pending(None, None, idx, "曼联") is False
+    assert tp.is_pending(None, None, idx, "曼彻斯特联") is False
+    assert tp.is_pending(None, None, idx, "利兹联") is False
+    # 同一行里，未知别名仍待确认，已升格规范名不加星。
+    assert tp.is_pending(None, None, idx, "切尔西临时译名") is True
+    assert tp.reason(None, None, idx, "切尔西临时译名") == "final_pending_confirm"
+    assert tp.is_pending(None, None, idx, "某未升格临时队") is True
+
+
+def test_promoted_overlay_clears_name_proposed_had_marked_pending(tmp_path):
+    """提议表先把未入表的规范名记为待确认后，正式库升格必须能从 pending 拿掉。"""
+    final = tmp_path / "teams.csv"
+    final.write_text(
+        "canonical,aliases,note,pending_confirm\n萨尔茨堡,FC 萨尔斯堡,,false\n",
+        encoding="utf-8",
+    )
+    proposed = tmp_path / "proposed.csv"
+    proposed.write_text(
+        "alias,team_canonical\n切尔西,切尔西\n仍临时,仍临时\n",
+        encoding="utf-8",
+    )
+    paths = {"final": str(final), "proposed": str(proposed), "seed": ""}
+    before = tp.load_index(paths)
+    assert tp.is_pending(None, None, before, "切尔西") is True
+    assert tp.is_pending(None, None, before, "仍临时") is True
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE teams (id INTEGER PRIMARY KEY, name_zh_canonical TEXT, pending_confirm TEXT)"
+    )
+    conn.execute("INSERT INTO teams (name_zh_canonical, pending_confirm) VALUES ('切尔西', 'false')")
+    conn.commit()
+    overlaid = tp.load_pending(conn, paths)
+    assert tp.norm("切尔西") not in overlaid.pending
+    assert tp.is_pending(None, None, overlaid, "切尔西") is False
+    assert tp.is_pending(None, None, overlaid, "仍临时") is True
+    assert tp.is_pending(None, None, overlaid, "萨尔茨堡") is False
+
+
 def test_lookalike_does_not_inherit_established_name(tmp_path, monkeypatch):
     monkeypatch.setenv(tp.ENV_PATHS["final"], str(tmp_path / "missing-final.csv"))
     monkeypatch.setenv(tp.ENV_PATHS["proposed"], str(tmp_path / "missing-proposed.csv"))

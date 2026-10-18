@@ -1,14 +1,15 @@
 /**
  * 赛程页、当日消息预览和比赛详情页的赛事名、队名显示。
- * 计算规则与数据表相同：赛事走 leagueShort，队名走 teamCommon。
+ * 优先读 GET /matches 的规范名（扁平字段与嵌套字段同值），再走数据表同一套简称和常用名。
+ * 规范名字段缺席时才用来源文本。接口在没有规范名时已把该字段回退成来源文本，页面不再另造名称。
  * 悬停别名赛事走 leagueAliasTip，队名走 teamAliasTip，都是一行一个、不加前缀。
- * 球队待确认走 isTeamPending，优先用 teams_pending_confirm。
+ * 球队待确认走 isTeamPending，优先用接口布尔值。
  * 赛事待确认走 isLeaguePending，优先用 league_pending_confirm。已升格的常用名不标星，临时名继续标星。
  */
 import type { Match } from '../api/types'
-import { leagueAliasTip, leagueShort } from './leagueShort'
-import { isLeaguePending, leagueCanonicalForPending } from './leaguePending'
-import { isTeamPending, teamAliasTip, teamCommon } from './teamName'
+import { leagueAliasTip, leagueShort } from './leagueShort.js'
+import { isLeaguePending, leagueCanonicalForPending } from './leaguePending.js'
+import { isTeamPending, teamAliasTip, teamCommon } from './teamName.js'
 
 /** 一支球队在页面上的显示结果。 */
 export interface TeamLabel {
@@ -32,31 +33,62 @@ export interface MatchLabels {
   away: TeamLabel
 }
 
+/**
+ * 扁平规范名优先；扁平字段缺席时用嵌套同值字段。
+ * 两者都缺席时返回 undefined，调用方才回到来源文本。
+ */
+function preferCanonical(
+  flat: string | null | undefined,
+  nested: string | null | undefined,
+): string | null | undefined {
+  return flat !== undefined ? flat : nested
+}
+
+/** 扁平待确认优先；缺席时用嵌套同值布尔。null 与缺席都留给名称兜底。 */
+function preferPending(
+  flat: boolean | null | undefined,
+  nested: boolean | null | undefined,
+): boolean | null | undefined {
+  return flat !== undefined ? flat : nested
+}
+
 function teamLabel(
   name: string | null | undefined,
+  canonical: string | null | undefined,
   leagueDisplay: string | null,
   apiPending: boolean | null | undefined,
 ): TeamLabel {
   return {
-    text: teamCommon(name, null, leagueDisplay),
-    tip: teamAliasTip(name, null, leagueDisplay),
-    pending: isTeamPending(name, null, apiPending),
+    text: teamCommon(name, canonical, leagueDisplay),
+    tip: teamAliasTip(name, canonical, leagueDisplay),
+    pending: isTeamPending(name, canonical, apiPending),
   }
 }
 
 /** 按数据表同一套规则，算出这一场在赛程页、消息预览和详情页上的赛事名与主客队名。 */
 export function matchLabels(match: Match): MatchLabels {
   const sourceLeague = match.competition?.name
-  const league = leagueShort(sourceLeague)
+  const leagueCanonical = preferCanonical(match.league_canonical, match.competition?.canonical)
+  const league = leagueShort(leagueCanonical ?? sourceLeague)
   return {
     league,
-    leagueTitle: leagueAliasTip(league, sourceLeague, [sourceLeague, match.league_canonical]),
+    leagueTitle: leagueAliasTip(league, sourceLeague, [sourceLeague, leagueCanonical]),
     leaguePending: isLeaguePending(
       sourceLeague,
-      leagueCanonicalForPending(match.league_canonical, match.league_id),
-      match.league_pending_confirm,
+      leagueCanonicalForPending(leagueCanonical, match.league_id),
+      preferPending(match.league_pending_confirm, match.competition?.league_pending_confirm),
     ),
-    home: teamLabel(match.teams.home, league, match.teams_pending_confirm?.home),
-    away: teamLabel(match.teams.away, league, match.teams_pending_confirm?.away),
+    home: teamLabel(
+      match.teams.home,
+      preferCanonical(match.home_team_canonical, match.teams.home_canonical),
+      league,
+      preferPending(match.home_team_pending_confirm, match.teams_pending_confirm?.home),
+    ),
+    away: teamLabel(
+      match.teams.away,
+      preferCanonical(match.away_team_canonical, match.teams.away_canonical),
+      league,
+      preferPending(match.away_team_pending_confirm, match.teams_pending_confirm?.away),
+    ),
   }
 }
