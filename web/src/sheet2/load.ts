@@ -121,7 +121,7 @@ export function mapApiRow(it: Raw): Row {
       kickoff_at: m.kickoff_at ?? null,
       league: m.league ?? null,
       league_canonical: m.league_canonical ?? null,
-      // 赛事待确认：接口给布尔值时以接口为准（有来源名且 league_id 为空才为 true，已挂上 league_id 不标星）。没给时为 undefined，页面按常用名是否升格兜底。
+      // 赛事待确认：接口给布尔值时以接口为准；没给时为 undefined，页面按来源名和规范名兜底。
       league_pending_confirm: typeof m.league_pending_confirm === 'boolean' ? m.league_pending_confirm : undefined,
       home_team_canonical: m.home_team_canonical ?? null,
       away_team_canonical: m.away_team_canonical ?? null,

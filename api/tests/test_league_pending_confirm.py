@@ -1,6 +1,8 @@
-"""赛事待确认标记。有赛事来源名且 league_id 为空返回 true，没有来源名或已挂上 league_id 返回 false。
+"""赛事待确认与球队共用常用名升格规则。
 
-不读待定池，不写正式库。列表和详情走 build_match_obj，数据表走 build_table。
+英超、日职联、韩K联、芬超等已经升格的常用名，league_id 为空也不标星。
+临时名和名册外的赛事名继续标星。赛事编号不能单独取消星号。
+正式库 leagues / league_aliases 并入同一套索引。外部球队定稿缺失不得把已升格的名称改成全员待确认。
 """
 from __future__ import annotations
 
@@ -16,43 +18,60 @@ from app import team_pending as tp  # noqa: E402
 from app.main import build_match_obj  # noqa: E402
 
 
-def test_rule_source_name_and_empty_id():
-    assert lp.is_pending(None, "英超") is True
-    assert lp.is_pending("", "英超") is True
-    assert lp.is_pending("  ", "英超") is True
-    assert lp.is_pending(None, "  西甲  ") is True
+def test_known_league_is_false_without_id():
+    idx = tp.load_league_index()
+    assert idx.authoritative is True
+    # 2026-10-18 竞彩日已有常用名：缺 league_id 也不得标星。
+    for name in ("日职联", "日本J联赛", "韩K联", "韩国K1联赛", "芬超", "芬兰超级联赛", "英超", "德甲", "荷甲"):
+        assert lp.is_pending(None, name, idx) is False
+        assert lp.is_pending("", name, idx) is False
+    assert lp.is_pending(None, "英格兰超级联赛", idx) is False
+    assert lp.is_pending("", "  意大利甲级联赛  ", idx) is False
+    assert lp.is_pending(None, "德国甲级联赛", idx) is False
+    assert lp.is_pending(28, "英格兰超级联赛", idx) is False
 
 
-def test_rule_id_present_is_false():
-    assert lp.is_pending(7, "英超") is False
-    assert lp.is_pending("7", "英超") is False
-    assert lp.is_pending(0, "英超") is False  # 数字 0 不是空编号
+def test_unmapped_league_is_true_and_blank_is_false():
+    idx = tp.load_league_index()
+    assert lp.is_pending(None, "地方业余联赛", idx) is True
+    assert idx.reason("地方业余联赛") == "not_found"
+    assert lp.is_pending(None, None, idx) is False
+    assert lp.is_pending(None, "   ", idx) is False
+    assert lp.is_pending(None, "", idx) is False
 
 
-def test_rule_no_source_name_is_false():
-    assert lp.is_pending(None, None) is False
-    assert lp.is_pending(None, "") is False
-    assert lp.is_pending(None, "   ") is False
-    assert lp.is_pending(7, None) is False
-    assert lp.is_pending(7, "") is False
+def test_explicit_pending_wins_over_league_id():
+    idx = tp.NameIndex({"英超"}, {tp.norm("待定杯"), tp.norm("临时杯")}, [], authoritative=True)
+    assert lp.is_pending(5, "待定杯", idx) is True
+    assert lp.is_pending(None, "待定杯", idx) is True
+    assert lp.is_pending(0, "陌生杯", idx) is True  # 编号不是升格
+    assert lp.is_pending(None, "陌生杯", idx) is True
+    assert lp.is_pending(4, "临时杯", idx, "临时杯") is True
+    assert lp.is_pending(4, "英超", idx) is False
 
 
-def test_from_row_uses_league_id_and_competition_name():
+def test_from_row_uses_common_name_not_empty_id():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    conn.execute("CREATE TABLE t (competition_name TEXT, league_id INTEGER)")
-    conn.execute("INSERT INTO t VALUES (?, ?)", ("英超", None))
-    conn.execute("INSERT INTO t VALUES (?, ?)", ("西甲", 3))
-    conn.execute("INSERT INTO t VALUES (?, ?)", (None, None))
+    conn.execute("CREATE TABLE t (competition_name TEXT, league_id INTEGER, league_canonical TEXT)")
+    conn.execute("INSERT INTO t VALUES (?, ?, ?)", ("英格兰超级联赛", None, None))
+    conn.execute("INSERT INTO t VALUES (?, ?, ?)", ("日职联", None, None))
+    conn.execute("INSERT INTO t VALUES (?, ?, ?)", ("韩K联", None, None))
+    conn.execute("INSERT INTO t VALUES (?, ?, ?)", ("芬超", None, None))
+    conn.execute("INSERT INTO t VALUES (?, ?, ?)", ("地方业余联赛", None, None))
+    conn.execute("INSERT INTO t VALUES (?, ?, ?)", ("地方业余联赛", 9, None))  # 有编号，来源名未升格
+    conn.execute("INSERT INTO t VALUES (?, ?, ?)", ("地方业余联赛", 3, "西甲"))  # 规范名已升格，编号不参与
+    conn.execute("INSERT INTO t VALUES (?, ?, ?)", (None, None, None))
     rows = conn.execute("SELECT * FROM t").fetchall()
-    assert [lp.from_row(r) for r in rows] == [True, False, False]
+    flags = [lp.from_row(r) for r in rows]
+    assert flags == [False, False, False, False, True, True, False, False]
     conn.execute("CREATE TABLE bare (competition_name TEXT)")
     conn.execute("INSERT INTO bare VALUES (?)", ("英超",))
     bare = conn.execute("SELECT * FROM bare").fetchone()
-    assert lp.from_row(bare) is True  # 没有 league_id 列视为编号为空
+    assert lp.from_row(bare) is False
 
 
-def _match_row(conn, *, name, league_id, uid="u1"):
+def _match_row(conn, *, name, league_id, home, away, uid="u1"):
     conn.execute(
         """CREATE TABLE IF NOT EXISTS matches (
             jc_id TEXT, jc_no INTEGER, weekday TEXT, jingcai_date TEXT, scope TEXT,
@@ -65,27 +84,94 @@ def _match_row(conn, *, name, league_id, uid="u1"):
     conn.execute("DELETE FROM matches")
     conn.execute(
         """INSERT INTO matches VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        ("周六001", 1, "六", "2026-10-17", "jingcai", name, "联赛", None,
-         20, "2026-10-17T20:00:00+08:00", 1, "主队", "客队", None, None, league_id),
+        ("周六001", 1, "六", "2026-10-18", "jingcai", name, "联赛", None,
+         20, "2026-10-18T20:00:00+08:00", 1, home, away, None, None, league_id),
     )
     return conn.execute("SELECT * FROM matches").fetchone()
 
 
-def test_list_detail_match_object_carries_flag():
+def test_match_object_stars_only_unestablished_names(tmp_path, monkeypatch):
+    monkeypatch.setenv(tp.ENV_PATHS["final"], str(tmp_path / "missing-final.csv"))
+    monkeypatch.setenv(tp.ENV_PATHS["proposed"], str(tmp_path / "missing-proposed.csv"))
+    monkeypatch.setenv(tp.ENV_PATHS["seed"], str(tmp_path / "missing-seed.csv"))
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    pending = tp.NameIndex(set(), set(), [])
-    named = build_match_obj(_match_row(conn, name="英超", league_id=None), {}, pending)
-    assert named["league_pending_confirm"] is True
-    assert named["competition"]["name"] == "英超"
-    assert named["competition"]["league_pending_confirm"] is True
-    linked = build_match_obj(_match_row(conn, name="英超", league_id=4), {}, pending)
-    assert linked["league_pending_confirm"] is False
-    assert linked["competition"]["league_pending_confirm"] is False
-    blank = build_match_obj(_match_row(conn, name=None, league_id=None), {}, pending)
+    pending = tp.load_pending(conn)
+    premier = build_match_obj(
+        _match_row(conn, name="英格兰超级联赛", league_id=None, home="切尔西", away="杜连斯"),
+        {},
+        pending,
+    )
+    assert premier["teams_pending_confirm"] == {"home": False, "away": True}
+    assert premier["league_pending_confirm"] is False
+    assert premier["competition"]["league_pending_confirm"] is False
+    assert premier["competition"]["name"] == "英格兰超级联赛"
+
+    for short_name in ("日职联", "韩K联", "芬超", "德甲", "荷甲"):
+        promoted = build_match_obj(
+            _match_row(conn, name=short_name, league_id=None, home="切尔西", away="曼联"),
+            {},
+            pending,
+        )
+        assert promoted["league_pending_confirm"] is False
+        assert promoted["competition"]["league_pending_confirm"] is False
+        assert promoted["teams_pending_confirm"] == {"home": False, "away": False}
+
+    unknown = build_match_obj(
+        _match_row(conn, name="地方业余联赛", league_id=None, home="切尔西", away="曼联"),
+        {},
+        pending,
+    )
+    assert unknown["league_pending_confirm"] is True
+    assert unknown["teams_pending_confirm"] == {"home": False, "away": False}
+
+    linked = build_match_obj(
+        _match_row(conn, name="地方业余联赛", league_id=4, home="利兹", away="佛罗伦萨"),
+        {},
+        pending,
+    )
+    assert linked["league_pending_confirm"] is True  # 只有编号，来源名尚未升格
+    assert linked["teams_pending_confirm"] == {"home": False, "away": False}
+
+    blank = build_match_obj(
+        _match_row(conn, name=None, league_id=None, home="切尔西", away="杜连斯"),
+        {},
+        pending,
+    )
     assert blank["league_pending_confirm"] is False
-    assert blank["competition"]["league_pending_confirm"] is False
-    assert blank["competition"]["name"] is None
+
+
+def test_official_library_alias_promotes_without_league_id(tmp_path, monkeypatch):
+    """包内名册没有的名称，正式库规范名或别名已升格时不标星。编号仍然不能单独消星。"""
+    monkeypatch.setenv(tp.ENV_LEAGUE_FINAL, str(tmp_path / "missing-leagues.csv"))
+    monkeypatch.setenv(tp.ENV_PATHS["final"], str(tmp_path / "missing-final.csv"))
+    monkeypatch.setenv(tp.ENV_PATHS["proposed"], str(tmp_path / "missing-proposed.csv"))
+    monkeypatch.setenv(tp.ENV_PATHS["seed"], str(tmp_path / "missing-seed.csv"))
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE leagues (id INTEGER PRIMARY KEY, name_zh_canonical TEXT, pending_confirm TEXT);
+        CREATE TABLE league_aliases (id INTEGER PRIMARY KEY, alias TEXT, league_id INTEGER, source TEXT);
+        """
+    )
+    conn.execute("INSERT INTO leagues (name_zh_canonical, pending_confirm) VALUES ('澳超', 'false')")
+    conn.execute(
+        "INSERT INTO league_aliases (alias, league_id, source) VALUES ('澳大利亚超级联赛', 1, 'manual')"
+    )
+    conn.execute("INSERT INTO leagues (name_zh_canonical, pending_confirm) VALUES ('临时洲际杯', 'true')")
+    conn.execute(
+        "INSERT INTO league_aliases (alias, league_id, source) VALUES ('洲际杯待定译名', 2, 'import_pending_confirm')"
+    )
+    conn.commit()
+    pending = tp.load_pending(conn)
+    league_idx = pending.league
+    assert lp.is_pending(None, "澳超", league_idx) is False
+    assert lp.is_pending(None, "澳大利亚超级联赛", league_idx) is False
+    assert lp.is_pending(12, "临时洲际杯", league_idx) is True
+    assert lp.is_pending(None, "洲际杯待定译名", league_idx) is True
+    assert lp.is_pending(12, "还没有常用名的杯", league_idx) is True
+    assert tp.is_pending(None, None, pending, "切尔西") is False
 
 
 def _table_db():
@@ -105,7 +191,7 @@ def _table_db():
         CREATE TABLE leagues (id INTEGER PRIMARY KEY, name_zh_canonical TEXT);
         CREATE TABLE teams (id INTEGER PRIMARY KEY, name_zh_canonical TEXT);
         CREATE TABLE match_meta (match_id INTEGER, extras_json TEXT);
-        CREATE TABLE predictions (match_id INTEGER, strategy TEXT);
+        CREATE TABLE predictions (match_id INTEGER, strategy TEXT, direction TEXT);
         CREATE TABLE results (match_id INTEGER, home_goals INTEGER, away_goals INTEGER, total_goals INTEGER, wdl TEXT);
         CREATE TABLE odds_asian (
           match_id INTEGER, book TEXT, phase TEXT, handicap REAL,
@@ -118,12 +204,16 @@ def _table_db():
     )
     conn.execute("INSERT INTO leagues (id, name_zh_canonical) VALUES (1, '西班牙甲级联赛')")
     rows = [
-        ("2099-01-02|named-empty", "英超", None),
-        ("2099-01-02|named-linked", "西甲", 1),
-        ("2099-01-02|no-name", None, None),
-        ("2099-01-02|blank-name", "  ", None),
+        ("2099-01-02|premier", "英格兰超级联赛", None, "切尔西", "曼联"),
+        ("2099-01-02|jleague", "日职联", None, "切尔西", "曼联"),
+        ("2099-01-02|kleague", "韩K联", None, "切尔西", "曼联"),
+        ("2099-01-02|veikkausliiga", "芬超", None, "切尔西", "曼联"),
+        ("2099-01-02|unknown", "地方业余联赛", None, "杜连斯", "佛罗伦萨"),
+        ("2099-01-02|linked", "地方业余联赛", 1, "利兹", "勒沃库森"),
+        ("2099-01-02|id-only", "地方业余联赛", 99, "切尔西", "曼联"),
+        ("2099-01-02|blank", None, None, "切尔西", "杜连斯"),
     ]
-    for uid, name, league_id in rows:
+    for uid, name, league_id, home, away in rows:
         conn.execute(
             """INSERT INTO matches (
                  match_uid, scope, jingcai_date, weekday, kickoff_hour, jc_id, jc_no,
@@ -131,13 +221,16 @@ def _table_db():
                  kickoff_at, kickoff_minute_known, league_id
                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (uid, "jingcai", "2099-01-02", "五", 20, None, None,
-             name, "联赛", "主队", "客队", "2099-01-02T20:00:00+08:00", 1, league_id),
+             name, "联赛", home, away, "2099-01-02T20:00:00+08:00", 1, league_id),
         )
     conn.commit()
     return conn
 
 
-def test_table_matches_nested_and_flat():
+def test_table_matches_nested_and_flat(tmp_path, monkeypatch):
+    monkeypatch.setenv(tp.ENV_PATHS["final"], str(tmp_path / "missing-final.csv"))
+    monkeypatch.setenv(tp.ENV_PATHS["proposed"], str(tmp_path / "missing-proposed.csv"))
+    monkeypatch.setenv(tp.ENV_PATHS["seed"], str(tmp_path / "missing-seed.csv"))
     from app import table_matches as tm
 
     conn = _table_db()
@@ -148,24 +241,39 @@ def test_table_matches_nested_and_flat():
     )
     nested = tm.build_table(conn, fmt="nested", **common)
     by_id = {item["match_id"]: item["match"] for item in nested["items"]}
-    assert by_id["2099-01-02|named-empty"]["league"] == "英超"
-    assert by_id["2099-01-02|named-empty"]["league_canonical"] is None
-    assert by_id["2099-01-02|named-empty"]["league_pending_confirm"] is True
-    linked = by_id["2099-01-02|named-linked"]
-    assert linked["league"] == "西甲"
+    premier = by_id["2099-01-02|premier"]
+    assert premier["league"] == "英格兰超级联赛"
+    assert premier["league_pending_confirm"] is False
+    assert premier["home_team_pending_confirm"] is False
+    assert premier["away_team_pending_confirm"] is False
+    for uid in ("2099-01-02|jleague", "2099-01-02|kleague", "2099-01-02|veikkausliiga"):
+        assert by_id[uid]["league_pending_confirm"] is False
+        assert by_id[uid]["home_team_pending_confirm"] is False
+        assert by_id[uid]["away_team_pending_confirm"] is False
+    unknown = by_id["2099-01-02|unknown"]
+    assert unknown["league_pending_confirm"] is True
+    assert unknown["home_team_pending_confirm"] is True
+    assert unknown["away_team_pending_confirm"] is False
+    linked = by_id["2099-01-02|linked"]
     assert linked["league_canonical"] == "西班牙甲级联赛"
     assert linked["league_pending_confirm"] is False
-    assert by_id["2099-01-02|no-name"]["league"] is None
-    assert by_id["2099-01-02|no-name"]["league_pending_confirm"] is False
-    assert by_id["2099-01-02|blank-name"]["league_pending_confirm"] is False
+    id_only = by_id["2099-01-02|id-only"]
+    assert id_only["league_canonical"] is None
+    assert id_only["league_pending_confirm"] is True
+    assert by_id["2099-01-02|blank"]["league_pending_confirm"] is False
+    assert by_id["2099-01-02|blank"]["away_team_pending_confirm"] is True
     for match in by_id.values():
         tm.MatchInfo.model_validate(match)
 
     flat = tm.build_table(conn, fmt="flat", **common)
     flat_by_id = {row["match_id"]: row for row in flat["items"]}
-    assert flat_by_id["2099-01-02|named-empty"]["league_pending_confirm"] is True
-    assert flat_by_id["2099-01-02|named-linked"]["league_pending_confirm"] is False
-    assert flat_by_id["2099-01-02|no-name"]["league_pending_confirm"] is False
+    assert flat_by_id["2099-01-02|premier"]["league_pending_confirm"] is False
+    assert flat_by_id["2099-01-02|jleague"]["league_pending_confirm"] is False
+    assert flat_by_id["2099-01-02|kleague"]["league_pending_confirm"] is False
+    assert flat_by_id["2099-01-02|veikkausliiga"]["league_pending_confirm"] is False
+    assert flat_by_id["2099-01-02|unknown"]["league_pending_confirm"] is True
+    assert flat_by_id["2099-01-02|id-only"]["league_pending_confirm"] is True
+    assert flat_by_id["2099-01-02|blank"]["league_pending_confirm"] is False
     keysets = {tuple(sorted(row.keys())) for row in flat["items"]}
     assert len(keysets) == 1
     conn.close()

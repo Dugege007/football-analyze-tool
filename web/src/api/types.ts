@@ -15,7 +15,7 @@ export interface Match {
     name?: string
     type?: string
     stage?: string
-    /** 有赛事来源名且 league_id 为空时为 true；没有来源名或已挂上 league_id 时为 false。 */
+    /** 常用名尚未升格时为 true。league_id 为空或已填都不单独决定。 */
     league_pending_confirm?: boolean | null
   }
   kickoff_hour?: number
@@ -29,7 +29,8 @@ export interface Match {
   teams_pending_confirm?: { home?: boolean | null; away?: boolean | null } | null
   /**
    * 与 competition.league_pending_confirm 一致。
-   * 有赛事来源名且 league_id 为空时为 true；没有来源名，或已经挂上 league_id 时为 false。
+   * 已升格的常用名不标星；临时名和尚未升格的来源名继续标星。
+   * league_id 不能单独决定这个布尔值。
    * 列表和详情返回 true 时，赛事名旁显示待确认星号。
    * 字段缺席时，已升格的常用名不标星；临时名和还没有常用名的来源名继续标星。
    */
