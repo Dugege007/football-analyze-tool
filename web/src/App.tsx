@@ -62,7 +62,7 @@ function AppShell() {
         }}
       >
         <Text style={{ color: '#fff', fontSize: 16, fontWeight: 600, whiteSpace: 'nowrap' }}>
-          足球公开数据分析
+          比赛分析工具
         </Text>
         <Menu
           theme="dark"
