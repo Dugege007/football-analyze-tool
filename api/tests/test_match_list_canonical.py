@@ -102,40 +102,40 @@ def _build_named_db(path: Path) -> None:
     conn = sqlite3.connect(path)
     conn.executescript(_MATCHES + _SUPPORT + """
         CREATE TABLE teams (
-          id INTEGER PRIMARY KEY, name_zh_canonical TEXT, pending_confirm TEXT
+          id INTEGER PRIMARY KEY, name_zh_canonical TEXT, pending_confirm TEXT, promotion TEXT
         );
         CREATE TABLE team_aliases (
           id INTEGER PRIMARY KEY, alias TEXT, team_id INTEGER, source TEXT
         );
         CREATE TABLE leagues (
-          id INTEGER PRIMARY KEY, name_zh_canonical TEXT, pending_confirm TEXT
+          id INTEGER PRIMARY KEY, name_zh_canonical TEXT, pending_confirm TEXT, promotion TEXT
         );
         CREATE TABLE league_aliases (
           id INTEGER PRIMARY KEY, alias TEXT, league_id INTEGER, source TEXT
         );
     """)
     conn.executemany(
-        "INSERT INTO teams (id, name_zh_canonical, pending_confirm) VALUES (?,?,?)",
+        "INSERT INTO teams (id, name_zh_canonical, pending_confirm, promotion) VALUES (?,?,?,?)",
         [
-            (10, "利兹联", "false"),
-            (11, "兹沃勒", "false"),
-            (12, "库普斯", "false"),
-            (13, "阿拉维斯", "false"),
-            (14, "切尔西", "false"),
-            (15, None, None),
-            (16, "拜仁慕尼黑", "false"),
-            (17, "", None),
-            (18, "   ", None),
+            (10, "利兹联", "false", None),
+            (11, "兹沃勒", "false", None),
+            (12, "库普斯", "false", "human_finalize"),
+            (13, "阿拉维斯", "false", "legacy_high_confidence"),
+            (14, "切尔西", "false", None),
+            (15, None, None, None),
+            (16, "拜仁慕尼黑", "false", "leisutiyu"),
+            (17, "", None, None),
+            (18, "   ", None, None),
         ],
     )
     conn.executemany(
-        "INSERT INTO leagues (id, name_zh_canonical, pending_confirm) VALUES (?,?,?)",
+        "INSERT INTO leagues (id, name_zh_canonical, pending_confirm, promotion) VALUES (?,?,?,?)",
         [
-            (1, "英超", "false"),
-            (2, "西班牙甲级联赛", "false"),
-            (3, "澳超", "false"),
-            (4, "临时洲际杯", "true"),
-            (7, "瑞典超", "false"),
+            (1, "英超", "false", None),
+            (2, "西班牙甲级联赛", "false", None),
+            (3, "澳超", "false", "human_finalize"),
+            (4, "临时洲际杯", "true", None),
+            (7, "瑞典超", "false", None),
         ],
     )
     conn.execute(
