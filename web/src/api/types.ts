@@ -56,9 +56,9 @@ export interface Match {
    * 字段缺席（旧响应）时，空值与未返回等价，待确认判断才改用赛事编号是否存在。
    */
   league_canonical?: string | null
-  /** 主队规范名，与 teams.home_canonical 同值。缺编号或缺规范名时回退来源队名。 */
+  /** 主队显示名，与 teams.home_canonical 同值。缺常用名时回退来源队名，两边都空时回退名称组默认显示。 */
   home_team_canonical?: string | null
-  /** 客队规范名，与 teams.away_canonical 同值。缺编号或缺规范名时回退来源队名。 */
+  /** 客队显示名，与 teams.away_canonical 同值。缺常用名时回退来源队名，两边都空时回退名称组默认显示。 */
   away_team_canonical?: string | null
   /** 与 teams_pending_confirm.home 同值。为 true 时主队旁显示待确认星号。字段缺席且来源名、规范名都空时也标星。 */
   home_team_pending_confirm?: boolean | null

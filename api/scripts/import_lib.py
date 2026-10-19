@@ -404,6 +404,155 @@ def assert_batch_entity_ids(
     return stats
 
 
+# 新建组尚未升格。别名 source 用这个后缀时，名册会标星；与 pending_confirm 列同时写。
+_PENDING_ALIAS_SUFFIX = "_pending_confirm"
+
+
+def _pending_alias_source(source: str) -> str:
+    """新建且尚未升格的组别名来源。已经带后缀时不重复追加。"""
+    text = (source or "import").strip() or "import"
+    if text.endswith(_PENDING_ALIAS_SUFFIX):
+        return text
+    return f"{text}{_PENDING_ALIAS_SUFFIX}"
+
+
+def _entity_canonical(conn: sqlite3.Connection, table: str, entity_id: int) -> str | None:
+    row = conn.execute(
+        f"SELECT name_zh_canonical FROM {table} WHERE id = ?",
+        (entity_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    value = row["name_zh_canonical"] if isinstance(row, sqlite3.Row) else row[0]
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _markers_conflict(left: str | None, right: str | None) -> bool:
+    """歧义只问 alias_pool.detect_ambiguity。两侧原因代码不同则禁止并入。"""
+    from app.alias_pool import detect_ambiguity
+
+    return detect_ambiguity(left) != detect_ambiguity(right)
+
+
+def _can_join_group(
+    conn: sqlite3.Connection,
+    table: str,
+    entity_id: int,
+    *names: str | None,
+) -> bool:
+    """精确命中之后仍要过同一道歧义闸。标记与目标常用名不一致时不并入。"""
+    canonical = _entity_canonical(conn, table, entity_id)
+    for name in names:
+        if name and _markers_conflict(name, canonical):
+            return False
+    return True
+
+
+def _name_already_promoted(kind: str, name: str) -> bool:
+    """名册里已经升格的写法，建组时不再改成待确认。
+
+    名册标了待确认，或不在已升格集合里，都按新组处理。
+    """
+    from app import team_pending as team_pending
+
+    key = team_pending.norm(name)
+    if not key:
+        return False
+    index = team_pending.load_index() if kind == "team" else team_pending.load_league_index()
+    if key in index.pending:
+        return False
+    return key in index.known
+
+
+def _insert_alias(
+    conn: sqlite3.Connection,
+    alias_table: str,
+    id_column: str,
+    alias: str,
+    entity_id: int,
+    source: str,
+) -> None:
+    conn.execute(
+        f"INSERT INTO {alias_table} (alias, {id_column}, source) VALUES (?, ?, ?)",
+        (alias, entity_id, source),
+    )
+
+
+def _remember_alias(
+    conn: sqlite3.Connection,
+    alias_table: str,
+    id_column: str,
+    alias: str | None,
+    entity_id: int,
+    source: str,
+) -> None:
+    """精确并入已有组时补别名。别名已被占用则跳过，不改指向。"""
+    if not alias:
+        return
+    try:
+        conn.execute(
+            f"INSERT OR IGNORE INTO {alias_table} (alias, {id_column}, source) VALUES (?, ?, ?)",
+            (alias, entity_id, source),
+        )
+    except sqlite3.IntegrityError:
+        return
+
+
+def _insert_new_group(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    alias_table: str,
+    id_column: str,
+    kind: str,
+    norm: str,
+    raw: str | None,
+    source: str,
+) -> int | None:
+    """新建一组。默认显示是这条新名。尚未升格时 pending_confirm 为真，别名来源带待确认后缀。
+
+    不写入雷速、人工定稿或旧仓库高置信升格。列不存在时不改表结构，靠别名来源保持星号。
+    别名被其他组占用时删掉刚插入的空组，返回空，不改挂到那一组上。
+    """
+    promoted = _name_already_promoted(kind, norm)
+    alias_source = source if promoted else _pending_alias_source(source)
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    fields = ["name_zh_canonical"]
+    values: list[Any] = [norm]
+    if "pending_confirm" in columns:
+        fields.append("pending_confirm")
+        values.append("false" if promoted else "true")
+    # 尚未升格的新组只记临时。不写雷速、人工定稿或旧仓库高置信。
+    # 名册里已经升格的写法不填 promotion：待确认列为假，按旧表兼容视为已升格。
+    if "promotion" in columns and not promoted:
+        fields.append("promotion")
+        values.append("temporary")
+    placeholders = ", ".join("?" for _ in fields)
+    entity_id: int | None = None
+    try:
+        cursor = conn.execute(
+            f"INSERT INTO {table} ({', '.join(fields)}) VALUES ({placeholders})",
+            values,
+        )
+        entity_id = int(cursor.lastrowid)
+        _insert_alias(conn, alias_table, id_column, norm, entity_id, alias_source)
+        if raw and raw != norm:
+            try:
+                _insert_alias(conn, alias_table, id_column, raw, entity_id, alias_source)
+            except sqlite3.IntegrityError:
+                # 原文别名指向了别的组。组本身保留，不把原文强行并过去。
+                pass
+        return entity_id
+    except sqlite3.IntegrityError:
+        if entity_id is not None:
+            conn.execute(f"DELETE FROM {alias_table} WHERE {id_column} = ?", (entity_id,))
+            conn.execute(f"DELETE FROM {table} WHERE id = ?", (entity_id,))
+        return None
+
+
 def resolve_or_create_team(
     conn: sqlite3.Connection,
     name: str | None,
@@ -411,54 +560,44 @@ def resolve_or_create_team(
     source: str = "import",
     create: bool = True,
 ) -> int | None:
-    """按别名/规范名解析球队；可选新建。冲突或失败返回 None（软失败）。"""
+    """按别名或常用名精确解析球队。可选新建一组。
+
+    新建时默认显示是这条新名。名册里还没有升格的，pending_confirm 为真，
+    不得把这次插入当成常用名升格。歧义标记与目标常用名不一致时不并入。
+    冲突或失败返回 None。
+    """
     if not _has_table(conn, "teams") or not _has_table(conn, "team_aliases"):
         return None
     raw = (str(name).strip() if name is not None else "") or None
     norm = normalize_name(name)
     if not norm:
         return None
-    tid = lookup_entity_id(conn, "team", name)
-    if tid is not None:
-        # 确保规范名也有 alias
-        try:
-            conn.execute(
-                "INSERT OR IGNORE INTO team_aliases (alias, team_id, source) VALUES (?, ?, ?)",
-                (norm, tid, source),
-            )
-            if raw and raw != norm:
-                conn.execute(
-                    "INSERT OR IGNORE INTO team_aliases (alias, team_id, source) VALUES (?, ?, ?)",
-                    (raw, tid, source),
-                )
-        except sqlite3.IntegrityError:
-            pass
-        return tid
+    team_id = lookup_entity_id(conn, "team", name)
+    if team_id is not None:
+        if not _can_join_group(conn, "teams", team_id, norm, raw):
+            return None
+        _remember_alias(conn, "team_aliases", "team_id", norm, team_id, source)
+        if raw and raw != norm:
+            _remember_alias(conn, "team_aliases", "team_id", raw, team_id, source)
+        return team_id
     if not create:
         return None
-    try:
-        cur = conn.execute(
-            "INSERT INTO teams (name_zh_canonical) VALUES (?)", (norm,)
-        )
-        tid = int(cur.lastrowid)
-        conn.execute(
-            "INSERT INTO team_aliases (alias, team_id, source) VALUES (?, ?, ?)",
-            (norm, tid, source),
-        )
-        if raw and raw != norm:
-            try:
-                conn.execute(
-                    "INSERT INTO team_aliases (alias, team_id, source) VALUES (?, ?, ?)",
-                    (raw, tid, source),
-                )
-            except sqlite3.IntegrityError:
-                # UNIQUE(alias) 撞到别的队 → 不强制合并
-                pass
-        return tid
-    except sqlite3.IntegrityError:
-        # 并发/已存在：再查一次
-        tid = _lookup_team_id(conn, norm) or (raw and _lookup_team_id(conn, raw))
-        return tid
+    created = _insert_new_group(
+        conn,
+        table="teams",
+        alias_table="team_aliases",
+        id_column="team_id",
+        kind="team",
+        norm=norm,
+        raw=raw,
+        source=source,
+    )
+    if created is not None:
+        return created
+    existing = _lookup_team_id(conn, norm) or (raw and _lookup_team_id(conn, raw))
+    if existing is not None and _can_join_group(conn, "teams", existing, norm, raw):
+        return existing
+    return None
 
 
 def resolve_or_create_league(
@@ -468,50 +607,44 @@ def resolve_or_create_league(
     source: str = "import",
     create: bool = True,
 ) -> int | None:
-    """按别名/规范名解析联赛；可选新建。冲突或失败返回 None。"""
+    """按别名或常用名精确解析赛事。可选新建一组。
+
+    新建时默认显示是这条新名。名册里还没有升格的，pending_confirm 为真，
+    不得把这次插入当成常用名升格。歧义标记与目标常用名不一致时不并入。
+    冲突或失败返回 None。
+    """
     if not _has_table(conn, "leagues") or not _has_table(conn, "league_aliases"):
         return None
     raw = (str(name).strip() if name is not None else "") or None
     norm = normalize_name(name)
     if not norm:
         return None
-    lid = lookup_entity_id(conn, "competition", name)
-    if lid is not None:
-        try:
-            conn.execute(
-                "INSERT OR IGNORE INTO league_aliases (alias, league_id, source) VALUES (?, ?, ?)",
-                (norm, lid, source),
-            )
-            if raw and raw != norm:
-                conn.execute(
-                    "INSERT OR IGNORE INTO league_aliases (alias, league_id, source) VALUES (?, ?, ?)",
-                    (raw, lid, source),
-                )
-        except sqlite3.IntegrityError:
-            pass
-        return lid
+    league_id = lookup_entity_id(conn, "competition", name)
+    if league_id is not None:
+        if not _can_join_group(conn, "leagues", league_id, norm, raw):
+            return None
+        _remember_alias(conn, "league_aliases", "league_id", norm, league_id, source)
+        if raw and raw != norm:
+            _remember_alias(conn, "league_aliases", "league_id", raw, league_id, source)
+        return league_id
     if not create:
         return None
-    try:
-        cur = conn.execute(
-            "INSERT INTO leagues (name_zh_canonical) VALUES (?)", (norm,)
-        )
-        lid = int(cur.lastrowid)
-        conn.execute(
-            "INSERT INTO league_aliases (alias, league_id, source) VALUES (?, ?, ?)",
-            (norm, lid, source),
-        )
-        if raw and raw != norm:
-            try:
-                conn.execute(
-                    "INSERT INTO league_aliases (alias, league_id, source) VALUES (?, ?, ?)",
-                    (raw, lid, source),
-                )
-            except sqlite3.IntegrityError:
-                pass
-        return lid
-    except sqlite3.IntegrityError:
-        return _lookup_league_id(conn, norm) or (raw and _lookup_league_id(conn, raw))
+    created = _insert_new_group(
+        conn,
+        table="leagues",
+        alias_table="league_aliases",
+        id_column="league_id",
+        kind="competition",
+        norm=norm,
+        raw=raw,
+        source=source,
+    )
+    if created is not None:
+        return created
+    existing = _lookup_league_id(conn, norm) or (raw and _lookup_league_id(conn, raw))
+    if existing is not None and _can_join_group(conn, "leagues", existing, norm, raw):
+        return existing
+    return None
 
 
 def sync_match_entity_ids(
@@ -636,8 +769,9 @@ def insert_match(conn: sqlite3.Connection, item: dict, batch_id: int, *, write_p
     row = conn.execute("SELECT id FROM matches WHERE match_uid = ?", (uid,)).fetchone()
     match_id = int(row["id"])
     sync_kickoff_at(conn, match_id, match)
-    # 身份编号至少做 create=False 查找。月度导入仍用 create=True（查不到才新建），
-    # 避免整批名称都解不出时静默留下空编号。批次级门禁在 import_monthly_json / seed。
+    # 身份编号至少做 create=False 查找。月度导入仍用 create=True（查不到才新建一组）。
+    # 新建组写入这条新名，并标待确认；名册里已经升格的写法不重新打开星号。
+    # 批次级门禁在 import_monthly_json / seed。
     sync_match_entity_ids(
         conn,
         match_id,

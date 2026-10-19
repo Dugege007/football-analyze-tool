@@ -405,7 +405,7 @@ def test_alias_loose_key_without_same_canonical_loose_key_stays_hint(monkeypatch
 
 
 def test_prefix_difference_and_competition_mismatch_stay_in_pool(monkeypatch):
-    """前后缀不同只给候选。来源赛事和球队已有赛事没有交集时也不自动映射。"""
+    """没有同场上下文时，前后缀不同不给猜挂候选。来源赛事和球队已有赛事没有交集时也不自动映射。"""
     monkeypatch.setattr(alias_pool, "now_beijing_text", _Clock())
     conn = _connect()
     salzburg = _team(conn, "萨尔茨堡")
@@ -420,8 +420,11 @@ def test_prefix_difference_and_competition_mismatch_stay_in_pool(monkeypatch):
     assert prefix["action"] == "pooled"
     assert prefix["status"] == "pending"
     assert prefix["manual_reason"] is None
-    assert prefix["candidate_id"] == salzburg
-    assert prefix["candidate_basis"] == "affix"
+    # 没有同场上下文时，整词前缀不得留下猜挂，也不得写入别名。
+    assert prefix["candidate_id"] is None
+    assert prefix["candidate_basis"] is None
+    assert prefix["standard_id"] is None
+    assert conn.execute("SELECT 1 FROM team_aliases WHERE alias = 'FC 萨尔茨堡'").fetchone() is None
     assert translated["action"] == "pooled"
     assert translated["candidate_id"] is None
     mismatch = alias_pool.pool_observe(
