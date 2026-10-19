@@ -21,14 +21,25 @@ live_capture 暂存行的 match_uid 同一格式。幂等：INSERT ... ON CONFLI
   查到用规范名 + id，查不到保留 5DF 中文名、id 置 NULL，并列入未匹配清单。
   新写入的一批里，若某个竞彩日有名称但身份编号为空的槽位超过 5%，向 stderr 和日志告警，不静默放过。
 
-安全：拒绝写现网 data/app.db；要求 DUAL_WRITE_ODDS_ASIAN 关；写前 sqlite backup 整库备份；
+安全：未合并时拒绝写现网 data/app.db；合并后（见下方 FORMAL_MERGED）允许写正式库。
+要求 DUAL_WRITE_ODDS_ASIAN 关；写前 sqlite backup 整库备份；
 每次写入出 manifest（插入的 match id），可 rollback（只删本脚本建的、且没有挂任何子表数据的行）。
+
+FORMAL_MERGED（研究副本已并入正式库）任一成立即为真：
+  - 环境变量 FORMAL_MERGED=1
+  - 权威：Path(APP_DB_PATH).resolve().parent / FORMAL_MERGED.flag
+    （与正式库 app.db 同目录；APP_DB_PATH 指向现网库时以这一处为准）
+  - 兼容：MA_API_ROOT/data/FORMAL_MERGED.flag
+    （api/data 软链到正式数据目录时与上一处是同一文件）
+两处 flag 都没有且未设环境变量时，仍拒绝写正式库。
+竞彩场次行只走本脚本 apply / ensure-daemon，不要开 LIVE_CAPTURE_CREATE_MATCHES。
 
 用法：
   build_jc_match_rows.py dry-run [--since 2026-10-08]
   build_jc_match_rows.py apply   [--since 2026-10-08]
   build_jc_match_rows.py daemon                 # 常驻：每 10 分钟（:03 :13 … :53）跑一次 apply
   build_jc_match_rows.py ensure-daemon          # 没在跑就后台拉起（幂等）
+  build_jc_match_rows.py ensure-watch           # cron：没在跑或心跳过期则拉起
   build_jc_match_rows.py stop                   # 停常驻（SIGTERM）
   build_jc_match_rows.py rollback --manifest PATH [--apply]
 """
@@ -63,9 +74,46 @@ def _rp_env(name, default, base=None):
 _MA_API_ROOT = _rp_env('MA_API_ROOT', _REPO_ROOT / 'api')
 _ODDS_DATA_DIR = _rp_env('ODDS_DATA_DIR', _REPO_ROOT / 'data' / 'odds-data')
 _APP_DB = _rp_env('APP_DB_PATH', _MA_API_ROOT / 'data' / 'app.db', _MA_API_ROOT)
-# 2026-10-15 研究副本并入正式库：存在 data/FORMAL_MERGED.flag（或环境变量 FORMAL_MERGED=1）= 合并后模式，
-# 「副本写入目标」默认就是正式库 APP_DB_PATH，且允许写正式库；显式设置 V2D3_DB_PATH 仍优先。删除 flag 即回到旧语义。
-_FORMAL_MERGED = _rp_os.environ.get('FORMAL_MERGED', '').strip() == '1' or (_MA_API_ROOT / 'data' / 'FORMAL_MERGED.flag').exists()
+# 2026-10-15 研究副本并入正式库。合并标记（任一成立）：
+#   1. 环境变量 FORMAL_MERGED=1
+#   2. 权威：正式库同目录 Path(APP_DB_PATH).resolve().parent / FORMAL_MERGED.flag
+#      APP_DB_PATH 指向现网/正式 app.db 时以这一处为准（flag 与库放在一起，
+#      例如 match-analysis-api/data/FORMAL_MERGED.flag）。
+#   3. 兼容：_MA_API_ROOT/data/FORMAL_MERGED.flag
+#      api/data 软链到正式数据目录时与 2 是同一文件。fat-run-main 若没有这条软链、
+#      且 MA_API_ROOT 未指向 match-analysis-api，只查 3 会漏检，guard 会拒绝写正式库。
+# 合并后「副本写入目标」默认就是正式库 APP_DB_PATH，且允许写正式库；显式 V2D3_DB_PATH 仍优先。
+# 删除 flag 且不设环境变量即回到旧语义。
+_FORMAL_FLAG_NAME = 'FORMAL_MERGED.flag'
+
+
+def _formal_flag_beside(db):
+    """正式库旁的合并标记路径（权威位置）。"""
+    return _RpPath(db).resolve().parent / _FORMAL_FLAG_NAME
+
+
+def _formal_flag_under_ma():
+    """MA_API_ROOT/data 下的合并标记（api/data 软链到正式目录时与库旁是同一文件）。"""
+    return _MA_API_ROOT / 'data' / _FORMAL_FLAG_NAME
+
+
+def _is_file(path) -> bool:
+    try:
+        return _RpPath(path).is_file()
+    except OSError:
+        return False
+
+
+def _detect_formal_merged() -> bool:
+    """是否已并入正式库。库旁 flag 优先于 MA_API_ROOT/data。"""
+    if _rp_os.environ.get('FORMAL_MERGED', '').strip() == '1':
+        return True
+    if _is_file(_formal_flag_beside(_APP_DB)):
+        return True
+    return _is_file(_formal_flag_under_ma())
+
+
+_FORMAL_MERGED = _detect_formal_merged()
 _V2D3_DB = (_APP_DB if (_FORMAL_MERGED and not _rp_os.environ.get('V2D3_DB_PATH', '').strip())
             else _rp_env('V2D3_DB_PATH', _MA_API_ROOT / 'data' / 'v2d3' / 'app.db', _MA_API_ROOT))
 _BACKUP_DIR = _rp_env('BACKUP_DIR', _REPO_ROOT / 'backups' / 'football')
@@ -252,10 +300,30 @@ def build_rows(conn, cands: list[dict]) -> dict:
             "unmatched_team": unmatched_team, "unmatched_league": unmatched_league}
 
 
+def _formal_write_allowed(db: Path) -> bool:
+    """正式库可写：目标就是 APP_DB_PATH，且已合并。
+
+    库旁 FORMAL_MERGED.flag 在 guard 时再认一次，避免只靠导入时的 MA_API_ROOT/data 漏检。
+    flag 不在时仍拒绝写正式库，防止误写现网。
+    """
+    if db != PROD_DB:
+        return False
+    return bool(_FORMAL_MERGED) or _is_file(_formal_flag_beside(db))
+
+
 def guard(db: Path) -> Path:
     db = db.resolve()
-    if not (_FORMAL_MERGED and db == PROD_DB) and (db == PROD_DB or db.name != "app.db" or db.parent.name != "v2d3"):
-        raise SystemExit(f"拒绝写入 {db}：只允许 v2d3 研究副本")
+    formal_ok = _formal_write_allowed(db)
+    replica_ok = db != PROD_DB and db.name == "app.db" and db.parent.name == "v2d3"
+    if not (formal_ok or replica_ok):
+        extra = ""
+        if db == PROD_DB:
+            extra = (
+                "（未检测到 FORMAL_MERGED：正式库同目录 "
+                f"{_formal_flag_beside(PROD_DB)} 与 {_formal_flag_under_ma()} 均不存在，"
+                "且未设 FORMAL_MERGED=1）"
+            )
+        raise SystemExit(f"拒绝写入 {db}：只允许 v2d3 研究副本{extra}")
     if os.environ.get("DUAL_WRITE_ODDS_ASIAN", "0").strip().lower() in ("1", "true", "yes", "on"):
         raise SystemExit("DUAL_WRITE_ODDS_ASIAN 被打开；本脚本要求保持关闭")
     return db
@@ -348,7 +416,8 @@ def run(since: str, apply: bool, db: Path = REPLICA_DB, quiet=False) -> dict:
         mf.write_text(json.dumps({"at": rep["at"], "db": str(db), "backup": rep["backup"], "inserted": inserted},
                                  ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         rep["manifest"] = str(mf)
-    log("run", mode=rep["mode"], candidates=rep["candidates"],
+    log("run", mode=rep["mode"], db=str(db), formal_merged=bool(_FORMAL_MERGED),
+        candidates=rep["candidates"],
         new=rep.get("inserted", rep.get("would_insert")), existing=rep["existing_skipped"],
         by_jingcai_date=rep["by_jingcai_date"], drift=len(rep["drift"]), problems=len(problems),
         unmatched_team=len(rep["unmatched_team"]), unmatched_league=len(rep["unmatched_league"]),
@@ -394,7 +463,68 @@ def rollback(manifest: Path, apply: bool) -> dict:
 
 PID = STATE_DIR / "daemon.pid"
 LOCK = STATE_DIR / "daemon.lock"
+HEARTBEAT = STATE_DIR / "heartbeat.json"
 RUN_MINUTES = {3, 13, 23, 33, 43, 53}  # 每 10 分钟；10:53 正好在采集 10:50 强制刷新清单之后、11:10 之前
+# 正常心跳约每 20 秒刷新一次；apply 期间不刷新。超过该秒数且仍占锁视为卡死。
+DEFAULT_HEARTBEAT_STALE_SEC = 1200
+
+
+def _touch_heartbeat(**extra) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "ts": iso(now_cn()),
+        "pid": os.getpid(),
+        "db": str(REPLICA_DB),
+        "formal_merged": bool(_FORMAL_MERGED),
+    }
+    payload.update(extra)
+    HEARTBEAT.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def heartbeat_age_sec(path: Path, now: datetime | None = None) -> float | None:
+    """心跳距 now 的秒数。文件缺失或无法解析时返回 None（视为过期）。"""
+    now = now or now_cn()
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        ts = datetime.fromisoformat(data["ts"])
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=TZ)
+        return (now.astimezone(TZ) - ts.astimezone(TZ)).total_seconds()
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def watch_decision(lock_held: bool, age_sec: float | None, stale_sec: float) -> str:
+    """看门狗动作：healthy 在跑且心跳新鲜；restart 占锁但心跳过期；start 没在跑。"""
+    stale = age_sec is None or age_sec > stale_sec
+    if lock_held and not stale:
+        return "healthy"
+    if lock_held and stale:
+        return "restart"
+    return "start"
+
+
+def _daemon_lock_held() -> bool:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    lk = open(LOCK, "a+")
+    try:
+        fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    else:
+        fcntl.flock(lk, fcntl.LOCK_UN)
+        return False
+    finally:
+        lk.close()
+
+
+def _stale_sec(explicit: float | None) -> float:
+    if explicit is not None:
+        return float(explicit)
+    raw = os.environ.get("JC_MATCH_ROWS_HEARTBEAT_STALE_SEC", "").strip()
+    if not raw:
+        return float(DEFAULT_HEARTBEAT_STALE_SEC)
+    return float(raw)
 
 
 def daemon(since: str) -> None:
@@ -408,24 +538,29 @@ def daemon(since: str) -> None:
     PID.write_text(str(os.getpid()))
     stop = {"v": False}
     signal.signal(signal.SIGTERM, lambda *a: stop.__setitem__("v", True))
-    log("daemon_start", pid=os.getpid(), run_minutes=sorted(RUN_MINUTES), since=since)
+    log("daemon_start", pid=os.getpid(), run_minutes=sorted(RUN_MINUTES), since=since,
+        db=str(REPLICA_DB), formal_merged=bool(_FORMAL_MERGED))
+    _touch_heartbeat(phase="daemon_start")
     last = None
     first = True
     while not stop["v"]:
         n = now_cn()
         key = n.strftime("%Y%m%d%H%M")
+        ran = False
         if first or (n.minute in RUN_MINUTES and key != last):
             first = False
             last = key
+            ran = True
             try:
                 run(since, apply=True)
             except SystemExit as e:
-                log("run_refused", error=str(e))
+                log("run_refused", error=str(e), db=str(REPLICA_DB), formal_merged=bool(_FORMAL_MERGED))
             except Exception as e:  # noqa: BLE001
-                log("run_error", error=str(e)[:500])
-            (STATE_DIR / "heartbeat.json").write_text(json.dumps({"ts": iso(now_cn()), "pid": os.getpid()}) + "\n")
+                log("run_error", error=str(e)[:500], db=str(REPLICA_DB), formal_merged=bool(_FORMAL_MERGED))
+        # 空闲也刷新心跳。apply 期间不写，卡死在写入时心跳会变旧，看门狗据此重启。
+        _touch_heartbeat(phase="ran" if ran else "idle")
         time.sleep(20)
-    log("daemon_stop", pid=os.getpid())
+    log("daemon_stop", pid=os.getpid(), db=str(REPLICA_DB), formal_merged=bool(_FORMAL_MERGED))
 
 
 def ensure_daemon(since: str) -> str:
@@ -441,6 +576,57 @@ def ensure_daemon(since: str) -> str:
     p = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "daemon", "--since", since],
                          stdout=out, stderr=out, stdin=subprocess.DEVNULL, start_new_session=True, cwd=str(ROOT))
     return f"started pid={p.pid}"
+
+
+def _signal_pid(sig: int) -> str:
+    if not PID.exists():
+        return "no pid file"
+    try:
+        pid = int(PID.read_text().strip())
+    except ValueError:
+        return "bad pid file"
+    try:
+        os.kill(pid, sig)
+        return f"sent {sig} to {pid}"
+    except ProcessLookupError:
+        return f"pid {pid} not running"
+
+
+def _wait_lock_clear(timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _daemon_lock_held():
+            return True
+        time.sleep(0.5)
+    return not _daemon_lock_held()
+
+
+def ensure_watch(since: str, stale_sec: float | None = None) -> str:
+    """cron 看门狗：进程不在则 ensure-daemon；占锁但心跳过期则先停再拉起。
+
+    心跳默认 1200 秒（JC_MATCH_ROWS_HEARTBEAT_STALE_SEC）。正常循环约 20 秒写一次，
+    apply 期间不写，阈值留出长于一轮 apply 的余量。进程已退出时锁会放开，下一轮 cron 立刻拉起，
+    不必等心跳过期。
+    """
+    limit = _stale_sec(stale_sec)
+    age = heartbeat_age_sec(HEARTBEAT)
+    held = _daemon_lock_held()
+    decision = watch_decision(held, age, limit)
+    ctx = f"db={REPLICA_DB} formal_merged={int(bool(_FORMAL_MERGED))}"
+    if decision == "healthy":
+        pid = PID.read_text().strip() if PID.exists() else "?"
+        return f"healthy pid={pid} heartbeat_age_s={int(age)} {ctx}"
+    if decision == "restart":
+        stopped = stop_daemon()
+        cleared = _wait_lock_clear(25)
+        killed = ""
+        if not cleared:
+            killed = _signal_pid(signal.SIGKILL)
+            cleared = _wait_lock_clear(5)
+        log("ensure_watch_restart", db=str(REPLICA_DB), formal_merged=bool(_FORMAL_MERGED),
+            heartbeat_age_s=age, stop=stopped, sigkill=killed, lock_cleared=cleared)
+    started = ensure_daemon(since)
+    return f"{decision} {started} {ctx}"
 
 
 def stop_daemon() -> str:
@@ -462,6 +648,10 @@ def main(argv=None) -> int:
         s.add_argument("--since", default=DEFAULT_SINCE)
         if n in ("dry-run", "apply"):
             s.add_argument("--out", help="把报告 JSON 另存到此路径")
+    w = sub.add_parser("ensure-watch", help="cron 看门狗：没在跑或心跳过期则拉起 ensure-daemon")
+    w.add_argument("--since", default=DEFAULT_SINCE)
+    w.add_argument("--stale-sec", type=float, default=None,
+                   help="心跳超过该秒数且仍占锁则重启；默认 1200 或环境变量 JC_MATCH_ROWS_HEARTBEAT_STALE_SEC")
     sub.add_parser("stop")
     r = sub.add_parser("rollback")
     r.add_argument("--manifest", required=True)
@@ -477,6 +667,8 @@ def main(argv=None) -> int:
         daemon(a.since)
     elif a.cmd == "ensure-daemon":
         print(ensure_daemon(a.since))
+    elif a.cmd == "ensure-watch":
+        print(ensure_watch(a.since, a.stale_sec))
     elif a.cmd == "stop":
         print(stop_daemon())
     elif a.cmd == "rollback":
