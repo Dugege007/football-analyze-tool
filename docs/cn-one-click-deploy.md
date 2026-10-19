@@ -5,7 +5,7 @@
 ## 决定
 
 - 实现语言是 Node.js。Windows 入口仍是双击 `deploy.bat`。
-- 只允许主机 `124.221.56.38`。`81.70.76.42` 和个人站目录会被拒绝。
+- 只允许主机 `124.221.56.38`。
 - 静态站点、接口代码、正式库各保留最近 5 份备份，都放在 `/opt/football-data/backups/` 下（`wwwroot/`、`app/`、`app_latest.db.<时间>`）。这个目录已经在允许写入的前缀里。
 - 不读取、不上传、不覆盖 `/opt/football-data/env`。
 - 只重启现有单元 `football-analyze-api`，不修改其中的 User。
@@ -59,8 +59,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1 --dry-run
 - 接口：停服务，把 `/opt/football-data/backups/app/<时间>/` 按相对路径拷回 `/opt/football-analyze-tool/`，再启动。
 - 正式库：停服务，用备份文件原子换回 `/opt/football-data/app_latest.db`，属主 `football`、权限 `600`，删掉残留的 `-wal`/`-shm` 后再启动。
 
-个人站 `https://duhongbo.com` 不在本脚本的操作范围内。发布后可以用浏览器看一眼它是否仍然打开，只看，不要对那台机器做任何修改。
-
 ## 免硬刷
 
 Vite 的 `index.html` 引用 `/assets/index-<哈希>.js` 这类带内容哈希的文件。入口文档若被浏览器按启发式规则或很长的 `max-age` 留住，重新打开页面仍会请求旧哈希，看起来就像必须硬刷新。
@@ -79,7 +77,7 @@ Vite 的 `index.html` 引用 `/assets/index-<哈希>.js` 这类带内容哈希�
 - `/etc/nginx/sites-available`
 - `/usr/local/nginx/conf/vhost`
 
-含有网站根的 `server` 块如果已经 `include` 了 `extension/124.221.56.38/*.conf` 或上述片段路径，就只覆盖片段文件。否则先把站点配置备份到 `/opt/football-data/backups/nginx/<时间>/`，再插入带 `FAT_STATIC_CACHE_BEGIN` 的 include。`nginx -t` 或重载失败会还原片段和站点配置，不会用错误配置重载。候选配置里一旦出现个人站标记，脚本直接失败，不写入。
+含有网站根的 `server` 块如果已经 `include` 了 `extension/124.221.56.38/*.conf` 或上述片段路径，就只覆盖片段文件。否则先把站点配置备份到 `/opt/football-data/backups/nginx/<时间>/`，再插入带 `FAT_STATIC_CACHE_BEGIN` 的 include。`nginx -t` 或重载失败会还原片段和站点配置，不会用错误配置重载。
 
 找不到可合并的站点配置时，静态文件仍会盖上，Nginx 会重载，但发布失败。请手工把片段放到上面的路径，并在大陆站含有网站根的 `server` 块内加入：
 
