@@ -7,7 +7,8 @@
 分析师已经确定的规则如下。名称组的七步顺序写在 docs/schema/v2_0-name-resolve-group-rules.md。
 本模块不另做一套并组：它实现规范化、精确命中、歧义闸，以及并入已有组时写入别名和空着的身份编号。
 同场上的其他证据、赛事正向一致、库外资料，都还没有单独的自动并组动作；门槛未写明之前不能靠它们自动并组。
-外部来源只写入别名，不改常用名列。无法唯一确定时进入待定池，不新建球队或赛事。
+去掉整词前缀或结尾的「队」只在已有同场上下文时留下候选，而且仍然不能自动并组。没有同场上下文时，不记这份额外候选。
+外部来源只写入别名，不改常用名列。无法唯一确定时进入待定池，不新建球队或赛事。本模块不抓取网页或百科。
 等级 1 是规范化键与已知别名或标准名完全相等，会自动生效，并且可以撤销。
 等级 2 在两种情况下自动生效。一种是宽松键与唯一标准名完全相等。另一种是宽松键与已有别名的宽松键相同，并且这些别名只指向同一个标准名。
 等级 2 是本模块原有行为，不是七步里新增的门槛。别名指向多个标准名，或者来源赛事与该球队已有赛事没有交集时，仍然进入待定池。
@@ -600,9 +601,19 @@ def _analyze(
 
     affix = _affix_candidate(standards, loosened)
     if affix is not None:
+        # 歧义只走 detect_ambiguity。任一侧带标记，都不把前后缀剥离记成猜挂。
+        marker = detect_ambiguity(raw_name) or detect_ambiguity(affix.get("display_name"))
+        if marker is not None:
+            return _manual_decision(marker, None)
+        if not _same_match_context(context):
+            sentence = (
+                f"去掉常见前缀或结尾的「队」之后与标准名「{affix['standard_name']}」相同。"
+                "没有同场上下文，弱模糊不能并组，也不记下猜挂候选。"
+            )
+            return _manual_decision(None, None, reason_text=sentence, ambiguous=False)
         sentence = (
             f"去掉常见前缀或结尾的「队」之后与标准名「{affix['standard_name']}」相同。"
-            "这只是候选提示，前后缀不同不能自动映射。"
+            "同场已有对手映射和开赛时刻，这仍只是候选提示，前后缀不同不能自动映射。"
         )
         return _manual_decision(None, affix, reason_text=sentence, basis=BASIS_AFFIX, ambiguous=False)
     return _manual_decision(None, None, ambiguous=False)
@@ -1067,8 +1078,25 @@ def _competition_conflicts(conn: sqlite3.Connection, team_id: int, competition_n
     return norm_key(competition_name) not in existing
 
 
+def _same_match_context(context: dict | None) -> bool:
+    """同场上下文要同时具备开赛时刻，以及对手已经映射。
+
+    只有赛事名、竞彩日或国家，不算同场多证据。比分不进入上下文，因此不能单独充数。
+    缺少这份上下文时，整词前后缀剥离不得留下猜挂候选，也不得并组。
+    """
+    if not context:
+        return False
+    kickoff = context.get("kickoff_at")
+    if kickoff is None or str(kickoff).strip() == "":
+        return False
+    return bool(context.get("opponent_mapped"))
+
+
 def _affix_candidate(standards: list[dict], loosened: str) -> dict | None:
-    """前后缀不同只生成候选，不自动映射。去掉的只限于常见俱乐部前缀和结尾的「队」。"""
+    """前后缀不同只生成候选，不自动映射。去掉的只限于常见俱乐部前缀和结尾的「队」。
+
+    调用方在没有同场上下文时不得采用这份候选。结尾的 FC、CF 等俱乐部后缀不在这里剥离。
+    """
     variants: list[str] = []
     for prefix in _AFFIX_PREFIXES:
         if loosened.startswith(prefix) and len(loosened) > len(prefix) + 1:
