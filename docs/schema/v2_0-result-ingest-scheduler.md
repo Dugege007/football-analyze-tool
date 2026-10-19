@@ -26,12 +26,20 @@
 
 ## 运行
 
+机上例行拉起请使用仓库内看门狗 `ops/ensure_result_ingest.sh`。定时任务写法见该脚本头部注释。本变更合并进主分支之后，再把机上例行任务从仓库外的 `football-analyze-tool-ops/result-ingest-watchdog/ensure_result_ingest.sh` 改到这一条路径；仓库外那份只保留作过渡。
+
+密钥与数据库路径不要写入本仓库。看门狗读取环境变量 `RESULT_INGEST_ENV` 指向的文件；若该变量未设置，则读取本机过渡文件 `/workspace/football-analyze-tool-ops/result-ingest-watchdog/.env.result_ingest`。键名示例（只有空占位，没有真实密钥）见 `ops/.env.result_ingest.example`。脚本会取消环境变量 `LIVE_CAPTURE_CREATE_MATCHES`，也不打开双写。
+
+输出目录里的 `daemon.lock` 未被占用时，看门狗只拉起一份常驻进程，安静成功时退出码为 0。该锁仍被占用，且心跳文件 `heartbeat.json` 的修改时间距今超过 600 秒，或心跳文件不存在时，向标准输出打印 `HEARTBEAT_STALE` 并退出 2；此时不结束已有进程，也不再拉起第二份。需要启动但缺少 `FIVEDOLLAR_FOOTBALL_API_KEY` 时，打印 `START_FAILED_NO_KEY` 并退出 3。默认输出目录是 `/workspace/odds-data/backfill/result-ingest-2026-10-14`，默认正式库是 `/workspace/match-analysis-api/data/app.db`。合并标志 `FORMAL_MERGED.flag` 与这份正式库放在同一目录；文件不存在时，看门狗会创建空文件。
+
+手工启动（与看门狗拉起的命令相同）仍然是：
+
 ```
 nohup setsid /workspace/odds-data/.venv-dc/bin/python scripts/live/result_ingest.py daemon \
   --out-dir /workspace/odds-data/backfill/result-ingest-2026-10-14 > …/nohup.out 2>&1 &
 ```
 
-- 单实例锁是输出目录里的 `daemon.lock`（`flock`），第二份启动会直接退出。
+- 单实例锁是输出目录里的 `daemon.lock`（文件锁 `flock`），第二份启动会直接退出。
 - 输出目录里有 `daemon.log`（每轮日志）、`heartbeat.json`、`state.json`（每场上次拉取时刻）、`call_log.tsv`（每次接口请求和剩余额度）、`csl_raw/`、`sporttery_raw/`，以及每 30 分钟重写一次的 `daily_summary.md`。
 - `backfill` 子命令只用本地已刷新的缓存补录，不受 6 小时截止限制，用于一次性补缺口。
 
