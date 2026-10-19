@@ -92,6 +92,43 @@ test('没有规范名时数据表回到来源文本，已升格的常用名不�
   assert.equal(row.awayPending, true)
 })
 
+test('数据表在常用名与来源名相同时悬停接口同组别名', () => {
+  const labels = labelsForTableMatch({
+    league: '法乙',
+    league_canonical: '法乙',
+    home_team: '红星',
+    away_team: '格勒诺布尔',
+    home_team_canonical: '红星',
+    away_team_canonical: '格勒诺布尔',
+    home_team_aliases: ['红星FC 93', '圣旺红星', 'Red Star', '红星'],
+    away_team_aliases: [],
+    home_team_pending_confirm: false,
+    away_team_pending_confirm: false,
+  })
+  assert.equal(labels.home.text, '红星')
+  assert.equal(labels.home.pending, false)
+  assert.equal(labels.home.tip, '红星FC 93\n圣旺红星\nRed Star')
+  assert.equal(labels.away.tip, undefined)
+  assert.equal(String(labels.home.tip).includes('别名'), false)
+
+  const row = adapter.normalizeTableRow(adapter.fromBackendRow(backendRow({
+    league_canonical: '法乙',
+    home_team: '红星',
+    away_team: '格勒诺布尔',
+    home_team_canonical: '红星',
+    away_team_canonical: '格勒诺布尔',
+    home_team_aliases: ['红星FC 93', '圣旺红星'],
+    away_team_aliases: ['Grenoble Foot 38'],
+    home_team_pending_confirm: false,
+    away_team_pending_confirm: false,
+  })))
+  assert.equal(row.home, '红星')
+  assert.equal(row.homePending, false)
+  assert.equal(row.homeAliasTip, '红星FC 93\n圣旺红星')
+  assert.equal(row.away, '格勒诺布尔')
+  assert.equal(row.awayAliasTip, 'Grenoble Foot 38')
+})
+
 test('数据表字段直接交给与赛程相同的名称函数', () => {
   const labels = labelsForTableMatch({
     league: '巴西甲级联赛',

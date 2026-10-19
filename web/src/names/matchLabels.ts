@@ -5,6 +5,7 @@
  * 赛程接口在没有常用名时已把该字段回退成来源文本，两边都空时再回退成名称组里的默认显示。
  * 数据表在来源文本还有字时把规范名留空，页面再回到来源文本；两边都空时接口写入组内默认显示。
  * 悬停别名赛事走 leagueAliasTip，队名走 teamAliasTip，都是一行一个、不加前缀。
+ * 队名悬停合并接口带回的同组别名。
  * 球队待确认走 isTeamPending，优先用接口布尔值。字段缺席时，双方名都空则标星，否则只对已知临时名标星。
  * 赛事待确认走 isLeaguePending，优先用 league_pending_confirm。已升格的常用名不标星；临时名、还没有常用名的来源名，以及双方名都空时标星。
  */
@@ -61,11 +62,12 @@ function teamLabel(
   leagueSource: string | null | undefined,
   leagueCanonical: string | null | undefined,
   apiPending: boolean | null | undefined,
+  apiAliases?: readonly unknown[] | null,
 ): TeamLabel {
   const leagueDisplay = shownLeague(leagueSource, leagueCanonical)
   return {
     text: shownTeam(name, canonical, leagueSource, leagueCanonical),
-    tip: teamAliasTip(name, canonical, leagueDisplay),
+    tip: teamAliasTip(name, canonical, leagueDisplay, apiAliases),
     pending: isTeamPending(name, canonical, apiPending),
   }
 }
@@ -89,6 +91,7 @@ export function matchLabels(match: Match): MatchLabels {
       sourceLeague,
       leagueCanonical,
       preferPending(match.home_team_pending_confirm, match.teams_pending_confirm?.home),
+      match.home_team_aliases,
     ),
     away: teamLabel(
       match.teams.away,
@@ -96,6 +99,7 @@ export function matchLabels(match: Match): MatchLabels {
       sourceLeague,
       leagueCanonical,
       preferPending(match.away_team_pending_confirm, match.teams_pending_confirm?.away),
+      match.away_team_aliases,
     ),
   }
 }
@@ -110,6 +114,8 @@ export interface TableNameFields {
   away_team?: string | null
   home_team_canonical?: string | null
   away_team_canonical?: string | null
+  home_team_aliases?: readonly string[] | null
+  away_team_aliases?: readonly string[] | null
   home_team_pending_confirm?: boolean | null
   away_team_pending_confirm?: boolean | null
 }
@@ -133,6 +139,8 @@ export function labelsForTableMatch(fields: TableNameFields): MatchLabels {
     },
     home_team_canonical: fields.home_team_canonical,
     away_team_canonical: fields.away_team_canonical,
+    home_team_aliases: fields.home_team_aliases,
+    away_team_aliases: fields.away_team_aliases,
     home_team_pending_confirm: fields.home_team_pending_confirm,
     away_team_pending_confirm: fields.away_team_pending_confirm,
   })

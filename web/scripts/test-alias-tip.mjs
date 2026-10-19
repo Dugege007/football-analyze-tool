@@ -66,6 +66,23 @@ test('球队待确认字段缺席时，空名标星，已知临时名标星', ()
   assert.equal(teams.isTeamPending('杜连斯', null, false), false)
 })
 
+test('接口同组别名进入悬停，格子上的名称不重复列出', () => {
+  assert.equal(
+    teams.teamAliasTip('红星', '红星', null, ['红星FC 93', '圣旺红星', 'Red Star', 'Red Star FC 93', 'Red Star FC', '红星']),
+    '红星FC 93\n圣旺红星\nRed Star\nRed Star FC 93\nRed Star FC',
+  )
+  assert.equal(teams.teamAliasTip('红星', '红星', '法乙', ['红星', '  红星  ']), undefined)
+  assert.equal(
+    teams.teamAliasTip('曼城', '曼城', null, ['Manchester City']),
+    'Manchester City\n曼彻斯特城',
+  )
+  assert.equal(
+    teams.teamAliasTip('全北现代', null, null, ['Jeonbuk', '全北汽车']),
+    'Jeonbuk\n全北汽车',
+  )
+  assert.equal(String(teams.teamAliasTip('红星', '红星', null, ['红星FC 93', '圣旺红星'])).includes('别名'), false)
+})
+
 test('队名没有别名时不返回空悬停', () => {
   assert.equal(teams.teamAliasTip('鹿岛鹿角'), undefined)
   assert.equal(teams.teamAliasTip('曼彻斯特城', '曼彻斯特城'), undefined)

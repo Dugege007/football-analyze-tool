@@ -286,6 +286,8 @@ export interface ApiTableMatch {
   league_pending_confirm?: boolean | null
   home_team_canonical?: string | null
   away_team_canonical?: string | null
+  home_team_aliases?: readonly string[] | null
+  away_team_aliases?: readonly string[] | null
   home_team_pending_confirm?: boolean | null
   away_team_pending_confirm?: boolean | null
 }
@@ -525,6 +527,8 @@ export interface BeTableRow {
     away_team: string | null
     home_team_canonical?: string | null
     away_team_canonical?: string | null
+    home_team_aliases?: readonly string[] | null
+    away_team_aliases?: readonly string[] | null
     home_team_pending_confirm?: boolean | null
     away_team_pending_confirm?: boolean | null
   }

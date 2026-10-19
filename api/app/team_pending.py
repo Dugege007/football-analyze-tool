@@ -193,6 +193,30 @@ def table_display_canonical(canonical, source, aliases=(), *, entity_name=None) 
     return group_default_display(None, None, aliases, entity_name=entity_name)
 
 
+def aliases_for_tip(aliases, display=None, source=None) -> list[str]:
+    """同组别名里供悬停的那一部分。
+
+    去掉当前展示名。展示名为空时，改为去掉来源文本，避免悬停再写一遍格子上的名称。
+    常用名与展示名是同一条时，这一条也不会出现。空白与重复只保留第一次，顺序沿用别名写入顺序。
+    """
+    hidden = nonblank(display)
+    if hidden is None:
+        hidden = nonblank(source)
+    hidden_key = hidden.strip() if hidden is not None else None
+    out: list[str] = []
+    seen: set[str] = set()
+    for alias in aliases or ():
+        text = nonblank(alias)
+        if text is None:
+            continue
+        key = text.strip()
+        if not key or key == hidden_key or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
 def _entity_id(value) -> int | None:
     """把球队或赛事编号收成整数。空值、布尔和非数字都不查别名。"""
     if isinstance(value, bool) or value is None:

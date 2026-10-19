@@ -233,6 +233,7 @@ def build_match_obj(
     常用名为空时，显示名依次取来源文本和该名称组的别名，避免组内还有名称时页面空白。
     待确认判断只使用回退前的常用名（没有则为空）和来源文本，不把别名再传一遍。
     编号本身不决定星号。
+    home_team_aliases / away_team_aliases 只列出同组里除当前展示名以外的名称，供悬停。
     """
     extras = meta_extras or {}
     names = canonicals if isinstance(canonicals, CanonicalNames) else CanonicalNames()
@@ -248,9 +249,11 @@ def build_match_obj(
     home_id = row_get(row, "home_team_id")
     away_id = row_get(row, "away_team_id")
     league_id = row_get(row, "league_id")
+    home_aliases = names.groups.team(home_id)
+    away_aliases = names.groups.team(away_id)
     # 别名只补显示。星号仍只看常用名和来源文本，外部别名不能消星。
-    home_display = tp.group_default_display(home_raw, row["home_team"], names.groups.team(home_id))
-    away_display = tp.group_default_display(away_raw, row["away_team"], names.groups.team(away_id))
+    home_display = tp.group_default_display(home_raw, row["home_team"], home_aliases)
+    away_display = tp.group_default_display(away_raw, row["away_team"], away_aliases)
     league_display = tp.group_default_display(
         league_raw, row["competition_name"], names.groups.league(league_id),
     )
@@ -298,6 +301,8 @@ def build_match_obj(
         "league_canonical": league_display,
         "home_team_canonical": home_display,
         "away_team_canonical": away_display,
+        "home_team_aliases": tp.aliases_for_tip(home_aliases, home_display, row["home_team"]),
+        "away_team_aliases": tp.aliases_for_tip(away_aliases, away_display, row["away_team"]),
         "home_team_pending_confirm": home_flag,
         "away_team_pending_confirm": away_flag,
         "home_team_id": row_get(row, "home_team_id"),
