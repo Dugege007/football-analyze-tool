@@ -50,7 +50,7 @@
   - fetched−target 要在 […, …] 分钟内。
   - 正负号：用后端 `validate_ah_sign.check_rows`。open 取 5DF opening，mid/close 取我们的规则快照，平手不判。单场命中送人工复核；「公司 × 来源 × 中盘」整批反号超过 20% 就整批拦下。中盘入库时临盘还没抓到，所以这次校验在临盘到点后才真正生效；已经入库、事后被拦下的中盘会从副本撤下，staging 保留。
   - 主客方向：和副本场次的队名或 team_aliases 比对，判断为相反就把线取反、主客对调。对不上的标 `unverified`。
-- 副本里没有这场比赛 → 记 `no_replica_match`，下一轮再试。`--create-missing-matches`（或 `LIVE_CAPTURE_CREATE_MATCHES=1`）可以按 5DF 在副本里补一条 stub 场次，**默认关，需要用户批准后才能开**。
+- 副本里没有这场比赛 → 记 `no_replica_match`，下一轮再试。`--create-missing-matches`（或 `LIVE_CAPTURE_CREATE_MATCHES=1`）可以按 5DF 在副本里补一条 stub 场次，**默认关，需要用户批准后才能开**。竞彩日 `matches` 行不走这个开关，由 `api/scripts/build_jc_match_rows.py` 的 `ensure-daemon` 写入正式库（见 `docs/ops/jc-match-rows-ensure.md`）。
 
 
 ## 命令
