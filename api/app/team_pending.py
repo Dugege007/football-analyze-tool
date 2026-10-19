@@ -15,6 +15,7 @@
 球队包内表是已升格子集，不是全量名册。外部定稿成功读入后，它才是球队全量名册，未收录的队名标为未映射。
 赛事包内表是当前已升格的赛事名册，未收录的赛事名标为尚未升格。
 正式库只读 teams / team_aliases、leagues / league_aliases，以及已经建好的 alias_pool_entry。表不存在时跳过。不写库。
+正式库规范名没有允许的升格来源时，不得当成已经升格。该字符串还不在名称表常用名里的，继续标星。同文字的别名不能把这种规范名从待确认里拿掉。
 """
 from __future__ import annotations
 
@@ -64,6 +65,7 @@ _ESTABLISHED_PROMOTION = frozenset((
     "雷速体育",
     "human_finalize",
     "legacy_high_confidence",
+    "user_correct",
     "established",
 ))
 # 已归并但还没升格的临时名。前端必须继续标星。
@@ -485,25 +487,76 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
         return set()
 
 
+def _canonical_disposition(promotion, pending_flag) -> str:
+    """正式库一行规范名该怎么并进索引。
+
+    返回 pending、known 或 bare。pending_confirm 为真时一律待确认。
+    升格来源落在允许集合时为 known。写了来源但不在集合里（含临时名）时为 pending。
+    没有升格来源时为 bare：这一列里的字不能单独当成常用名。
+    """
+    if _true(pending_flag):
+        return "pending"
+    promo = norm(promotion) if promotion is not None else ""
+    if not promo:
+        return "bare"
+    if promo in _ESTABLISHED_PROMOTION:
+        return "known"
+    return "pending"
+
+
+def _identity_select(table: str, cols: set[str]) -> str:
+    """选出规范名、待确认标记和升格来源。缺列时用空值，不要求先改表。"""
+    pending_expr = "pending_confirm" if "pending_confirm" in cols else "NULL"
+    sources = []
+    if "promotion_source" in cols:
+        sources.append("NULLIF(TRIM(promotion_source), '')")
+    if "promotion" in cols:
+        sources.append("NULLIF(TRIM(promotion), '')")
+    if not sources:
+        promo_expr = "NULL"
+    elif len(sources) == 1:
+        promo_expr = sources[0]
+    else:
+        promo_expr = f"COALESCE({', '.join(sources)})"
+    return f"SELECT name_zh_canonical, {pending_expr}, {promo_expr} FROM {table}"
+
+
 def _overlay_identity(conn: sqlite3.Connection, idx: NameIndex, kind: str) -> None:
-    """把正式库里的规范名和别名并进索引。表不存在或读失败时保持原索引，不标成全员待确认。"""
+    """把正式库里的规范名和别名并进索引。表不存在或读失败时保持原索引，不标成全员待确认。
+
+    规范名没有允许的升格来源时，不写入 known。字符串还不在名称表常用名里的，记为待确认。
+    同文字的别名不能把待确认规范名从待确认里拿掉。已经写明升格来源的，从待确认里去掉。
+    """
     tables = _table_names(conn)
     if kind == "team":
         standard, aliases, pool_kind = "teams", "team_aliases", "team"
     else:
         standard, aliases, pool_kind = "leagues", "league_aliases", "competition"
+    # 并入正式库之前，名称表里已经升格的常用名。正式库没写来源时不得把它们重新标星。
+    roster_known = set(idx.known)
+    # 本表判定为待确认的规范名。同文字别名不能再把它写回 known。
+    sticky: set[str] = set()
     if standard in tables:
         cols = _columns(conn, standard)
         if "name_zh_canonical" in cols:
-            pending_col = "pending_confirm" in cols
-            sql = (
-                f"SELECT name_zh_canonical, pending_confirm FROM {standard}"
-                if pending_col
-                else f"SELECT name_zh_canonical, NULL AS pending_confirm FROM {standard}"
-            )
             try:
-                for name, flag in conn.execute(sql):
-                    _apply(idx.known, idx.pending, [name], _true(flag))
+                for name, flag, promotion in conn.execute(_identity_select(standard, cols)):
+                    key = norm(name)
+                    if not key:
+                        continue
+                    state = _canonical_disposition(promotion, flag)
+                    if state == "known":
+                        _apply(idx.known, idx.pending, [name], False)
+                        sticky.discard(key)
+                    elif state == "pending":
+                        _apply(idx.known, idx.pending, [name], True)
+                        sticky.add(key)
+                    elif key in roster_known or (key in idx.known and key not in idx.pending):
+                        # 名称表或本轮更早的升格行已经把它当成常用名。
+                        continue
+                    else:
+                        idx.pending.add(key)
+                        sticky.add(key)
             except sqlite3.Error as e:
                 log.warning("读取%s失败，不把全部名称标成待确认：%s", standard, e)
     if aliases in tables:
@@ -517,8 +570,17 @@ def _overlay_identity(conn: sqlite3.Connection, idx: NameIndex, kind: str) -> No
             )
             try:
                 for alias, source in conn.execute(sql):
+                    key = norm(alias)
+                    if not key:
+                        continue
                     flagged = str(source or "").endswith("_pending_confirm")
-                    _apply(idx.known, idx.pending, [alias], flagged)
+                    if flagged:
+                        _apply(idx.known, idx.pending, [alias], True)
+                    elif key in sticky:
+                        # 来源文本挂成别名，不能把尚未升格的规范名消星。
+                        continue
+                    else:
+                        _apply(idx.known, idx.pending, [alias], False)
             except sqlite3.Error as e:
                 log.warning("读取%s失败，不把全部名称标成待确认：%s", aliases, e)
     if "alias_pool_entry" in tables:

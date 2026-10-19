@@ -197,15 +197,24 @@ def test_official_library_alias_promotes_without_league_id(tmp_path, monkeypatch
     conn.row_factory = sqlite3.Row
     conn.executescript(
         """
-        CREATE TABLE leagues (id INTEGER PRIMARY KEY, name_zh_canonical TEXT, pending_confirm TEXT);
+        CREATE TABLE leagues (
+          id INTEGER PRIMARY KEY, name_zh_canonical TEXT, pending_confirm TEXT, promotion TEXT
+        );
         CREATE TABLE league_aliases (id INTEGER PRIMARY KEY, alias TEXT, league_id INTEGER, source TEXT);
         """
     )
-    conn.execute("INSERT INTO leagues (name_zh_canonical, pending_confirm) VALUES ('澳超', 'false')")
+    conn.execute(
+        "INSERT INTO leagues (id, name_zh_canonical, pending_confirm, promotion) VALUES (1, '澳超', 'false', 'legacy_high_confidence')"
+    )
+    conn.execute(
+        "INSERT INTO leagues (id, name_zh_canonical, pending_confirm) VALUES (2, '临时洲际杯', 'true')"
+    )
+    conn.execute(
+        "INSERT INTO leagues (id, name_zh_canonical, pending_confirm) VALUES (3, '未升格洲际杯', 'false')"
+    )
     conn.execute(
         "INSERT INTO league_aliases (alias, league_id, source) VALUES ('澳大利亚超级联赛', 1, 'manual')"
     )
-    conn.execute("INSERT INTO leagues (name_zh_canonical, pending_confirm) VALUES ('临时洲际杯', 'true')")
     conn.execute(
         "INSERT INTO league_aliases (alias, league_id, source) VALUES ('洲际杯待定译名', 2, 'import_pending_confirm')"
     )
@@ -213,6 +222,7 @@ def test_official_library_alias_promotes_without_league_id(tmp_path, monkeypatch
     pending = tp.load_pending(conn)
     league_idx = pending.league
     assert lp.is_pending(None, "澳超", league_idx) is False
+    assert lp.is_pending(None, "未升格洲际杯", league_idx) is True
     assert lp.is_pending(None, "澳大利亚超级联赛", league_idx) is False
     assert lp.is_pending(12, "临时洲际杯", league_idx) is True
     assert lp.is_pending(None, "洲际杯待定译名", league_idx) is True
