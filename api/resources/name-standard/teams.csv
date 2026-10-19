@@ -2,6 +2,7 @@ canonical,aliases,note,pending_confirm,promotion
 AC 米兰队,AC米兰,,false,legacy_high_confidence
 FC首尔,首尔,,false,legacy_high_confidence
 KFUM,奥斯陆KFUM,,false,legacy_high_confidence
+KFUM奥斯陆,KFUM|KFUM Oslo|奥斯陆KFUM,old_fa_preferred_map_20261019,false,legacy_high_confidence
 PEC兹沃勒,兹沃勒,,false,legacy_high_confidence
 RB莱比锡,RB 莱比锡,old_fa_preferred_map_20261019,false,legacy_high_confidence
 RKC华域克,瓦尔韦克,,false,legacy_high_confidence
@@ -31,12 +32,14 @@ VPS瓦萨,华沙比斯,,false,legacy_high_confidence
 勒沃库森,,,false,legacy_high_confidence
 北京国安,Beijing Guoan,,false,legacy_high_confidence
 南安普顿,南安普敦,,false,legacy_high_confidence
+博德闪耀,Bodo/Glimt|波杜基林特,old_fa_preferred_map_20261019,false,legacy_high_confidence
 卡尔马,卡马尔,,false,legacy_high_confidence
 卡萨比亚,卡萨皮亚,old_fa_preferred_map_20261019,false,legacy_high_confidence
 卢顿,鲁顿,old_fa_preferred_map_20261019,false,legacy_high_confidence
 古比斯,KuPS,,false,legacy_high_confidence
 吉尔维森特,吉维森特,old_fa_preferred_map_20261019,false,legacy_high_confidence
 吉达联合,伊蒂哈德,,false,legacy_high_confidence
+吉马良斯,Guimaraes|甘马雷斯,old_fa_preferred_map_20261019,false,legacy_high_confidence
 哈姆斯塔德,哈尔姆斯塔德|哈尔姆斯达斯,,false,legacy_high_confidence
 哈森姆,哈姆,old_fa_preferred_map_20261019,false,legacy_high_confidence
 哈萨征服,Al法斯 SC,old_fa_preferred_map_20261019,false,legacy_high_confidence
@@ -56,6 +59,7 @@ VPS瓦萨,华沙比斯,,false,legacy_high_confidence
 墨尔本胜仗,墨尔本胜利,,false,legacy_high_confidence
 多德勒支,FC 多德雷赫,old_fa_preferred_map_20261019,false,legacy_high_confidence
 大田市民,大田韩亚市民,,false,legacy_high_confidence
+大阪钢巴,Gamba Osaka|大阪飞脚,old_fa_preferred_map_20261019,false,legacy_high_confidence
 天狼星,斯瑞斯,,false,legacy_high_confidence
 奈梅亨,NEC,old_fa_preferred_map_20261019,false,legacy_high_confidence
 奥卢,AC奥卢,,false,legacy_high_confidence
@@ -75,7 +79,9 @@ VPS瓦萨,华沙比斯,,false,legacy_high_confidence
 帕尔马,帕尔玛,old_fa_preferred_map_20261019,false,legacy_high_confidence
 帕德博恩,帕特博恩|Paderborn,old_fa_preferred_map_20261019,false,legacy_high_confidence
 帕特博恩,帕德博恩,,false,legacy_high_confidence
+库普斯,KuPS|KuPS Kuopio|古比斯|库奥皮奥,old_fa_preferred_map_20261019,false,legacy_high_confidence
 德比郡,德比,old_fa_preferred_map_20261019,false,legacy_high_confidence
+悉尼FC,Sydney FC|悉尼,old_fa_preferred_map_20261019,false,legacy_high_confidence
 惠灵顿凤凰,威灵顿凤凰,old_fa_preferred_map_20261019,false,legacy_high_confidence
 托伦斯,Torreense（推测）,,false,legacy_high_confidence
 拉普拉塔大学生,Estudiantes,,false,legacy_high_confidence
@@ -98,15 +104,18 @@ VPS瓦萨,华沙比斯,,false,legacy_high_confidence
 江原FC,江原 FC,,false,legacy_high_confidence
 沙尔克,沙尔克04,,false,legacy_high_confidence
 沙尔克04,沙尔克|Schalke|Schalke 04,old_fa_preferred_map_20261019,false,legacy_high_confidence
+法马利康,Famalicao|法马利卡欧,old_fa_preferred_map_20261019,false,legacy_high_confidence
 波兹南莱赫,Lech Poznan,,false,legacy_high_confidence
 泰港,Port FC,,false,legacy_high_confidence
 济州SK,Jeju SK|济州SK FC|济州联,,false,legacy_high_confidence
 济州SK FC,济州SK|Jeju SK|Jeju United|济州联,old_fa_preferred_map_20261019,false,legacy_high_confidence
 浦项铁人,浦项制铁,,false,legacy_high_confidence
 海牙,ADO海牙,old_fa_preferred_map_20261019,false,legacy_high_confidence
+温哥华白浪,Vancouver Whitecaps|温哥华白帽,old_fa_preferred_map_20261019,false,legacy_high_confidence
 热刺,托特纳姆热刺,old_fa_preferred_map_20261019,false,legacy_high_confidence
 特尔斯达,特士达,old_fa_preferred_map_20261019,false,legacy_high_confidence
 狼队,伍尔弗汉普顿,old_fa_preferred_map_20261019,false,legacy_high_confidence
+瓦勒伦加,Valerenga|瓦拉伦加,old_fa_preferred_map_20261019,false,legacy_high_confidence
 瓦尔韦克,RKC华域克|RKC,old_fa_preferred_map_20261019,false,legacy_high_confidence
 瓦斯尔,Al Wasl|阿尔瓦斯尔|阿尔瓦斯尔SC,,false,legacy_high_confidence
 瓦斯特拉斯,韦斯特罗斯,,false,legacy_high_confidence
@@ -126,13 +135,17 @@ VPS瓦萨,华沙比斯,,false,legacy_high_confidence
 罗达JC,罗达,old_fa_preferred_map_20261019,false,legacy_high_confidence
 美因茨,美因兹,old_fa_preferred_map_20261019,false,legacy_high_confidence
 胡拜尔库迪西亚,卡达西亚,old_fa_preferred_map_20261019,false,legacy_high_confidence
+艾华卡,Alverca|阿尔华卡|阿尔维卡,old_fa_preferred_map_20261019,false,legacy_high_confidence
 艾禾斯堡,依云斯堡,old_fa_preferred_map_20261019,false,legacy_high_confidence
 芬洛,VVV芬洛,old_fa_preferred_map_20261019,false,legacy_high_confidence
 荷尔斯泰因,基尔高士丁,old_fa_preferred_map_20261019,false,legacy_high_confidence
 莫雷拉人,莫雷恩斯,old_fa_preferred_map_20261019,false,legacy_high_confidence
+莱万特,Levante|勒万特队,old_fa_preferred_map_20261019,false,legacy_high_confidence
 莱斯特城,莱斯特,old_fa_preferred_map_20261019,false,legacy_high_confidence
 菲尔特,格雷特霍夫,old_fa_preferred_map_20261019,false,legacy_high_confidence
 萨尔茨堡,FC 萨尔斯堡|RB Salzburg|红牛萨尔茨堡|萨尔斯堡,,false,legacy_high_confidence
+萨尔茨堡红牛,FC Salzburg|FC 萨尔斯堡|RB Salzburg|红牛萨尔茨堡|萨尔斯堡|萨尔茨堡,old_fa_preferred_map_20261019,false,legacy_high_confidence
+萨索洛,Sassuolo|萨索罗,old_fa_preferred_map_20261019,false,legacy_high_confidence
 葡萄牙体育,里斯本竞技,old_fa_preferred_map_20261019,false,legacy_high_confidence
 蔚山HD,蔚山现代,,false,legacy_high_confidence
 西布罗姆维奇,西布朗维奇,old_fa_preferred_map_20261019,false,legacy_high_confidence
@@ -142,6 +155,7 @@ VPS瓦萨,华沙比斯,,false,legacy_high_confidence
 贝西克塔斯,Besiktas,,false,legacy_high_confidence
 费内巴切,Fenerbahce,,false,legacy_high_confidence
 费哈,Al费哈,old_fa_preferred_map_20261019,false,legacy_high_confidence
+费耶诺德,Feyenoord|费耶诺德队,old_fa_preferred_map_20261019,false,legacy_high_confidence
 赫尔,赫尔城,,false,legacy_high_confidence
 赫尔城,赫尔|Hull,old_fa_preferred_map_20261019,false,legacy_high_confidence
 赫尔蒙德,希蒙体育,old_fa_preferred_map_20261019,false,legacy_high_confidence
@@ -149,10 +163,12 @@ VPS瓦萨,华沙比斯,,false,legacy_high_confidence
 达曼协作,伊蒂法格,old_fa_preferred_map_20261019,false,legacy_high_confidence
 达马克,达马克FC,old_fa_preferred_map_20261019,false,legacy_high_confidence
 迈阿密国际,国际迈阿密,old_fa_preferred_map_20261019,false,legacy_high_confidence
+迪拜祈祷,Al Wasl|Al Wasl SC|瓦斯尔|迪拜连接|阿尔瓦斯尔|阿尔瓦斯尔SC,old_fa_preferred_map_20261019,false,legacy_high_confidence
 通德拉,托德拉,old_fa_preferred_map_20261019,false,legacy_high_confidence
 金泉尚武,金泉尚武FC,,false,legacy_high_confidence
 阿尔华卡,阿尔维卡,,false,legacy_high_confidence
 阿尔梅勒城,阿尔梅勒城 FC,old_fa_preferred_map_20261019,false,legacy_high_confidence
+阿拉维斯,Alaves|CD Alaves|阿拉维斯队,old_fa_preferred_map_20261019,false,legacy_high_confidence
 阿科多,阿尔阿科多,old_fa_preferred_map_20261019,false,legacy_high_confidence
 阿维什镇,AVS,old_fa_preferred_map_20261019,false,legacy_high_confidence
 阿罗卡,艾路卡,old_fa_preferred_map_20261019,false,legacy_high_confidence
