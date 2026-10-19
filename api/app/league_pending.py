@@ -2,7 +2,7 @@
 
 与球队共用 docs/schema/v2_0-name-canonical-and-star-rules.md 的同一套机制。
 已经升格的常用名不标星。临时名、待确认和尚未升格的名称继续标星。
-league_id 为空或已填都不单独决定星号。没有来源名、也没有规范名时不标星。
+没有来源名、也没有规范名时标星。league_id 为空或已填都不能单独加上或去掉星号。
 """
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ from app import team_pending as tp
 
 
 def is_pending(league_id, source_name, index: tp.NameIndex | None = None, canonical=None) -> bool:
-    """常用名尚未升格时返回 True。
+    """来源名与规范名都空、或常用名尚未升格时返回 True。已经升格的常用名返回 False。
 
-    league_id 保留给调用方，不参与判断。index 缺省时使用包内赛事名册。
+    league_id 保留给调用方，不参与判断，不能单独加上或去掉星号。index 缺省时使用包内赛事名册。
     """
     _ = league_id
     idx = index if isinstance(index, tp.NameIndex) else tp.load_league_index()
