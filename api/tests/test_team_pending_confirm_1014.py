@@ -36,6 +36,21 @@ def test_found_in_each_table_is_false(tmp_path):
     assert tp.is_pending(None, None, idx, "中国杯") is True  # 种子表里的赛事行不算球队
 
 
+def test_empty_name_is_pending_and_promoted_name_is_not(tmp_path):
+    """来源名和规范名都空时标星。已升格不标星，临时名继续标星。编号不能单独加上或去掉星号。"""
+    idx = tp.load_index(_files(tmp_path))
+    assert tp.is_pending(None, None, idx, None) is True
+    assert tp.is_pending(None, "", idx, "   ") is True
+    assert tp.is_pending(7, None, idx, None) is True
+    assert tp.reason(99, None, idx, "  ") == "name_absent"
+    assert tp.is_pending(None, "萨尔茨堡", idx, None) is False
+    assert tp.is_pending(12, "萨尔茨堡", idx, "FC 萨尔斯堡") is False
+    assert tp.reason(12, "萨尔茨堡", idx) is None
+    assert tp.is_pending(None, "杜连斯", idx, None) is True
+    assert tp.is_pending(3, None, idx, "杜连斯") is True
+    assert tp.reason(None, None, idx, "杜连斯") == "final_pending_confirm"
+
+
 def test_pending_flag_wins(tmp_path):
     idx = tp.load_index(_files(tmp_path))
     assert tp.reason(1, "杜连斯", idx, "杜连斯") == "final_pending_confirm"

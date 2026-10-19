@@ -6,8 +6,9 @@
 已经升格的常用名不标星。升格来源只有三种：雷速体育写法、人工明确定稿、旧分析仓库里的高置信名称。
 提议表没有升格或待确认标记时，只把尚不在常用名里的名称记为待确认，不得把已经升格的常用名重新写入待确认。
 只是归并到临时名、名称表标了待确认、别名来源以 _pending_confirm 结尾、或待定池仍开放的，继续标星。
+来源名和规范名都空时标星，表示常用名尚未落到用户熟悉的名称。已经升格的常用名不标星。
 男子与女子、一线队与青年队等相近名称不能借用另一个实体的常用名把星号消掉。
-身份编号不是升格。外部研究表缺失时只记警告，不得把全部名称标成待确认。
+身份编号不是升格，不能单独加上或去掉星号。外部研究表缺失时只记警告，不得把全部名称标成待确认。
 
 球队包内表是已升格子集，不是全量名册。外部定稿成功读入后，它才是球队全量名册，未收录的队名标为未映射。
 赛事包内表是当前已升格的赛事名册，未收录的赛事名标为尚未升格。
@@ -97,7 +98,8 @@ class NameIndex:
     def reason(self, *names, mapped: bool = False) -> str | None:
         """返回 None 表示不标星。
 
-        原因：final_pending_confirm（临时名、待确认标记或未升格来源）、
+        原因：name_absent（来源名和规范名都空）、
+        final_pending_confirm（临时名、待确认标记或未升格来源）、
         ambiguous_not_promoted（相近名称可能是另一个实体，不能并进已有常用名）、
         alias_pool_open（待定池仍开放）、not_found（全量名册里没有）。
         表文件缺失不再返回 table_missing，也不再因此把全部名称标成待确认。
@@ -105,6 +107,9 @@ class NameIndex:
         """
         _ = mapped
         ns = {norm(n) for n in names if norm(n)}
+        # 两边都空：常用名尚未落到用户熟悉的名称。编号不在本函数里，不能单独消星。
+        if not ns:
+            return "name_absent"
         if ns & self.pending:
             return "final_pending_confirm"
         # 先看尚未单独升格的歧义名称，避免「切尔西女」因为同时传来「切尔西」而消掉星号。
@@ -112,8 +117,6 @@ class NameIndex:
             if item not in self.known and _ambiguous(item):
                 return "ambiguous_not_promoted"
         if ns & self.known:
-            return None
-        if not ns:
             return None
         if ns & self.pool:
             return "alias_pool_open"
@@ -425,7 +428,11 @@ def load_pending(conn: sqlite3.Connection | None = None, paths: dict | None = No
 
 
 def is_pending(team_id, canonical, pending: NameIndex | None, display=None) -> bool:
-    """team_id 保留参数位置但不参与判断。名称导入情况由索引决定，编号为空不再导致标星。"""
+    """来源名与规范名都空、或常用名尚未升格时返回 True。已经升格的常用名返回 False。
+
+    team_id 保留参数位置但不参与判断，不能单独加上或去掉星号。
+    """
+    _ = team_id
     idx = pending if isinstance(pending, NameIndex) else load_index()
     return idx.is_pending(canonical, display)
 
