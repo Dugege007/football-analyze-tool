@@ -2897,6 +2897,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             LIMIT ? OFFSET ?""", args + [limit, offset]).fetchall()
     page_ids = [r["id"] for r in rows]
     _pending = tp.load_pending(conn)
+    _groups = tp.load_name_groups(conn)
     d = _Data(conn, page_ids)
 
     # 基准样本：库内全部场（不受本次日期/scope/分页影响），按同一取数口径算 open/mid/close 返还率
@@ -3211,10 +3212,18 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 "kickoff_jc": row["kickoff_jc"] if "kickoff_jc" in row.keys() else None,
                 **_mf_row,
                 "scope": row["scope"], "league": row["competition_name"],
-                "league_canonical": row["league_canonical"],
+                "league_canonical": tp.table_display_canonical(
+                    row["league_canonical"], row["competition_name"], _groups.league(_rowv(row, "league_id")),
+                ),
                 "competition_type": row["competition_type"],
                 "home_team": row["home_team"], "away_team": row["away_team"],
-                "home_team_canonical": row["home_canonical"], "away_team_canonical": row["away_canonical"],
+                "home_team_canonical": tp.table_display_canonical(
+                    row["home_canonical"], row["home_team"], _groups.team(_rowv(row, "home_team_id")),
+                ),
+                "away_team_canonical": tp.table_display_canonical(
+                    row["away_canonical"], row["away_team"], _groups.team(_rowv(row, "away_team_id")),
+                ),
+                # 星号只用库内常用名和来源文本。组内别名补进显示列之后，不能再拿去消星。
                 "home_team_pending_confirm": tp.is_pending(row["home_team_id"], row["home_canonical"], _pending, row["home_team"]),
                 "away_team_pending_confirm": tp.is_pending(row["away_team_id"], row["away_canonical"], _pending, row["away_team"]),
                 "league_pending_confirm": lp.is_pending(

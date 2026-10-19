@@ -3,7 +3,7 @@
 > 用户 2026-10-18 拍板。下面六条是名称和星号的产品规则，球队与赛事同一套。
 > 2026-10-19 补充：星号表示尚未落到用户熟悉的常用名。没有来源名、也没有规范名时标星。
 > 2026-10-19 再补：一组等于同一支球队或同一项赛事；新名称如何并入已有组或新建组，见同目录 `v2_0-name-resolve-group-rules.md`。无常用名时须在组内选定默认显示并继续标星。
-> 实现见 `api/app/team_pending.py`、`api/app/league_pending.py`，赛程字段见 `api/app/main.py` 的 `build_match_obj`，以及前端 `web/src/names/teamName.ts`、`web/src/names/leaguePending.ts`。待定池核心见 `api/app/alias_pool.py`。
+> 实现见 `api/app/team_pending.py`、`api/app/league_pending.py`，赛程字段见 `api/app/main.py` 的 `build_match_obj`，数据表见 `api/app/table_matches.py`，以及前端 `web/src/names/teamName.ts`、`web/src/names/leaguePending.ts`。前端只跟随接口给出的显示名和待确认布尔值。待定池核心见 `api/app/alias_pool.py`。
 
 ## 规则
 
@@ -13,6 +13,18 @@
 4. 尚未确定的名称：先用网络检索帮助归并哪些别名是同一支球队或同一项赛事，并先映射到一个临时名；在升格为常用名之前，前端必须继续显示星号。升格只来自雷速体育确认，或人工明确定稿。
 5. 不得把长相相近、但可能是不同实体的名称自动合并。男子与女子、一线队与青年队都属于这种情况。
 6. 球队和赛事共用同一套机制。
+
+## 名称组
+
+一个名称组收齐同一支球队、或同一项赛事的全部名称。平台或接口新送来一个名称时，先检索已有的名称组：能够对应上的，作为别名并入该组；对应不上的，新建一个名称组。别名和常用名都可以以后再补，不必在建组的同时写齐。
+
+名称组里已经有升格后的常用中文名时，页面显示这个常用名，待确认布尔值为 false，不标星。库里的常用中文名写在 `teams.name_zh_canonical` 或 `leagues.name_zh_canonical`。这一列若仍标着待确认，或升格标记仍是临时名，页面照样显示这一列里的文字，但继续标星。来源文本本身已经是升格后的常用名时，即使这场没有填写编号，也不标星。
+
+名称组还没有常用中文名时，从该组内部挑一条默认显示名。挑选顺序是：先用来源文本里的非空名称，再用实体上另外保存的非空名称，再用别名。别名有多条时，优先选用含有汉字的一条；仍有多条时，按写入顺序取第一条。只要组里还有任意一条非空名称，显示就不得留空。这时待确认布尔值为 true，页面标星。若挑中的来源文本本身已是升格后的常用名，则不标星。来源文本、常用名、实体名和别名全部为空时，显示才可以为空，此时仍然标星，原因码是 `name_absent`。别名即使和某条已升格常用名的文字相同，也不能单独把星号消掉。
+
+外部来源只把写法挂成别名，不能因此升成常用名。统计源 BSD（bzzoiro）属于这类外部来源。常用名的升格仍只走雷速体育、人工明确定稿，或旧分析仓库的高置信名称。别名可以拿来显示，但不得拿来把星号消掉。
+
+身份编号只用来找到名称组。编号本身不能加上星号，也不能去掉星号。已经升格的常用名，即使这场比赛还没填编号，也不标星。
 
 ## 星号怎么判
 
@@ -59,9 +71,11 @@
 | 主队 | `match.teams.home_canonical` | `match.home_team_canonical` |
 | 客队 | `match.teams.away_canonical` | `match.away_team_canonical` |
 
-来源是 `leagues.name_zh_canonical`、`teams.name_zh_canonical`，按 `league_id`、`home_team_id`、`away_team_id` 读取。编号为空、对不上标准名行，或规范名为空白时，上述字段回退到对应文本列，接口不因此返回 500。数据表在同样情况下把 `league_canonical` 等留空；赛程接口回退，是为了页面可以直接显示规范名字段。
+来源是 `leagues.name_zh_canonical`、`teams.name_zh_canonical`，按 `league_id`、`home_team_id`、`away_team_id` 读取。编号为空、对不上标准名行，或规范名为空白时，赛程接口先回退到对应文本列；文本列也是空白、但该名称组里还有别名时，再改用组内默认显示。接口不因此返回 500。`competition.name`、`teams.home`、`teams.away` 仍是场次上的原文，不改写成这份组内默认显示。
 
-星号仍以布尔值为准，编号不单独加星，也不单独消星。`teams_pending_confirm.home` / `.away` 与 `home_team_pending_confirm` / `away_team_pending_confirm` 相同。`league_pending_confirm` 与 `competition.league_pending_confirm` 相同。判断把库内规范名（没有则为空，不把回退后的文本再传一遍）和来源文本一起交给名册，与数据表相同。
+数据表在常用名为空、来源文本还有字时，仍把 `league_canonical`、`home_team_canonical`、`away_team_canonical` 留空，页面显示来源文本。来源文本也空、组内还有别名或实体名时，数据表把组内默认显示写进上述字段，页面才不会空白。组内什么名称都没有时，这些字段保持为空。
+
+星号仍以布尔值为准，编号不单独加星，也不单独消星。`teams_pending_confirm.home` / `.away` 与 `home_team_pending_confirm` / `away_team_pending_confirm` 相同。`league_pending_confirm` 与 `competition.league_pending_confirm` 相同。判断把库内常用名（没有则为空，不把回退后的显示名再传一遍）和来源文本一起交给名册，与数据表相同。组内默认显示用到的别名不进入这次判断，因此不能把 `name_absent` 消掉。
 
 ## 名册缺失
 

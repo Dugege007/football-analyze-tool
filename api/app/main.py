@@ -136,11 +136,16 @@ def _id_key(value: Any) -> int | None:
 
 
 class CanonicalNames:
-    """teams / leagues 的 id → name_zh_canonical。缺表时两个字典都空。"""
+    """teams / leagues 的 id → name_zh_canonical。缺表时两个字典都空。
 
-    def __init__(self, teams: dict[int, str] | None = None, leagues: dict[int, str] | None = None):
+    groups 是同一编号上的别名，只在常用名为空时参与显示，不参与消星。
+    """
+
+    def __init__(self, teams: dict[int, str] | None = None, leagues: dict[int, str] | None = None,
+                 groups: tp.NameGroups | None = None):
         self.teams = dict(teams or ())
         self.leagues = dict(leagues or ())
+        self.groups = groups if isinstance(groups, tp.NameGroups) else tp.NameGroups()
 
     def team(self, team_id: Any) -> str | None:
         key = _id_key(team_id)
@@ -178,10 +183,14 @@ def _load_id_names(conn: sqlite3.Connection, table: str) -> dict[int, str]:
 
 
 def load_canonical_names(conn: sqlite3.Connection | None) -> CanonicalNames:
-    """按编号装载球队、赛事规范名。只读，不写库。"""
+    """按编号装载球队、赛事规范名和别名。只读，不写库。"""
     if conn is None:
         return CanonicalNames()
-    return CanonicalNames(teams=_load_id_names(conn, "teams"), leagues=_load_id_names(conn, "leagues"))
+    return CanonicalNames(
+        teams=_load_id_names(conn, "teams"),
+        leagues=_load_id_names(conn, "leagues"),
+        groups=tp.load_name_groups(conn),
+    )
 
 
 def _joined_canonical(row: sqlite3.Row, looked_up: str | None, *columns: str) -> str | None:
@@ -196,13 +205,6 @@ def _joined_canonical(row: sqlite3.Row, looked_up: str | None, *columns: str) ->
             if found is not None:
                 return found
     return None
-
-
-def _display_canonical(raw: str | None, source_text: Any) -> Any:
-    """给赛程页直接显示。没有规范名时回退到来源文本，文本本身不改写。"""
-    if raw is not None:
-        return raw
-    return source_text
 
 
 def _league_pending_confirm(row: sqlite3.Row, pending, canonical) -> bool:
@@ -226,10 +228,11 @@ def build_match_obj(
     *,
     canonicals: CanonicalNames | None = None,
 ) -> dict:
-    """赛程 match 对象。文本列保持原样；规范名与数据表一样来自 name_zh_canonical。
+    """赛程 match 对象。文本列保持原样；有常用名时显示常用名。
 
-    缺编号、缺行或缺规范名时，规范名字段回退到文本列。待确认判断使用回退前的规范名
-    （没有则为空）和来源文本，与 GET /table/matches 相同；编号本身不决定星号。
+    常用名为空时，显示名依次取来源文本和该名称组的别名，避免组内还有名称时页面空白。
+    待确认判断只使用回退前的常用名（没有则为空）和来源文本，不把别名再传一遍。
+    编号本身不决定星号。
     """
     extras = meta_extras or {}
     names = canonicals if isinstance(canonicals, CanonicalNames) else CanonicalNames()
@@ -242,9 +245,15 @@ def build_match_obj(
         row, names.team(row_get(row, "away_team_id")), "away_canonical", "away_team_canonical",
     )
     league_raw = _joined_canonical(row, names.league(row_get(row, "league_id")), "league_canonical")
-    home_display = _display_canonical(home_raw, row["home_team"])
-    away_display = _display_canonical(away_raw, row["away_team"])
-    league_display = _display_canonical(league_raw, row["competition_name"])
+    home_id = row_get(row, "home_team_id")
+    away_id = row_get(row, "away_team_id")
+    league_id = row_get(row, "league_id")
+    # 别名只补显示。星号仍只看常用名和来源文本，外部别名不能消星。
+    home_display = tp.group_default_display(home_raw, row["home_team"], names.groups.team(home_id))
+    away_display = tp.group_default_display(away_raw, row["away_team"], names.groups.team(away_id))
+    league_display = tp.group_default_display(
+        league_raw, row["competition_name"], names.groups.league(league_id),
+    )
     # 与数据表相同：把库内规范名和来源文本一起交给名册。不用回退后的显示名再判一次。
     home_flag = tp.is_pending(row_get(row, "home_team_id"), home_raw, pending, row["home_team"])
     away_flag = tp.is_pending(row_get(row, "away_team_id"), away_raw, pending, row["away_team"])

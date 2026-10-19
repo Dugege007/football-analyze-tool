@@ -7,6 +7,7 @@
 提议表没有升格或待确认标记时，只把尚不在常用名里的名称记为待确认，不得把已经升格的常用名重新写入待确认。
 只是归并到临时名、名称表标了待确认、别名来源以 _pending_confirm 结尾、或待定池仍开放的，继续标星。
 来源名和规范名都空时标星，表示常用名尚未落到用户熟悉的名称。已经升格的常用名不标星。
+名称组没有常用名时，显示从组内另选一条非空名称，但别名不得拿去消星。
 男子与女子、一线队与青年队等相近名称不能借用另一个实体的常用名把星号消掉。
 身份编号不是升格，不能单独加上或去掉星号。外部研究表缺失时只记警告，不得把全部名称标成待确认。
 
@@ -126,6 +127,141 @@ class NameIndex:
 
     def is_pending(self, *names, mapped: bool = False) -> bool:
         return self.reason(*names, mapped=mapped) is not None
+
+
+def nonblank(value) -> str | None:
+    """空白视为没有名称。非空时保留原文，不去掉用户写下的空格。"""
+    if value is None:
+        return None
+    text = str(value)
+    if text.strip() == "":
+        return None
+    return text
+
+
+def _has_han(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
+def clearest_name(names) -> str | None:
+    """从别名里挑一条非空名称。含汉字的优先，同组按原来的顺序取第一条。"""
+    chosen = None
+    chosen_han = False
+    for name in names:
+        text = nonblank(name)
+        if text is None:
+            continue
+        han = _has_han(text)
+        if chosen is None or (han and not chosen_han):
+            chosen = text
+            chosen_han = han
+    return chosen
+
+
+def group_default_display(canonical, source, aliases=(), *, entity_name=None) -> str | None:
+    """名称组的显示名。已有常用名时用常用名。
+
+    没有常用名时按这个顺序取第一条非空名称：来源名、实体上另存的名称、别名。
+    组内只要还有任意一条非空名称，就不返回空。全部为空时返回 None。
+    本函数只决定显示，不判断星号。别名不能当作已经升格的常用名。
+    """
+    preferred = nonblank(canonical)
+    if preferred is not None:
+        return preferred
+    sourced = nonblank(source)
+    if sourced is not None:
+        return sourced
+    stored = nonblank(entity_name)
+    if stored is not None:
+        return stored
+    return clearest_name(aliases)
+
+
+def table_display_canonical(canonical, source, aliases=(), *, entity_name=None) -> str | None:
+    """数据表上的规范名列。
+
+    常用名非空时返回常用名。常用名为空、来源文本还有字时返回 None，页面继续显示来源文本。
+    两边都空时返回组内默认显示，避免页面空白；组内也没有名称时返回 None。
+    """
+    if nonblank(canonical) is not None:
+        return nonblank(canonical)
+    if nonblank(source) is not None:
+        return None
+    return group_default_display(None, None, aliases, entity_name=entity_name)
+
+
+def _entity_id(value) -> int | None:
+    """把球队或赛事编号收成整数。空值、布尔和非数字都不查别名。"""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        token = value.strip()
+        if token.lstrip("-").isdigit() and token not in ("", "-"):
+            try:
+                return int(token)
+            except ValueError:
+                return None
+    return None
+
+
+class NameGroups:
+    """一个名称组上的别名。常用名不放这里，常用名仍是 name_zh_canonical。
+
+    外部来源（例如统计源 BSD，即 bzzoiro）的写法只出现在别名里，不能升成常用名。
+    """
+
+    def __init__(self, team_aliases: dict[int, list[str]] | None = None,
+                 league_aliases: dict[int, list[str]] | None = None):
+        self.team_aliases = {int(key): list(values) for key, values in (team_aliases or {}).items()}
+        self.league_aliases = {int(key): list(values) for key, values in (league_aliases or {}).items()}
+
+    def team(self, team_id) -> list[str]:
+        key = _entity_id(team_id)
+        if key is None:
+            return []
+        return list(self.team_aliases.get(key, ()))
+
+    def league(self, league_id) -> list[str]:
+        key = _entity_id(league_id)
+        if key is None:
+            return []
+        return list(self.league_aliases.get(key, ()))
+
+
+def _alias_map(conn: sqlite3.Connection, table: str, owner_column: str) -> dict[int, list[str]]:
+    """读取一张别名表。表或列不存在、读失败时返回空字典，不抛给接口。"""
+    try:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if table not in tables:
+            return {}
+        cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if "alias" not in cols or owner_column not in cols:
+            return {}
+        order = " ORDER BY id" if "id" in cols else ""
+        rows = list(conn.execute(f"SELECT {owner_column}, alias FROM {table}{order}"))
+    except sqlite3.Error as exc:
+        log.warning("读取%s失败，组内默认显示不使用别名：%s", table, exc)
+        return {}
+    out: dict[int, list[str]] = {}
+    for owner, alias in rows:
+        key = _entity_id(owner)
+        text = nonblank(alias)
+        if key is None or text is None:
+            continue
+        out.setdefault(key, []).append(text)
+    return out
+
+
+def load_name_groups(conn: sqlite3.Connection | None) -> NameGroups:
+    """只读球队、赛事别名。不写库，也不把别名升成常用名。"""
+    if conn is None:
+        return NameGroups()
+    return NameGroups(
+        team_aliases=_alias_map(conn, "team_aliases", "team_id"),
+        league_aliases=_alias_map(conn, "league_aliases", "league_id"),
+    )
 
 
 def _rows(p: Path):
