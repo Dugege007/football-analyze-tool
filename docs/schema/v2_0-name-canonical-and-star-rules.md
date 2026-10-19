@@ -2,7 +2,8 @@
 
 > 用户 2026-10-18 拍板。下面六条是名称和星号的产品规则，球队与赛事同一套。
 > 2026-10-19 补充：星号表示尚未落到用户熟悉的常用名。没有来源名、也没有规范名时标星。
-> 实现见 `api/app/team_pending.py`、`api/app/league_pending.py`，赛程字段见 `api/app/main.py` 的 `build_match_obj`，以及前端 `web/src/names/teamName.ts`、`web/src/names/leaguePending.ts`。
+> 2026-10-19 再补：一组等于同一支球队或同一项赛事；新名称如何并入已有组或新建组，见同目录 `v2_0-name-resolve-group-rules.md`。无常用名时须在组内选定默认显示并继续标星。
+> 实现见 `api/app/team_pending.py`、`api/app/league_pending.py`，赛程字段见 `api/app/main.py` 的 `build_match_obj`，以及前端 `web/src/names/teamName.ts`、`web/src/names/leaguePending.ts`。待定池核心见 `api/app/alias_pool.py`。
 
 ## 规则
 
@@ -68,6 +69,17 @@
 
 球队包内表只是已升格子集。外部定稿真正读入之后，它才是球队全量名册，名册里没有的队名标为尚未升格。赛事包内表是当前已升格的赛事名册，不在其中的赛事名标为尚未升格。正式库里的 `teams` / `team_aliases`、`leagues` / `league_aliases` 只读并入；表不存在时跳过，不改成全员待确认。
 
+
+## 名称组模型（2026-10-19）
+
+一个常用名对应多个别名。别名来自各平台或应用程序接口的原文写法，用来对场与归组，不直接升格为页面常用名。某平台出现新写法时：先按 `v2_0-name-resolve-group-rules.md` 的七步判断并入已有组还是新建组；能并入则只加别名；不能并入则新建组，默认显示为该新名并标星。
+
+尚未设置常用名的组：必须仍有可显示的默认名（不得留空给前端「无字可画」），并且 `*_pending_confirm` 为真。已经升格的常用名不标星。编号不单独加减星。
+
+BSD 等外文或另一套中文写法属于别名层，不得因为对上了场次就把 BSD 写法写成常用名。
+
 ## 验收
 
 赛程和数据表的显示验收、以及写反的常用名如何用对照表脚本检查和替换，见 `docs/schema/v2_0-name-display-acceptance.md`。
+
+新名称并组、新建组、歧义闸与无常用名默认显示的对照审计，以 `v2_0-name-resolve-group-rules.md` 为准；实现缺口记入运维副本与后端整改清单，不在本文逐条改代码。
