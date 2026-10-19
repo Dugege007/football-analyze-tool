@@ -328,6 +328,8 @@ function sheetNames(m: {
   away?: string | null
   home_team_canonical?: string | null
   away_team_canonical?: string | null
+  home_team_aliases?: readonly string[] | null
+  away_team_aliases?: readonly string[] | null
   home_team_pending_confirm?: boolean | null
   away_team_pending_confirm?: boolean | null
 }) {
@@ -339,6 +341,8 @@ function sheetNames(m: {
     away_team: m.away,
     home_team_canonical: m.home_team_canonical,
     away_team_canonical: m.away_team_canonical,
+    home_team_aliases: m.home_team_aliases,
+    away_team_aliases: m.away_team_aliases,
     home_team_pending_confirm: optionalBool(m.home_team_pending_confirm),
     away_team_pending_confirm: optionalBool(m.away_team_pending_confirm),
   })
@@ -824,6 +828,8 @@ export function fromBackendRow(be: BeTableRow): ApiTableRow {
       away: m.away_team ?? '',
       home_team_canonical: m.home_team_canonical ?? null,
       away_team_canonical: m.away_team_canonical ?? null,
+      home_team_aliases: Array.isArray(m.home_team_aliases) ? m.home_team_aliases : undefined,
+      away_team_aliases: Array.isArray(m.away_team_aliases) ? m.away_team_aliases : undefined,
       home_team_pending_confirm: typeof m.home_team_pending_confirm === 'boolean' ? m.home_team_pending_confirm : undefined,
       away_team_pending_confirm: typeof m.away_team_pending_confirm === 'boolean' ? m.away_team_pending_confirm : undefined,
     },

@@ -2103,6 +2103,8 @@ class MatchInfo(_M_):
     away_team: Optional[str] = None
     home_team_canonical: Optional[str] = None
     away_team_canonical: Optional[str] = None
+    home_team_aliases: list[str] = Field(default_factory=list)  # 同组其它名称，不含当前展示名
+    away_team_aliases: list[str] = Field(default_factory=list)
     home_team_pending_confirm: bool = False  # 常用名尚未确定时为 true，前端悬停「待确认」
     away_team_pending_confirm: bool = False
     league_pending_confirm: bool = False  # 与队名同一套常用名规则
@@ -3200,6 +3202,10 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                         if isinstance(_c, dict):
                             for _k in ("cell_status", "cell_status_reason", "move", "alert", "alert_sample_n", "source_path"):
                                 _c.setdefault(_k, None)
+        home_alias_rows = _groups.team(_rowv(row, "home_team_id"))
+        away_alias_rows = _groups.team(_rowv(row, "away_team_id"))
+        home_display = tp.table_display_canonical(row["home_canonical"], row["home_team"], home_alias_rows)
+        away_display = tp.table_display_canonical(row["away_canonical"], row["away_team"], away_alias_rows)
         items.append({
             "match_id": row["match_uid"],
             "match": {
@@ -3217,12 +3223,10 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 ),
                 "competition_type": row["competition_type"],
                 "home_team": row["home_team"], "away_team": row["away_team"],
-                "home_team_canonical": tp.table_display_canonical(
-                    row["home_canonical"], row["home_team"], _groups.team(_rowv(row, "home_team_id")),
-                ),
-                "away_team_canonical": tp.table_display_canonical(
-                    row["away_canonical"], row["away_team"], _groups.team(_rowv(row, "away_team_id")),
-                ),
+                "home_team_canonical": home_display,
+                "away_team_canonical": away_display,
+                "home_team_aliases": tp.aliases_for_tip(home_alias_rows, home_display, row["home_team"]),
+                "away_team_aliases": tp.aliases_for_tip(away_alias_rows, away_display, row["away_team"]),
                 # 星号只用库内常用名和来源文本。组内别名补进显示列之后，不能再拿去消星。
                 "home_team_pending_confirm": tp.is_pending(row["home_team_id"], row["home_canonical"], _pending, row["home_team"]),
                 "away_team_pending_confirm": tp.is_pending(row["away_team_id"], row["away_canonical"], _pending, row["away_team"]),

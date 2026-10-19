@@ -192,6 +192,9 @@ export interface Row {
     /** Canonical team names from the backend, present for only some matches. */
     home_team_canonical?: string | null
     away_team_canonical?: string | null
+    /** 同组其它名称。当前格子上的名称不在其中。旧接口没有这个字段。 */
+    home_team_aliases?: readonly string[] | null
+    away_team_aliases?: readonly string[] | null
     /** True when the backend cannot identify the team yet; absent on backends without the field. */
     home_team_pending_confirm?: boolean | null
     away_team_pending_confirm?: boolean | null

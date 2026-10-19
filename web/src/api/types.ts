@@ -60,6 +60,10 @@ export interface Match {
   home_team_canonical?: string | null
   /** 客队显示名，与 teams.away_canonical 同值。缺常用名时回退来源队名，两边都空时回退名称组默认显示。 */
   away_team_canonical?: string | null
+  /** 主队同组其它名称。当前格子上的名称不在其中。旧接口没有这个字段。 */
+  home_team_aliases?: readonly string[] | null
+  /** 客队同组其它名称。当前格子上的名称不在其中。旧接口没有这个字段。 */
+  away_team_aliases?: readonly string[] | null
   /** 与 teams_pending_confirm.home 同值。为 true 时主队旁显示待确认星号。字段缺席且来源名、规范名都空时也标星。 */
   home_team_pending_confirm?: boolean | null
   /** 与 teams_pending_confirm.away 同值。为 true 时客队旁显示待确认星号。字段缺席且来源名、规范名都空时也标星。 */

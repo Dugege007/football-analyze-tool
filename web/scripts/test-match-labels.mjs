@@ -94,6 +94,27 @@ test('扁平字段缺席时，嵌套规范名和待确认与扁平同值', () =>
   assert.equal(labels.away.pending, true)
 })
 
+test('常用名与来源名相同时，悬停改用接口返回的同组别名', () => {
+  const labels = matchLabels(match({
+    competition: { name: '法乙' },
+    league_canonical: '法乙',
+    teams: { home: '红星', away: '格勒诺布尔' },
+    home_team_canonical: '红星',
+    away_team_canonical: '格勒诺布尔',
+    home_team_aliases: ['红星FC 93', '圣旺红星', 'Red Star', '红星'],
+    away_team_aliases: ['Grenoble'],
+    home_team_pending_confirm: false,
+    away_team_pending_confirm: false,
+  }))
+  assert.equal(labels.home.text, '红星')
+  assert.equal(labels.home.pending, false)
+  assert.equal(labels.home.tip, '红星FC 93\n圣旺红星\nRed Star')
+  assert.equal(labels.away.text, '格勒诺布尔')
+  assert.equal(labels.away.pending, false)
+  assert.equal(labels.away.tip, 'Grenoble')
+  assert.equal(String(labels.home.tip).includes('别名'), false)
+})
+
 test('巴西甲按雷速常用名显示，巴甲只出现在悬停别名里', () => {
   const labels = matchLabels(match({
     competition: { name: '巴西甲级联赛' },

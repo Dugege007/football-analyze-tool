@@ -72,7 +72,7 @@ const TEAM_DISPLAY: Record<string, string> = {
   "首尔": "FC首尔",
 }
 
-/** Other recorded names of a team, keyed by its display name, for the hover tooltip. */
+/** Other recorded names of a team, keyed by its display name. Optional supplement when the API alias list does not already include them. */
 const TEAM_OTHER_NAMES: Record<string, string[]> = {
   "AC 米兰队": ["AC米兰"],
   "FC首尔": ["首尔"],
@@ -183,21 +183,31 @@ export function teamCommon(name: string | null | undefined, canonical?: string |
 }
 
 /**
- * 队名悬停文案。收录常用名以外的已记录名称、来源名和规范名。
+ * 队名悬停文案。先列接口带回的同组别名，再补静态表里还没有的名称、来源名和规范名。
  * 每条名称单独一行，不加前缀。没有别名时返回 undefined。
  */
-export function teamAliasTip(name: string | null | undefined, canonical?: string | null, leagueDisplay?: string | null): string | undefined {
+export function teamAliasTip(
+  name: string | null | undefined,
+  canonical?: string | null,
+  leagueDisplay?: string | null,
+  apiAliases?: readonly unknown[] | null,
+): string | undefined {
   const shown = teamCommon(name, canonical, leagueDisplay)
   if (!shown) return undefined
-  const others = new Set<string>(TEAM_OTHER_NAMES[shown] ?? [])
-  const add = (value: string | null | undefined) => {
-    const text = value?.trim()
-    if (text && text !== shown) others.add(text)
+  const lines: string[] = []
+  const seen = new Set<string>()
+  const add = (value: unknown) => {
+    if (typeof value !== 'string') return
+    const text = value.trim()
+    if (!text || text === shown || seen.has(text)) return
+    seen.add(text)
+    lines.push(text)
   }
+  for (const alias of apiAliases ?? []) add(alias)
+  for (const alias of TEAM_OTHER_NAMES[shown] ?? []) add(alias)
   add(name)
   add(canonical)
-  others.delete(shown)
-  return formatAliasLines(others)
+  return formatAliasLines(lines)
 }
 
 /**
