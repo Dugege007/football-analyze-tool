@@ -21,7 +21,7 @@ export interface Match {
     canonical?: string | null
     type?: string
     stage?: string
-    /** 常用名尚未升格时为 true。与顶层 league_pending_confirm 同值。 */
+    /** 常用名尚未升格，或来源名与规范名都空时为 true。与顶层 league_pending_confirm 同值。 */
     league_pending_confirm?: boolean | null
   }
   kickoff_hour?: number
@@ -39,14 +39,15 @@ export interface Match {
   /**
    * 主队、客队是否还认不出来。
    * 列表和详情接口都会返回；为 true 时队名旁显示待确认星号。
+   * 字段缺席时，来源名与规范名都空则标星，否则只对已知临时名标星。接口显式为 false 时不标星。
    */
   teams_pending_confirm?: { home?: boolean | null; away?: boolean | null } | null
   /**
    * 与 competition.league_pending_confirm 一致。
-   * 已升格的常用名不标星；临时名和尚未升格的来源名继续标星。
+   * 已升格的常用名不标星；临时名、尚未升格的来源名，以及来源名与规范名都空时标星。
    * league_id 不能单独决定这个布尔值。
    * 列表和详情返回 true 时，赛事名旁显示待确认星号。
-   * 字段缺席时，已升格的常用名不标星；临时名和还没有常用名的来源名继续标星。
+   * 字段缺席时按同一口径兜底。接口显式为 false 时不标星。
    */
   league_pending_confirm?: boolean | null
   /**
@@ -59,13 +60,13 @@ export interface Match {
   home_team_canonical?: string | null
   /** 客队规范名，与 teams.away_canonical 同值。缺编号或缺规范名时回退来源队名。 */
   away_team_canonical?: string | null
-  /** 与 teams_pending_confirm.home 同值。为 true 时主队旁显示待确认星号。 */
+  /** 与 teams_pending_confirm.home 同值。为 true 时主队旁显示待确认星号。字段缺席且来源名、规范名都空时也标星。 */
   home_team_pending_confirm?: boolean | null
-  /** 与 teams_pending_confirm.away 同值。为 true 时客队旁显示待确认星号。 */
+  /** 与 teams_pending_confirm.away 同值。为 true 时客队旁显示待确认星号。字段缺席且来源名、规范名都空时也标星。 */
   away_team_pending_confirm?: boolean | null
   /**
    * 赛事编号。列表和详情已经返回。
-   * 编号不是常用名升格。league_pending_confirm 缺席时，仍要看来源名或规范名是否已经升格。
+   * 编号不是常用名升格。league_pending_confirm 缺席时，仍要看来源名或规范名是否已经升格；双方名都空时标星。
    */
   league_id?: number | string | null
   ids?: Record<string, unknown>

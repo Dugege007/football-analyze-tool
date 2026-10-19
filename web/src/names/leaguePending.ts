@@ -3,14 +3,14 @@
  * 规则见 docs/schema/v2_0-name-canonical-and-star-rules.md，与球队共用。
  * 接口给出布尔值时以接口为准。
  * 字段缺席时：来源名或规范名已经是升格后的常用名则不标星。
- * 临时名、以及还没有常用名的来源名，继续标星。赛事编号不是升格。
- * 没有来源名、也没有规范名时不标星。
+ * 临时名、还没有常用名的来源名，以及来源名与规范名都空时，继续标星。赛事编号不是升格。
  */
 import { leagueNameEstablished } from './leagueShort.js'
 
 /**
  * 判断这一场的赛事名是否显示待确认星号。
  * apiPending 是布尔值时直接采用，不再看名称。null 与缺席都走名称兜底。
+ * 兜底时，来源名与规范名都空（仅空白也算空）也标星。
  */
 export function isLeaguePending(
   name: string | null | undefined,
@@ -20,7 +20,7 @@ export function isLeaguePending(
   if (typeof apiPending === 'boolean') return apiPending
   const source = typeof name === 'string' ? name.trim() : ''
   const mapped = typeof canonical === 'string' ? canonical.trim() : ''
-  if (!source && !mapped) return false
+  if (!source && !mapped) return true
   if (leagueNameEstablished(source) || leagueNameEstablished(mapped)) return false
   return true
 }

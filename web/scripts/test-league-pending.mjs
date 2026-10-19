@@ -40,11 +40,15 @@ test('接口字段缺席时，定稿常用名不标星，名册外的来源名�
   assert.equal(pending.isLeaguePending('德国甲级联赛', null, null), false)
 })
 
+test('字段缺席且来源名与规范名都空时标星', () => {
+  assert.equal(pending.isLeaguePending(null, null, undefined), true)
+  assert.equal(pending.isLeaguePending('', null, undefined), true)
+  assert.equal(pending.isLeaguePending('   ', null, undefined), true)
+  assert.equal(pending.isLeaguePending(undefined, undefined, undefined), true)
+  assert.equal(pending.isLeaguePending('', '   ', null), true)
+})
+
 test('已经升格的常用名不标待确认，临时名继续标星', () => {
-  assert.equal(pending.isLeaguePending(null, null, undefined), false)
-  assert.equal(pending.isLeaguePending('', null, undefined), false)
-  assert.equal(pending.isLeaguePending('   ', null, undefined), false)
-  assert.equal(pending.isLeaguePending(undefined, undefined, undefined), false)
   assert.equal(pending.isLeaguePending('英超', '英超', undefined), false)
   assert.equal(pending.isLeaguePending('英格兰超级联赛', ' 英超 ', undefined), false)
   assert.equal(pending.isLeaguePending(null, '英超', undefined), false)
