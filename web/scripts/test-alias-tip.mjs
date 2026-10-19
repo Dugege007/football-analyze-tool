@@ -51,6 +51,21 @@ test('利雅得新月和坎布尔是常用名，写反的名称只出现在悬�
   assert.equal(teams.isTeamPending('利雅得希拉尔', '利雅得新月', true), true)
 })
 
+test('球队待确认字段缺席时，空名标星，已知临时名标星', () => {
+  assert.equal(teams.isTeamPending(null, null, undefined), true)
+  assert.equal(teams.isTeamPending('', '', undefined), true)
+  assert.equal(teams.isTeamPending('   ', '  ', null), true)
+  assert.equal(teams.isTeamPending(undefined, undefined, undefined), true)
+  assert.equal(teams.isTeamPending('', null, false), false)
+  assert.equal(teams.isTeamPending(null, null, false), false)
+  assert.equal(teams.isTeamPending('杜连斯', null, undefined), true)
+  assert.equal(teams.isTeamPending('  杜连斯  ', '', undefined), true)
+  assert.equal(teams.isTeamPending(null, '杜连斯', undefined), true)
+  assert.equal(teams.isTeamPending('曼城', null, undefined), false)
+  assert.equal(teams.isTeamPending('曼城', '曼城', undefined), false)
+  assert.equal(teams.isTeamPending('杜连斯', null, false), false)
+})
+
 test('队名没有别名时不返回空悬停', () => {
   assert.equal(teams.teamAliasTip('鹿岛鹿角'), undefined)
   assert.equal(teams.teamAliasTip('曼彻斯特城', '曼彻斯特城'), undefined)

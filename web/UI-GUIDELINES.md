@@ -45,8 +45,8 @@
 
 认不出的球队和赛事，在名称旁边显示同一个橙色星号，鼠标悬停时只显示「待确认」。页面上不写解释句。
 
-- 球队：数据表读 `home_team_pending_confirm`、`away_team_pending_confirm`。赛程、当日消息预览和比赛详情读同名扁平字段，与 `teams_pending_confirm.home` / `.away` 同值。字段缺席时才使用队名兜底名单。
-- 赛事：数据表、赛程列表、当日消息预览和比赛详情标题都读 `league_pending_confirm`。字段缺席时，来源赛事名有字且 `league_canonical` 为空则标星。规范名缺席时，`league_id` 为空与规范名为空等价。没有赛事名时不标星。
+- 球队：数据表读 `home_team_pending_confirm`、`away_team_pending_confirm`。赛程、当日消息预览和比赛详情读同名扁平字段，与 `teams_pending_confirm.home` / `.away` 同值。字段缺席时，来源名与规范名都空则标星，否则才使用队名兜底名单。接口给出布尔值时以接口为准。
+- 赛事：数据表、赛程列表、当日消息预览和比赛详情标题都读 `league_pending_confirm`。字段缺席时，已升格的常用名不标星；临时名、还没有常用名的来源名，以及来源名与规范名都空时标星。规范名缺席时，`league_id` 为空与规范名为空等价。接口给出布尔值时以接口为准。
 - 赛程、当日消息、比赛详情和数据表的赛事、主队、客队走同一套显示：优先取规范名，再映射成常用名。赛程读 `league_canonical`、`home_team_canonical`、`away_team_canonical`（嵌套的 `competition.canonical`、`teams.home_canonical`、`teams.away_canonical` 同值）。这些字段缺席时才用来源文本。格子里不显示原始别名。页面不另造名称。
 - 赛事显示以雷速常用名为准。巴西甲级联赛的页面显示名是「巴西甲」，「巴甲」仅作别名。
 - 复制出去的当日消息不含这颗星，星号只出现在页面预览里。

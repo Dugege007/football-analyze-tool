@@ -4,8 +4,8 @@
  * 规范名字段缺席时才用来源文本。
  * 赛程接口在没有规范名时已把该字段回退成来源文本；数据表接口则把规范名留空，页面再回到来源文本。
  * 悬停别名赛事走 leagueAliasTip，队名走 teamAliasTip，都是一行一个、不加前缀。
- * 球队待确认走 isTeamPending，优先用接口布尔值。
- * 赛事待确认走 isLeaguePending，优先用 league_pending_confirm。已升格的常用名不标星，临时名继续标星。
+ * 球队待确认走 isTeamPending，优先用接口布尔值。字段缺席时，双方名都空则标星，否则只对已知临时名标星。
+ * 赛事待确认走 isLeaguePending，优先用 league_pending_confirm。已升格的常用名不标星；临时名、还没有常用名的来源名，以及双方名都空时标星。
  */
 import type { Match } from '../api/types'
 import { leagueAliasTip } from './leagueShort.js'
@@ -115,7 +115,7 @@ export interface TableNameFields {
 
 /**
  * 数据表赛事、主队、客队的显示结果。
- * 有规范名时用规范名，没有规范名时用来源文本。星号只认接口给出的待确认布尔值。
+ * 有规范名时用规范名，没有规范名时用来源文本。接口给出待确认布尔值时以接口为准；缺席时走名称兜底。
  */
 export function labelsForTableMatch(fields: TableNameFields): MatchLabels {
   return matchLabels({

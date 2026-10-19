@@ -202,13 +202,17 @@ export function teamAliasTip(name: string | null | undefined, canonical?: string
 
 /**
  * 尚未升格为常用名的球队。规则见 docs/schema/v2_0-name-canonical-and-star-rules.md。
- * 接口给出布尔值时以接口为准。字段缺席时，只对已知的临时名标星，避免把已有常用名的队整页标星。
+ * 接口给出布尔值时以接口为准。
+ * 字段缺席时，来源名与规范名都空（或仅空白）则标星；否则只对已知的临时名标星，避免把已有常用名的队整页标星。
  * 杜连斯来自 2026-10-14 定稿里的 pending_confirm，目前仍是临时名。
  */
 const PENDING_TEAMS = new Set<string>(['杜连斯'])
 
-/** 常用名尚未升格时返回 true。临时名即使已经有展示名，也要标星。 */
+/** 常用名尚未升格时返回 true。临时名即使已经有展示名，也要标星。字段缺席且双方名都空时同样标星。 */
 export function isTeamPending(name: string | null | undefined, canonical?: string | null, apiPending?: boolean | null): boolean {
   if (typeof apiPending === 'boolean') return apiPending
-  return [name, canonical].some((n) => !!n && PENDING_TEAMS.has(n.trim()))
+  const source = typeof name === 'string' ? name.trim() : ''
+  const mapped = typeof canonical === 'string' ? canonical.trim() : ''
+  if (!source && !mapped) return true
+  return PENDING_TEAMS.has(source) || PENDING_TEAMS.has(mapped)
 }
