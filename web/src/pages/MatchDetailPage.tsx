@@ -33,7 +33,9 @@ import { DisplayLeague, DisplayTeam } from '../components/DisplayName'
 import { matchLabels } from '../names/matchLabels'
 import { isCollectorEmpty } from '../sheet/types'
 import { apiBase } from '../api/dataSource'
-import { formatPopularityDiff } from '../api/popularity'
+import { GfGaText, TonedText } from '../sheet2/fundCells'
+import { goalsText, h2hLast6Text, injuryCell, popularityText, popularityTone, rankText, rankTone } from '../sheet2/fundamentals'
+import '../sheet2/sheet2.css'
 import type {
   AsianLineFull,
   AsianPhases,
@@ -59,21 +61,11 @@ function metaLabel(
   return bits.length ? bits.join(' · ') : null
 }
 
-/** 伤停：未采到 null；仅 obs.injury.known_empty===true 才「确认无伤停」 */
+/** 伤停与数据表同一字面量：已知为空显示「无」，其余缺失显示「—」。有名单时详情显示完整名单。 */
 function formatInjury(stats: MatchDetail['stats']): string {
-  const inj = stats.injury
-  const obs = stats.obs?.injury
-  if (obs?.known_empty === true) return '确认无伤停'
-  if (inj == null) return '未采到伤停'
-  if (Array.isArray(inj) && inj.length === 0) {
-    // 空数组且无 known_empty → 仍按未确认空，不写「确认无伤停」
-    return '未采到伤停'
-  }
-  try {
-    return typeof inj === 'string' ? inj : JSON.stringify(inj)
-  } catch {
-    return '—'
-  }
+  const cell = injuryCell(stats.injury, stats.obs?.injury?.known_empty === true)
+  if (cell.text === '无' || cell.text === '—') return cell.text
+  return cell.detail ?? cell.text
 }
 
 const directionColor: Record<Direction, string> = {
@@ -287,7 +279,7 @@ export default function MatchDetailPage() {
           <Card title="交锋 / 近况 / 伤停" size="small">
             <Descriptions column={1} size="small">
               <Descriptions.Item label="排名">
-                主 {stats.rank?.home ?? '—'} / 客 {stats.rank?.away ?? '—'}
+                主 <TonedText text={rankText(stats.rank?.home)} tone={rankTone('home', stats.rank?.home)} /> / 客 <TonedText text={rankText(stats.rank?.away)} tone={rankTone('away', stats.rank?.away)} />
                 {metaLabel(stats, 'rank') ? <HelpTip tip={`数据来源：${metaLabel(stats, 'rank')}`} /> : null}
               </Descriptions.Item>
               <Descriptions.Item label="交锋场次">
@@ -295,13 +287,10 @@ export default function MatchDetailPage() {
                 {metaLabel(stats, 'h2h') ? <HelpTip tip={`数据来源：${metaLabel(stats, 'h2h')}`} /> : null}
               </Descriptions.Item>
               <Descriptions.Item label={<LabelWithHelp label="交锋近6" tip="主队视角的进球和失球。" />}>
-                {h2hLast6.home_gf != null
-                  ? `${h2hLast6.home_gf} : ${h2hLast6.home_ga}`
-                  : '—'}
+                <GfGaText text={h2hLast6Text(h2hLast6)} />
               </Descriptions.Item>
               <Descriptions.Item label="近6进失">
-                主 {last6.home ? `${last6.home.gf}/${last6.home.ga}` : '—'} · 客{' '}
-                {last6.away ? `${last6.away.gf}/${last6.away.ga}` : '—'}
+                主 <GfGaText text={goalsText(last6.home)} /> · 客 <GfGaText text={goalsText(last6.away)} />
                 {metaLabel(stats, 'recent') ? <HelpTip tip={`数据来源：${metaLabel(stats, 'recent')}`} /> : null}
               </Descriptions.Item>
               <Descriptions.Item label="伤停">
@@ -311,7 +300,7 @@ export default function MatchDetailPage() {
                 {metaLabel(stats, 'injury') ? <HelpTip tip={`数据来源：${metaLabel(stats, 'injury')}`} /> : null}
               </Descriptions.Item>
               <Descriptions.Item label="人气差值">
-                {formatPopularityDiff(stats.popularity_diff) ?? '—'}
+                <TonedText text={popularityText(stats.popularity_diff)} tone={popularityTone(stats.popularity_diff)} />
                 {metaLabel(stats, 'popularity') ? <HelpTip tip={`数据来源：${metaLabel(stats, 'popularity')}`} /> : null}
               </Descriptions.Item>
               <Descriptions.Item label="支持率代理">

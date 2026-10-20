@@ -20,11 +20,16 @@ function compareLocked(meta, fetchFailed) {
   return meta?.readonly === true || fetchFailed || bad != null
 }
 
-test('0.053 显示为 5.3%', () => {
-  assert.equal(F.formatPopularityDiff(0.053), '5.3%')
+test('0.053 显示为 5.3，不带百分号', () => {
+  assert.equal(F.formatPopularityDiff(0.053), '5.3')
+  assert.equal(String(F.formatPopularityDiff(0.053)).includes('%'), false)
 })
 test('负数保留符号', () => {
-  assert.equal(F.formatPopularityDiff(-0.126), '-12.6%')
+  assert.equal(F.formatPopularityDiff(-0.126), '-12.6')
+})
+test('零与四舍五入后的负零显示为 0.0', () => {
+  assert.equal(F.formatPopularityDiff(0), '0.0')
+  assert.equal(F.formatPopularityDiff(-0.0004), '0.0')
 })
 test('空值不换算成数字', () => {
   assert.equal(F.formatPopularityDiff(null), null)

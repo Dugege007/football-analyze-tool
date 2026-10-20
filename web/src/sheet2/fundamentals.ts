@@ -1,12 +1,16 @@
 /**
  * 基本面宽表里除 xG 以外的格子。
- * 空值用「—」。伤停只有 obs.injury.known_empty 为真时才显示「无」，空名单不算已知无伤停。
- * 人气差值只做已有的小数到百分比换算，不在页面上用赔率重算。
+ * 缺测用单个「—」。伤停只有 obs.injury.known_empty 为真时才显示「无」，空名单不算已知无伤停。
+ * 人气差值只做已有的小数换算（乘以 100、一位小数、不写百分号），不在页面上用赔率重算。
+ * 进失对写成「进/失」，分段上色由渲染层拆开，不在这里给整串上一个色。
  */
 import { formatPopularityDiff } from '../api/popularity'
 import type { FundGoals, FundMetaEntry, FundStats } from './types'
 
 export const FUND_DASH = '—'
+
+/** 侧别轴：正／主为橙，负／客为蓝，零与缺测不上色。 */
+export type SideTone = 'orange' | 'blue' | 'plain'
 
 const POP_SOURCE: Record<string, string> = {
   manual_seed: '手工底座',
@@ -33,17 +37,26 @@ export function goalsText(side: FundGoals | null | undefined): string {
   return `${numText(gf)}/${numText(ga)}`
 }
 
+/** 只拆「进/失」。缺测、半截、冒号比分都不拆，避免整格被涂成一种颜色。 */
+const GFGA_PAIR = /^(-?\d+(?:\.\d+)?)\/(-?\d+(?:\.\d+)?)$/
+
+export function splitGfGa(text: string): { gf: string; ga: string } | null {
+  const matched = GFGA_PAIR.exec(text)
+  if (!matched) return null
+  return { gf: matched[1], ga: matched[2] }
+}
+
 export function h2hMatchesText(matches: unknown): string {
   const n = finite(matches)
   return n == null ? FUND_DASH : numText(n)
 }
 
-/** 交锋近 6，主队视角，与详情页相同的「进 : 失」。 */
+/** 交锋近 6，主队视角的进/失。任一端缺失则整格缺测，不输出半截，也不用冒号。 */
 export function h2hLast6Text(last6: { home_gf?: number | null; home_ga?: number | null } | null | undefined): string {
   const gf = finite(last6?.home_gf)
   const ga = finite(last6?.home_ga)
   if (gf == null || ga == null) return FUND_DASH
-  return `${numText(gf)} : ${numText(ga)}`
+  return `${numText(gf)}/${numText(ga)}`
 }
 
 export function rankText(value: unknown): string {
@@ -51,8 +64,21 @@ export function rankText(value: unknown): string {
   return n == null ? FUND_DASH : numText(n)
 }
 
+/** 有排名才上侧别色。缺测不上色。 */
+export function rankTone(side: 'home' | 'away', value: unknown): SideTone {
+  if (finite(value) == null) return 'plain'
+  return side === 'home' ? 'orange' : 'blue'
+}
+
 export function popularityText(value: unknown): string {
   return formatPopularityDiff(finite(value)) ?? FUND_DASH
+}
+
+/** 人气差值是主减客：正橙、负蓝。显示成 0.0（含 -0.0）与缺测都不上色。 */
+export function popularityTone(value: unknown): SideTone {
+  const text = formatPopularityDiff(finite(value))
+  if (!text || text === '0.0') return 'plain'
+  return text.startsWith('-') ? 'blue' : 'orange'
 }
 
 /** 来源和 as_of。只说明数据从哪来，不写计算规则。 */

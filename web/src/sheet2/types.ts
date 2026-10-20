@@ -191,7 +191,7 @@ export interface FundStats {
     last6?: { home_gf?: number | null; home_ga?: number | null } | null
   } | null
   rank?: { home?: number | null; away?: number | null } | null
-  /** 小数。页面用 formatPopularityDiff 显示成一位小数的百分比。 */
+  /** 小数。页面用 formatPopularityDiff 乘以 100 后显示一位小数，不写百分号。 */
   popularity_diff?: number | null
   injury?: unknown
   weather?: unknown
