@@ -1228,6 +1228,93 @@ def _resolve_alias_file(ns) -> Path | None:
     return _first_existing(default_alias_paths()) or default_alias_paths()[0]
 
 
+def _plan_bsd_unresolved(db_path: Path, unmatched: list[dict], *, apply: bool) -> dict:
+    """队名未解析时走入库闸。
+
+    干跑只预览。写入时只把写法送进待定池，或在精确命中时加别名。
+    不把 BSD 原文升成常用名，不新建球队，不改比赛文本列，也不为此抓取网页。
+    """
+    items: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for item in unmatched:
+        if item.get("reason") != "team_unresolved":
+            continue
+        detail = str(item.get("detail") or "")
+        sides = [part.strip() for part in detail.split(",") if part.strip()] or ["home", "away"]
+        for side in sides:
+            if side not in ("home", "away"):
+                continue
+            name = item.get("home_team") if side == "home" else item.get("away_team")
+            if not name:
+                continue
+            key = (side, str(name).strip())
+            if key in seen:
+                continue
+            seen.add(key)
+            opponent = item.get("away_team") if side == "home" else item.get("home_team")
+            items.append({
+                "kind": "team",
+                "raw_name": name,
+                "source_ref": f"matches.id={item.get('match_id')}#{side}_team",
+                "context": {
+                    "kickoff_at": item.get("kickoff_at"),
+                    "slot": side,
+                    "opponent_name": opponent,
+                    "match_id": item.get("match_id"),
+                },
+            })
+    empty = {"preview": [], "observed": [], "errors": [], "match_text_rewritten": False}
+    if not items:
+        return empty
+    api_root = str(_MA_API_ROOT)
+    if api_root not in sys.path:
+        sys.path.insert(0, api_root)
+    try:
+        from app.name_resolve_gate import admit, preview_names
+    except (Exception, SystemExit) as exc:
+        return {**empty, "errors": [{"error": str(exc)}]}
+    if not apply:
+        ro = connect_ro(db_path)
+        try:
+            return {**empty, "preview": preview_names(ro, items, source="bsd_unresolved")}
+        except (Exception, SystemExit) as exc:
+            return {**empty, "errors": [{"error": str(exc)}]}
+        finally:
+            ro.close()
+    observed: list[dict] = []
+    errors: list[dict] = []
+    conn = sqlite3.connect(db_path)
+    try:
+        from app import alias_pool
+
+        alias_pool.ensure_schema(conn)
+        for item in items:
+            try:
+                observed.append(
+                    admit(
+                        conn,
+                        "team",
+                        item["raw_name"],
+                        "bsd_unresolved",
+                        item["source_ref"],
+                        item["context"],
+                        allow_create=False,
+                    )
+                )
+            except (Exception, SystemExit) as exc:
+                errors.append({"name": item["raw_name"], "error": str(exc)})
+        conn.commit()
+    except (Exception, SystemExit) as exc:
+        errors.append({"error": str(exc)})
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+    finally:
+        conn.close()
+    return {"preview": [], "observed": observed, "errors": errors, "match_text_rewritten": False}
+
+
 def run(ns, client=None) -> dict:
     db_path = Path(ns.db).resolve()
     if not db_path.is_file():
@@ -1315,6 +1402,7 @@ def run(ns, client=None) -> dict:
     if alias_report is not None:
         alias_report["written"] = aliases_written
 
+    name_gate = _plan_bsd_unresolved(db_path, unmatched, apply=bool(ns.apply))
     out_dir = _out_dir(ns)
     if not ns.aliases_only:
         write_csv(out_dir, writes, unmatched, mapped_at)
@@ -1331,6 +1419,7 @@ def run(ns, client=None) -> dict:
         "out_dir": str(out_dir),
         "final_names": final_info,
         "alias_import": alias_report,
+        "name_gate": name_gate,
         "writes": [{k: v for k, v in item.items() if k != "event"} for item in writes],
         "unmatched_rows": [{k: v for k, v in item.items() if k != "event"} for item in unmatched],
     }

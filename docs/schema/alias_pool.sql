@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS alias_pool_entry (
   candidate_basis   TEXT, -- 依据类别：standard_file、alias_table、loose_key、affix、manual。
   status            TEXT NOT NULL DEFAULT 'pending'
                     CHECK (status IN ('pending', 'confirmed', 'rejected', 'ambiguous')),
-  manual_reason     TEXT, -- 必须人工处理的原因。包括 gender、age_group、age_u22、same_name_other_team、reserve_team、multi_candidate、auto_revoked、other。U22 记为 age_u22，表示年龄段，不是二队。
+  manual_reason     TEXT, -- 必须人工处理的原因。包括 gender、age_group、age_u22、same_name_other_team、reserve_team、multi_candidate、auto_revoked、needs_external_evidence、other。U22 记为 age_u22，表示年龄段，不是二队。needs_external_evidence 只记线索，不表示已经取证。
   confirmed_id      INTEGER, -- 确认后的标准名编号。自动映射确认时也会填写。
   confirmed_by      TEXT, -- 确认人。自动映射填写 auto。
   confirmed_at      TEXT, -- 确认时间，北京时间的国际标准化组织 8601 文本。
@@ -68,8 +68,10 @@ CREATE TABLE IF NOT EXISTS alias_mapping_audit (
                         'manual',
                         'level1_known_alias',
                         'level2_equal_after_cleaning',
+                        'same_match_multi_evidence',
+                        'league_side_context',
                         'revoke'
-                      )), -- 撤销没有置信等级，单独使用 revoke，避免把撤销记成人工确认或某一级自动映射。
+                      )), -- 撤销没有置信等级，单独使用 revoke，避免把撤销记成人工确认或某一级自动映射。同场与赛事侧只加别名，不表示升格。
   source              TEXT NOT NULL, -- 触发入口。撤销记为 revoke。
   source_ref          TEXT, -- 触发位置。撤销记为 audit.id=原审计编号。
   pool_entry_id       INTEGER REFERENCES alias_pool_entry (id),

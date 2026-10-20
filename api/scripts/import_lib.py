@@ -517,6 +517,10 @@ def _insert_new_group(
     不写入雷速、人工定稿或旧仓库高置信升格。列不存在时不改表结构，靠别名来源保持星号。
     别名被其他组占用时删掉刚插入的空组，返回空，不改挂到那一组上。
     """
+    folded = (source or "").casefold()
+    # BSD 只作别名或待定。不允许借 create=True 新建实体，更不允许建成已升格。
+    if "bsd" in folded or "bzzoiro" in folded:
+        return None
     promoted = _name_already_promoted(kind, norm)
     alias_source = source if promoted else _pending_alias_source(source)
     columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}

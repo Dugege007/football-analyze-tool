@@ -6,7 +6,9 @@
 以及回填种子里写反的一对；给出数据库路径时，再检查 teams 与 team_aliases。
 
 默认只检查，不写文件。加上 --apply 才替换写反的方向。
-本脚本不修改 matches.home_team、matches.away_team、matches.competition_name。
+方向已经对齐时，仍会把 legacy_high_confidence 写入名称包的 promotion 列，
+以及数据库的 promotion_source（没有该列时一并补上）。已有雷速、人工定稿或用户改正时不覆盖。
+文字相同本身不是升格。本脚本不修改 matches.home_team、matches.away_team、matches.competition_name。
 """
 from __future__ import annotations
 
@@ -33,6 +35,101 @@ class Correction:
     canonical: str
     alias: str
     note: str
+
+
+# 旧仓高置信是升格优先级的第二档。已经有雷速、人工定稿或用户改正时不覆盖。
+_LEGACY_PROMOTION = "legacy_high_confidence"
+_PROTECTED_PROMOTION = frozenset(
+    {
+        "leisutiyu",
+        "leisu",
+        "雷速",
+        "雷速体育",
+        "human_finalize",
+        "user_correct",
+    }
+)
+
+
+def _stamp_csv_promotion(parts: list[str]) -> bool:
+    """名称包行补上 legacy_high_confidence。已有更高来源时不改。"""
+    while len(parts) < 5:
+        parts.append("")
+    promo = parts[4].strip()
+    if promo in _PROTECTED_PROMOTION:
+        return False
+    pending = parts[3].strip().lower()
+    if promo == _LEGACY_PROMOTION and pending != "true":
+        return False
+    parts[3] = "false"
+    parts[4] = _LEGACY_PROMOTION
+    return True
+
+
+def _team_columns(conn: sqlite3.Connection) -> set[str]:
+    return {str(row[1]) for row in conn.execute("PRAGMA table_info(teams)")}
+
+
+def _ensure_legacy_columns(conn: sqlite3.Connection) -> None:
+    """方向对齐需要能写下升格来源。缺列时补上，不改比赛表。"""
+    columns = _team_columns(conn)
+    if "promotion_source" not in columns:
+        conn.execute("ALTER TABLE teams ADD COLUMN promotion_source TEXT")
+    if "promotion" not in columns:
+        conn.execute("ALTER TABLE teams ADD COLUMN promotion TEXT")
+    if "pending_confirm" not in columns:
+        conn.execute("ALTER TABLE teams ADD COLUMN pending_confirm TEXT")
+
+
+def _stamp_legacy_db(
+    conn: sqlite3.Connection,
+    team_id: int,
+    apply: bool,
+    notes: list[str],
+    problems: list[str],
+) -> bool:
+    """把已经对齐的球队写成旧仓高置信。返回本次是否写了库。"""
+    if apply:
+        _ensure_legacy_columns(conn)
+    columns = _team_columns(conn)
+    if "promotion_source" not in columns and "promotion" not in columns:
+        return False
+    source_sql = "promotion_source" if "promotion_source" in columns else "NULL"
+    promo_sql = "promotion" if "promotion" in columns else "NULL"
+    pending_sql = "pending_confirm" if "pending_confirm" in columns else "NULL"
+    row = conn.execute(
+        f"SELECT {source_sql}, {promo_sql}, {pending_sql} FROM teams WHERE id = ?",
+        (team_id,),
+    ).fetchone()
+    if row is None:
+        return False
+    current = str(row[0] or row[1] or "").strip()
+    if current in _PROTECTED_PROMOTION:
+        notes.append(f"编号 {team_id} 已有升格来源「{current}」，不用旧仓高置信覆盖。")
+        return False
+    pending = str(row[2] or "").strip().lower()
+    if current == _LEGACY_PROMOTION and pending != "true":
+        return False
+    notes.append(f"编号 {team_id} 需要写入 {_LEGACY_PROMOTION}。文字相同本身不是升格。")
+    if not apply:
+        problems.append(
+            f"编号 {team_id} 的升格来源还不是 {_LEGACY_PROMOTION}。加上 --apply 才会写入名称包和数据库。"
+        )
+        return False
+    sets: list[str] = []
+    params: list[str | int] = []
+    if "promotion_source" in columns:
+        sets.append("promotion_source = ?")
+        params.append(_LEGACY_PROMOTION)
+    if "promotion" in columns:
+        sets.append("promotion = ?")
+        params.append(_LEGACY_PROMOTION)
+    if "pending_confirm" in columns:
+        sets.append("pending_confirm = ?")
+        params.append("false")
+    params.append(team_id)
+    conn.execute(f"UPDATE teams SET {', '.join(sets)} WHERE id = ?", params)
+    return True
 
 
 @dataclass
@@ -115,9 +212,15 @@ def fix_teams_csv(text: str, corrections: list[Correction]) -> FileResult:
             index, parts, _name, aliases = canonical_rows[0]
             if item.alias in aliases:
                 notes.append(f"名册中「{item.canonical}」的别名已包含「{item.alias}」。")
+                if _stamp_csv_promotion(parts):
+                    newline = "\n" if lines[index].endswith("\n") else ""
+                    lines[index] = ",".join(parts) + newline
+                    changed = True
+                    notes.append(f"已把「{item.canonical}」的升格来源写成 legacy_high_confidence。")
                 continue
             aliases.append(item.alias)
             parts[1] = _join_aliases(aliases)
+            _stamp_csv_promotion(parts)
             newline = "\n" if lines[index].endswith("\n") else ""
             lines[index] = ",".join(parts) + newline
             changed = True
@@ -131,6 +234,7 @@ def fix_teams_csv(text: str, corrections: list[Correction]) -> FileResult:
             aliases = [name for name in aliases if name != item.canonical]
             parts[0] = item.canonical
             parts[1] = _join_aliases(aliases)
+            _stamp_csv_promotion(parts)
             newline = "\n" if lines[index].endswith("\n") else ""
             lines[index] = ",".join(parts) + newline
             changed = True
@@ -267,6 +371,8 @@ def fix_database(conn: sqlite3.Connection, corrections: list[Correction], apply:
                 continue
             if alias_row:
                 notes.append(f"数据库中「{item.canonical}」已是常用名，别名「{item.alias}」已指向该队。")
+                if _stamp_legacy_db(conn, team_id, apply, notes, problems):
+                    changed = True
                 continue
             notes.append(f"将为「{item.canonical}」补上别名「{item.alias}」。")
             changed = True
@@ -275,6 +381,8 @@ def fix_database(conn: sqlite3.Connection, corrections: list[Correction], apply:
                     "INSERT INTO team_aliases (alias, team_id, source) VALUES (?, ?, ?)",
                     (item.alias, team_id, "direction_correction"),
                 )
+            if _stamp_legacy_db(conn, team_id, apply, notes, problems):
+                changed = True
             continue
         if item.alias not in by_name:
             notes.append(f"数据库里没有「{item.canonical}」或「{item.alias}」这支球队，未改库。")
@@ -309,6 +417,8 @@ def fix_database(conn: sqlite3.Connection, corrections: list[Correction], apply:
                 "INSERT INTO team_aliases (alias, team_id, source) VALUES (?, ?, ?)",
                 (item.alias, team_id, "direction_correction"),
             )
+        if _stamp_legacy_db(conn, team_id, apply, notes, problems):
+            changed = True
     return FileResult("数据库", changed, problems, notes)
 
 
