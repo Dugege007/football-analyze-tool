@@ -113,7 +113,7 @@ const ahView = bookMarketResultView(row.result?.by_book, 'macau', 'ah')
 assert.deepEqual(ahView, { kind: 'text', text: '主+0.25', tone: 'orange' })
 
 const ouView = bookMarketResultView(row.result?.by_book, 'macau', 'ou')
-assert.deepEqual(ouView, { kind: 'text', text: '2.25大', tone: 'orange' })
+assert.deepEqual(ouView, { kind: 'text', text: '2.25大', tone: 'red' })
 
 const euView = bookMarketResultView(row.result?.by_book, 'macau', 'x1x2')
 assert.deepEqual(euView, { kind: 'text', text: '胜 1.11', tone: 'orange' })
@@ -133,7 +133,7 @@ const pushView = bookMarketResultView(row.result?.by_book, 'pinnacle', 'ah')
 assert.deepEqual(pushView, { kind: 'text', text: '走水', tone: 'plain' })
 
 const underView = bookMarketResultView(row.result?.by_book, 'pinnacle', 'ou')
-assert.deepEqual(underView, { kind: 'text', text: '2.5小', tone: 'blue' })
+assert.deepEqual(underView, { kind: 'text', text: '2.5小', tone: 'green' })
 
 const drawView = bookMarketResultView(row.result?.by_book, 'pinnacle', 'x1x2')
 assert.deepEqual(drawView, { kind: 'text', text: '平 3.2', tone: 'plain' })

@@ -24,6 +24,7 @@ if (ok.kind === 'value') {
   assert.equal(ok.text, '1.57')
   assert.equal(ok.mark, null)
   assert.equal(ok.className, '')
+  assert.equal(ok.className.includes('t-orange') || ok.className.includes('t-blue'), false)
   assert.equal(ok.text.includes('1.567'), false)
 }
 

@@ -70,7 +70,7 @@ export function resultCellReason(cell: {
 export const fmtNum = (v: number | null | undefined): string => (v == null ? '-' : String(Number(v.toFixed(2))))
 
 export type BookMarket = 'ah' | 'ou' | 'x1x2'
-export type BookMarketTone = 'orange' | 'blue' | 'plain'
+export type BookMarketTone = 'orange' | 'blue' | 'red' | 'green' | 'plain'
 
 /** 机构赛果格的展示决定。dash 对应页面「-」；status 只用于接口已确认缺失的格子。 */
 export type BookMarketResultView =
@@ -111,10 +111,16 @@ function bookCellText(market: BookMarket, cell: BookCell): string | null {
   return `${label} ${fmtNum(cell.odds)}`
 }
 
+/**
+ * 主客走侧别：主橙、客蓝。大小走升降：大红、小绿。
+ * 走水、平、无方向保持正文，不上色。
+ */
 function bookCellTone(cell: BookCell): BookMarketTone {
   if (cell.push) return 'plain'
-  if (cell.side === 'home' || cell.side === 'over') return 'orange'
-  if (cell.side === 'away' || cell.side === 'under') return 'blue'
+  if (cell.side === 'home') return 'orange'
+  if (cell.side === 'away') return 'blue'
+  if (cell.side === 'over') return 'red'
+  if (cell.side === 'under') return 'green'
   return 'plain'
 }
 
