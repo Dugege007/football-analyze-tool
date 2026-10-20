@@ -324,12 +324,30 @@ def build_result(conn: sqlite3.Connection, match_pk: int) -> dict | None:
     }
 
 
-def build_stats(conn: sqlite3.Connection, match_pk: int) -> dict:
-    """0.3.21：投影字段带 source_*/as_of_*；可选 stats_obs 分 kind 最新行。"""
-    keys = {r[1] for r in conn.execute("PRAGMA table_info(stats)")}
-    s = conn.execute("SELECT * FROM stats WHERE match_id = ?", (match_pk,)).fetchone()
-    if not s:
-        return {}
+_STATS_META_COLS = (
+    ("recent", "source_recent", "as_of_recent"),
+    ("h2h", "source_h2h", "as_of_h2h"),
+    ("rank", "source_rank", "as_of_rank"),
+    ("injury", "source_injury", "as_of_injury"),
+    ("weather", "source_weather", "as_of_weather"),
+    ("popularity", "source_popularity", "as_of_popularity"),
+)
+
+
+def _obs_entry(row: sqlite3.Row) -> dict[str, Any]:
+    payload = loads_json(row["payload_json"])
+    known_empty = None
+    if isinstance(payload, dict) and "known_empty" in payload:
+        known_empty = bool(payload.get("known_empty"))
+    return {
+        "as_of": row["as_of"], "source": row["source"], "payload": payload,
+        "quality": row["quality"], "fetched_at": row["fetched_at"],
+        "known_empty": known_empty,
+    }
+
+
+def _assemble_stats(s: sqlite3.Row, keys: set[str], obs_rows: list[sqlite3.Row] | None) -> dict[str, Any]:
+    """一行 stats 加该场各 kind 最新观测。空伤停保持 null，不写成已知无伤停。"""
     recent = loads_json(s["recent_json"]) or {}
     if s["home_streak_last6"] is not None and "home_streak_last6" not in recent:
         recent = dict(recent)
@@ -345,20 +363,10 @@ def build_stats(conn: sqlite3.Connection, match_pk: int) -> dict:
     out["popularity_diff"] = s["popularity_diff"]
     if "support_proxy_odds" in extras:
         out["support_proxy_odds"] = extras["support_proxy_odds"]
-    injury = loads_json(s["injury_json"])
-    weather = loads_json(s["weather_json"])
-    out["injury"] = injury  # 空保持 null；不伪 [] / known_empty
-    out["weather"] = weather
-    # 出处 / as_of（列缺失 = 现网 → 省略）
+    out["injury"] = loads_json(s["injury_json"])  # 空保持 null；不伪 [] / known_empty
+    out["weather"] = loads_json(s["weather_json"])
     meta: dict[str, Any] = {}
-    for kind, sk, ak in (
-        ("recent", "source_recent", "as_of_recent"),
-        ("h2h", "source_h2h", "as_of_h2h"),
-        ("rank", "source_rank", "as_of_rank"),
-        ("injury", "source_injury", "as_of_injury"),
-        ("weather", "source_weather", "as_of_weather"),
-        ("popularity", "source_popularity", "as_of_popularity"),
-    ):
+    for kind, sk, ak in _STATS_META_COLS:
         if sk in keys or ak in keys:
             meta[kind] = {
                 "source": s[sk] if sk in keys else None,
@@ -366,28 +374,64 @@ def build_stats(conn: sqlite3.Connection, match_pk: int) -> dict:
             }
     if meta:
         out["meta"] = meta
-    # stats_obs：按 kind 取 as_of 最新一行（只读；manual_seed / bsd 分源）
-    names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if "stats_obs" in names:
+    # None 表示没有 stats_obs 表（与旧详情接口一致：不输出 obs）。空列表表示表在但本场没有观测。
+    if obs_rows is not None:
         obs_out: dict[str, Any] = {}
-        for r in conn.execute(
+        for row in obs_rows:
+            if row["kind"] in obs_out:
+                continue  # 调用方已按 as_of 降序，先见到的是该 kind 最新一行
+            obs_out[row["kind"]] = _obs_entry(row)
+        out["obs"] = obs_out
+    return out
+
+
+def build_stats(conn: sqlite3.Connection, match_pk: int) -> dict:
+    """0.3.21：投影字段带 source_*/as_of_*；可选 stats_obs 分 kind 最新行。"""
+    keys = {r[1] for r in conn.execute("PRAGMA table_info(stats)")}
+    s = conn.execute("SELECT * FROM stats WHERE match_id = ?", (match_pk,)).fetchone()
+    if not s:
+        return {}
+    names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    obs_rows: list[sqlite3.Row] | None = None
+    if "stats_obs" in names:
+        obs_rows = list(conn.execute(
             "SELECT kind, as_of, source, payload_json, quality, fetched_at FROM stats_obs "
             "WHERE match_id=? ORDER BY kind ASC, as_of DESC",
             (match_pk,),
+        ))
+    return _assemble_stats(s, keys, obs_rows)
+
+
+def load_stats_many(conn: sqlite3.Connection, match_ids: list[int]) -> dict[int, dict]:
+    """按场次批量组装与 build_stats 相同的 stats。没有 stats 行的场次不出现在结果里。"""
+    if not match_ids:
+        return {}
+    names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "stats" not in names:
+        return {}
+    keys = {r[1] for r in conn.execute("PRAGMA table_info(stats)")}
+    has_obs = "stats_obs" in names
+    placeholders = ",".join("?" for _ in match_ids)
+    rows = conn.execute(
+        f"SELECT * FROM stats WHERE match_id IN ({placeholders})",
+        match_ids,
+    ).fetchall()
+    obs_by_match: dict[int, list[sqlite3.Row]] = {}
+    if has_obs and rows:
+        ids = [int(r["match_id"]) for r in rows]
+        ph = ",".join("?" for _ in ids)
+        for row in conn.execute(
+            "SELECT match_id, kind, as_of, source, payload_json, quality, fetched_at FROM stats_obs "
+            f"WHERE match_id IN ({ph}) ORDER BY match_id ASC, kind ASC, as_of DESC",
+            ids,
         ):
-            if r["kind"] in obs_out:
-                continue  # 已是该 kind 最新 as_of
-            payload = loads_json(r["payload_json"])
-            known_empty = None
-            if isinstance(payload, dict) and "known_empty" in payload:
-                known_empty = bool(payload.get("known_empty"))
-            obs_out[r["kind"]] = {
-                "as_of": r["as_of"], "source": r["source"], "payload": payload,
-                "quality": r["quality"], "fetched_at": r["fetched_at"],
-                "known_empty": known_empty,
-            }
-        out["obs"] = obs_out
-    return out
+            obs_by_match.setdefault(int(row["match_id"]), []).append(row)
+    return {
+        int(row["match_id"]): _assemble_stats(
+            row, keys, obs_by_match.get(int(row["match_id"]), []) if has_obs else None,
+        )
+        for row in rows
+    }
 
 
 def _overlay_asian_water(conn: sqlite3.Connection, match_pk: int, odds: dict) -> dict:

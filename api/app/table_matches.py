@@ -48,6 +48,7 @@ from app import avg_cells  # 多家平均三格（接口约定第 3 版第 7 节
 from app import alert_baseline as alb  # 预警档位按每格抓取时刻固定基准（2026-10-14）
 from app import market_settle as msettle  # 机构赛果：只读 market_settle，不改预测结算
 from app import xg_obs  # 预期进球六列：只读 stats_obs，不在接口里做减法
+from app.popularity_diff import project_table_stats  # 人气差值：已有小数原样；空值用临盘欧赔现算，GET 不写库
 
 router = APIRouter(tags=["table"])
 
@@ -2785,7 +2786,8 @@ def load_result_special_status(conn: sqlite3.Connection) -> dict[int, str]:
 
 def _flat_row(item: dict) -> dict:
     """扁平：嵌套键用 _ 连接；live / rationale / consensus.books 等列表原样保留；match.* 去掉前缀。"""
-    src = _stable(item)
+    # stats 形状随场次变化（近况、伤停名单）。扁平列集合要固定，所以不把 stats 摊开；嵌套响应仍带 stats。
+    src = _stable({k: v for k, v in item.items() if k != "stats"})
     live = src.pop("live", [])
     match = src.pop("match", {})
     pred = src.get("prediction")
@@ -2978,6 +2980,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
     computed_by_book = msettle.compute_by_book_many(conn, missing_scores)
     computed_by_book.update(msettle.compute_by_book_many(conn, avg_only_scores, books=(msettle.AVG_BOOK,)))
     xg_context = xg_obs.load_match_context(conn, page_ids)
+    stats_by_id = M.load_stats_many(conn, page_ids)
 
     items: list[dict] = []
     trunc_table = osx.load_quantile_table()  # None when the analyst has not supplied the table
@@ -3271,6 +3274,8 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                           and result.get("home_goals") is not None),
                 **xg_context.for_match(mpk),
             ),
+            # 与详情 build_stats 同一套近况、交锋、排名、伤停、天气。人气差值空则用本行可见临盘欧赔，不另查。
+            "stats": project_table_stats(stats_by_id.get(mpk), x_out),
         })
 
     # 2026-10-14：竞彩未开售胜平负的场次改原因代码；所有原因代码同时返回中文说明（前端不再维护对照表）
@@ -3278,7 +3283,8 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
     for _it in items:
         reason_codes.apply_jc_not_on_sale(_it, _not_on_sale)
         # prediction 块要与单场预测接口完全一致，不加中文说明（扁平格式里仍有对应的 _zh 列）
-        _ann = reason_codes.annotate({k: v for k, v in _it.items() if k != "prediction"})
+        # stats 原样投影，不给伤停名单里的 reason 补中文说明列
+        _ann = reason_codes.annotate({k: v for k, v in _it.items() if k not in ("prediction", "stats")})
         _it.update({k: v for k, v in _ann.items() if k.endswith("reason_zh")})
     out_items = items if fmt == "nested" else [_flat_row(i) for i in items]
     return {
@@ -3312,6 +3318,14 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 "snapshot_projection_jc_spf_hhad": "skipped (local collector empty)",
                 "stats_obs": "as_of+source; manual_seed tagged; constituent gate kickoff+3h≤T_decision",
                 "injury_known_empty": "only when source explicitly empty; never for missing fetch",
+            },
+            "fund_table": {
+                "nested_key": "stats",
+                "assembly": "load_stats_many，与 /matches/{id} 的 build_stats 同一组装",
+                "columns_off": ["streak", "support_proxy_odds"],
+                "popularity_diff": "已有小数原样投影；空值用本行临盘欧赔现算（≥2 家算术平均，否则平博→威廉→澳门→皇冠→Bet365）。"
+                                   "只读已组装的 euro_1x2 close（优先 odds_snapshot），不用雷速，不用仅主胜的 odds_euro_home。GET 不写库。",
+                "empty": "非 xG 由前端显示 —；xG 外壳不变",
             },
             "xg_fundamentals": {
                 "keys": list(xg_obs.COLUMN_KEYS),
