@@ -218,6 +218,7 @@ npm run dev
 | as-of 补中盘 | `docs/schema/v2_0-mid-rule-asof-backfill.md` |
 | 赛果入库节奏 | `docs/schema/v2_0-result-ingest-schedule.md` |
 | 场次消歧 | `docs/schema/v2_0-fixture-match-disambiguation-draft.md` |
+| 名称系统总方案（常用名、星号、入库闸、雷速升格） | `docs/schema/name-system-design-v1.md` |
 | 防泄漏铁律 | `docs/schema/v2_0-as-of-betting-iron-rules.md`、`research/shadow-ledger/acceptance-leakage-checklist.md` |
 | 本地 API 接口速查 | `api/README.md` |
 

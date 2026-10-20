@@ -3,14 +3,15 @@
 > 用户 2026-10-18 拍板。下面六条是名称和星号的产品规则，球队与赛事同一套。
 > 2026-10-19 补充：星号表示尚未落到用户熟悉的常用名。没有来源名、也没有规范名时标星。
 > 2026-10-19 再补：一组等于同一支球队或同一项赛事；新名称如何并入已有组或新建组，见同目录 `v2_0-name-resolve-group-rules.md`。无常用名时须在组内选定默认显示并继续标星。
-> 实现见 `api/app/team_pending.py`、`api/app/league_pending.py`，赛程字段见 `api/app/main.py` 的 `build_match_obj`，数据表见 `api/app/table_matches.py`，以及前端 `web/src/names/teamName.ts`、`web/src/names/leaguePending.ts`。前端只跟随接口给出的显示名和待确认布尔值。待定池核心见 `api/app/alias_pool.py`。
+> 2026-10-20：总方案、同步含义、升格优先级、自动化边界与禁止清单以同目录 `name-system-design-v1.md` 为准。本文只保留字段路径和星号读法。与总方案冲突时改本文，不另起第三套规则。
+> 实现见 `api/app/team_pending.py`、`api/app/league_pending.py`，赛程字段见 `api/app/main.py` 的 `build_match_obj`，数据表见 `api/app/table_matches.py`，以及前端 `web/src/names/teamName.ts`、`web/src/names/leaguePending.ts`。前端只跟随接口给出的显示名和待确认布尔值。待定池核心见 `api/app/alias_pool.py`。新字符串入库闸见 `api/app/name_resolve_gate.py`。
 
 ## 规则
 
 1. 常用名的首选来源是雷速体育对赛事和球队的写法。
 2. 其次采用旧 Football_Analyze 仓库数据中高置信度的名称。
 3. 已经确定常用名的，前端不得显示星号 `*`。
-4. 尚未确定的名称：先用网络检索帮助归并哪些别名是同一支球队或同一项赛事，并先映射到一个临时名；在升格为常用名之前，前端必须继续显示星号。升格只来自雷速体育确认，或人工明确定稿。
+4. 尚未确定的名称先搜索再匹配。能并入则只加别名；对不上则新建组，默认显示并继续标星。外部取证可以起草，没有出处时停在待定池；生产进程不抓取网页。升格优先级是雷速体育，其次是旧仓高置信（仅当该实体还没有雷速常用名），人工定稿和用户改正可以随时写入。没有雷速、也没有旧仓高置信时不升格。同步只改映射表和名称包，不把全文替换比赛文本列当作同步。定义见总方案第 3.10 节。
 5. 不得把长相相近、但可能是不同实体的名称自动合并。男子与女子、一线队与青年队都属于这种情况。
 6. 球队和赛事共用同一套机制。
 
@@ -59,6 +60,8 @@
 上表的空白兼容只用于 `api/resources/name-standard/` 里的名称表，以及同样格式的外部定稿、种子表。正式库 `teams` / `leagues` 的 `name_zh_canonical` 不是升格证明。历史行常把竞彩或训练源原文写进这一列，又没有升格来源。`pending_confirm` 不为真，甚至没有这一列，都不能把该规范名算成常用名。
 
 正式库升格来源读 `promotion_source`，没有该列时读 `promotion`。只认 `leisutiyu`、`雷速体育`、`human_finalize`、`legacy_high_confidence`、`user_correct`（以及与之同义的 `leisu`、`雷速`、`established`）。命中时不标星，并可以从待确认里拿掉。没有来源、或来源不在这组里时：这一字符串若已在名称表的已升格常用名里，保持不标星；否则赛程和数据表的 `*_pending_confirm` 为真。同文字的别名，即使来源不以 `_pending_confirm` 结尾，也不能把这种未升格规范名消星。本次不改写场次原文，也不批量改规范名。
+
+文字已经和常用名相同（`already_same`），或正式库 `name_zh_canonical` 有字但 `promotion_source` 与 `promotion` 都空，都不是升格证明。必须把允许的升格来源写进名称包的 `promotion` 列，并写进正式库的 `promotion_source`（没有该列时写 `promotion`）之后，读路径才把这一行当作已升格。只改比赛主客或赛事文本列不能代替这次写入。旧仓高置信由 `api/scripts/apply_team_direction.py` 在方向已经对齐时补上 `legacy_high_confidence`。雷速升格由 `api/scripts/promote_leisuti_names.py` 写入 `leisutiyu`，并同步名称包。
 
 提议别名表里没有升格标记的行，只是归并建议：只把尚不在常用名里的名称标星，不得把包内或正式库已经升格的常用名重新打成待确认。
 

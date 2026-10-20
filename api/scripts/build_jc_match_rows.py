@@ -266,11 +266,16 @@ def build_rows(conn, cands: list[dict]) -> dict:
         lid, lcan = lookup(conn, "league", c.get("league"))
         for side, name, tid in (("home", c.get("home"), hid), ("away", c.get("away"), aid)):
             if tid is None:
+                opponent_id = aid if side == "home" else hid
+                opponent_name = c.get("away") if side == "home" else c.get("home")
                 unmatched_team.append({"name_5df": name, "side": side, "match_uid": c["_uid"], "league_5df": c.get("league"),
+                                       "kickoff_at": iso(kick), "opponent_name": opponent_name,
+                                       "opponent_id": opponent_id,
                                        "in_pending_alias_final": norm(name) in proposed,
                                        "pending_alias_canonical": proposed.get(norm(name))})
         if lid is None:
-            unmatched_league.append({"league_5df": c.get("league"), "match_uid": c["_uid"]})
+            unmatched_league.append({"league_5df": c.get("league"), "match_uid": c["_uid"],
+                                     "kickoff_at": iso(kick), "home_team_id": hid, "away_team_id": aid})
         row = {
             "match_uid": c["_uid"], "scope": "jingcai", "jingcai_date": c["_D"], "weekday": code[:1],
             "kickoff_hour": kick.hour, "jc_id": code, "jc_no": int(code[1:]) if code[1:].isdigit() else None,
@@ -346,12 +351,103 @@ def backup(db: Path) -> Path:
     return out
 
 
+def _jc_gate_items(unmatched_team: list[dict], unmatched_league: list[dict]) -> list[dict]:
+    """未匹配名称交给入库闸。同一规范化键只送一次。"""
+    items: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for item in unmatched_team:
+        name = item.get("name_5df")
+        key = ("team", norm(name) or "")
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        items.append({
+            "kind": "team",
+            "raw_name": name,
+            "source_ref": f"jc:{item.get('match_uid')}#{item.get('side') or 'home'}",
+            "context": {
+                "kickoff_at": item.get("kickoff_at"),
+                "competition_name": item.get("league_5df"),
+                "slot": "home" if item.get("side") == "home" else "away",
+                "opponent_name": item.get("opponent_name"),
+                "opponent_id": item.get("opponent_id"),
+                "opponent_mapped": item.get("opponent_id") is not None,
+            },
+        })
+    for item in unmatched_league:
+        name = item.get("league_5df")
+        key = ("competition", norm(name) or "")
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        items.append({
+            "kind": "competition",
+            "raw_name": name,
+            "source_ref": f"jc:{item.get('match_uid')}#competition",
+            "context": {
+                "kickoff_at": item.get("kickoff_at"),
+                "home_team_id": item.get("home_team_id"),
+                "away_team_id": item.get("away_team_id"),
+                "competition_name": name,
+            },
+        })
+    return items
+
+
+def _preview_jc_names(conn, unmatched_team: list[dict], unmatched_league: list[dict]) -> list[dict]:
+    """干跑只判断。不写待定池，也不建队。"""
+    try:
+        from app.name_resolve_gate import preview_names
+
+        return preview_names(conn, _jc_gate_items(unmatched_team, unmatched_league), source="jc_match_rows")
+    except (Exception, SystemExit) as exc:
+        return [{"action": "skipped", "message": str(exc)}]
+
+
+def _admit_jc_names(db: Path, unmatched_team: list[dict], unmatched_league: list[dict]) -> dict:
+    """写入时只观察未匹配名称。不改比赛文本，不把五美元原文升成常用名。"""
+    items = _jc_gate_items(unmatched_team, unmatched_league)
+    if not items:
+        return {"observed": [], "errors": [], "match_text_rewritten": False}
+    try:
+        from app import alias_pool
+        from app.name_resolve_gate import admit
+    except (Exception, SystemExit) as exc:
+        return {"observed": [], "errors": [{"error": str(exc)}], "match_text_rewritten": False}
+    observed = []
+    errors = []
+    conn = sqlite3.connect(str(db), timeout=30)
+    try:
+        try:
+            alias_pool.ensure_schema(conn)
+        except (Exception, SystemExit) as exc:
+            return {"observed": [], "errors": [{"error": str(exc)}], "match_text_rewritten": False}
+        for item in items:
+            try:
+                observed.append(admit(
+                    conn,
+                    item["kind"],
+                    item["raw_name"],
+                    "jc_match_rows",
+                    item["source_ref"],
+                    item.get("context"),
+                    allow_create=False,
+                ))
+            except (Exception, SystemExit) as exc:
+                errors.append({"name": item.get("raw_name"), "error": str(exc)})
+        conn.commit()
+    finally:
+        conn.close()
+    return {"observed": observed, "errors": errors, "match_text_rewritten": False}
+
+
 def run(since: str, apply: bool, db: Path = REPLICA_DB, quiet=False) -> dict:
     db = guard(db)
     cands, problems = plan_candidates(since)
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=30)
     try:
         res = build_rows(conn, cands)
+        res["name_gate_preview"] = _preview_jc_names(conn, res["unmatched_team"], res["unmatched_league"])
     finally:
         conn.close()
     # 新行在写入前已经按 create=False 解析过。超过 5% 的空槽只告警：未匹配名称仍要建场次行。
@@ -376,6 +472,7 @@ def run(since: str, apply: bool, db: Path = REPLICA_DB, quiet=False) -> dict:
            "existing_skipped": len(res["existing"]),
            "by_jingcai_date": {}, "drift": res["drift"], "problems": problems,
            "unmatched_team": res["unmatched_team"], "unmatched_league": res["unmatched_league"],
+           "name_gate_preview": res.get("name_gate_preview") or [],
            "backup": None, "manifest": None}
     for n in res["new"]:
         b = rep["by_jingcai_date"].setdefault(n["row"]["jingcai_date"], {"new": 0, "existing": 0})
@@ -416,6 +513,7 @@ def run(since: str, apply: bool, db: Path = REPLICA_DB, quiet=False) -> dict:
         mf.write_text(json.dumps({"at": rep["at"], "db": str(db), "backup": rep["backup"], "inserted": inserted},
                                  ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         rep["manifest"] = str(mf)
+        rep["name_gate"] = _admit_jc_names(db, res["unmatched_team"], res["unmatched_league"])
     log("run", mode=rep["mode"], db=str(db), formal_merged=bool(_FORMAL_MERGED),
         candidates=rep["candidates"],
         new=rep.get("inserted", rep.get("would_insert")), existing=rep["existing_skipped"],

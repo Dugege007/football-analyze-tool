@@ -88,11 +88,43 @@ def test_check_does_not_write_and_apply_swaps_direction(tmp_path: Path):
     conn = sqlite3.connect(db_path)
     names = {row[0] for row in conn.execute("SELECT name_zh_canonical FROM teams")}
     aliases = {row[0] for row in conn.execute("SELECT alias FROM team_aliases")}
+    promos = {row[0] for row in conn.execute("SELECT promotion_source FROM teams")}
     match = conn.execute("SELECT home_team, away_team FROM matches").fetchone()
     conn.close()
     assert names == {"利雅得新月", "坎布尔"}
     assert aliases == {"利雅得希拉尔", "金堡尔"}
+    assert promos == {"legacy_high_confidence"}
     assert match == ("利雅得希拉尔", "金堡尔")
+    assert direction.main([*args, "--db", str(db_path)]) == 0
+
+
+def test_already_same_without_promotion_source_is_not_treated_as_promoted(tmp_path: Path):
+    """常用名已经对齐、但升格来源为空时，检查不通过；--apply 只补来源，不改比赛文本。"""
+    args = _paths(tmp_path)
+    db_path = tmp_path / "same.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE teams (id INTEGER PRIMARY KEY, name_zh_canonical TEXT NOT NULL UNIQUE, promotion_source TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE team_aliases (id INTEGER PRIMARY KEY, alias TEXT NOT NULL UNIQUE, team_id INTEGER NOT NULL, source TEXT)"
+    )
+    conn.execute("CREATE TABLE matches (id INTEGER PRIMARY KEY, home_team TEXT, away_team TEXT, competition_name TEXT)")
+    conn.execute("INSERT INTO teams (name_zh_canonical, promotion_source) VALUES ('利雅得新月', NULL)")
+    conn.execute("INSERT INTO teams (name_zh_canonical, promotion_source) VALUES ('坎布尔', NULL)")
+    conn.execute("INSERT INTO team_aliases (alias, team_id, source) VALUES ('利雅得希拉尔', 1, 'legacy')")
+    conn.execute("INSERT INTO team_aliases (alias, team_id, source) VALUES ('金堡尔', 2, 'legacy')")
+    conn.execute("INSERT INTO matches (home_team, away_team, competition_name) VALUES ('利雅得希拉尔', '金堡尔', '沙特联')")
+    conn.commit()
+    conn.close()
+    assert direction.main([*args, "--db", str(db_path)]) == 1
+    assert direction.main([*args, "--db", str(db_path), "--apply"]) == 0
+    conn = sqlite3.connect(db_path)
+    promos = {row[0] for row in conn.execute("SELECT promotion_source FROM teams")}
+    match = conn.execute("SELECT home_team, away_team, competition_name FROM matches").fetchone()
+    conn.close()
+    assert promos == {"legacy_high_confidence"}
+    assert match == ("利雅得希拉尔", "金堡尔", "沙特联")
     assert direction.main([*args, "--db", str(db_path)]) == 0
 
 

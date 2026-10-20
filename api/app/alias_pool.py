@@ -4,10 +4,11 @@
 把还不能确认的名称记入待定池，以及在满足判据时自动映射并写入同一张审计表。
 撤销也写在这张审计表里，用 mode 区分自动、人工和撤销。
 
-分析师已经确定的规则如下。名称组的七步顺序写在 docs/schema/v2_0-name-resolve-group-rules.md。
-本模块不另做一套并组：它实现规范化、精确命中、歧义闸，以及并入已有组时写入别名和空着的身份编号。
-同场上的其他证据、赛事正向一致、库外资料，都还没有单独的自动并组动作；门槛未写明之前不能靠它们自动并组。
-去掉整词前缀或结尾的「队」只在已有同场上下文时留下候选，而且仍然不能自动并组。没有同场上下文时，不记这份额外候选。
+分析师已经确定的规则如下。名称组的七步顺序写在 docs/schema/v2_0-name-resolve-group-rules.md，
+自动化边界写在 docs/schema/name-system-design-v1.md 第 6 章。七步入口是 app.name_resolve_gate。
+本模块实现规范化、精确命中、歧义闸，以及并入已有组时写入别名和空着的身份编号。
+上报之后，入库闸可以按同场多证据或已定赛事编号只加别名；证据不足时写入 needs_external_evidence。
+去掉整词前缀或结尾的「队」只在已有同场上下文时留下候选，而且仍然不能单靠前后缀自动并组。没有同场上下文时，不记这份额外候选。
 外部来源只写入别名，不改常用名列。无法唯一确定时进入待定池，不新建球队或赛事。本模块不抓取网页或百科。
 等级 1 是规范化键与已知别名或标准名完全相等，会自动生效，并且可以撤销。
 等级 2 在两种情况下自动生效。一种是宽松键与唯一标准名完全相等。另一种是宽松键与已有别名的宽松键相同，并且这些别名只指向同一个标准名。
@@ -36,7 +37,8 @@ revoke_mapping(conn, audit_id, actor) 撤销一条自动映射或人工映射。
 直接自动映射、从未进入待定池的名称，撤销后会新建待定池记录，原因记为 auto_revoked，并写一条出现记录。
 已经冻结的预测不在撤销范围内，因为自动映射和撤销都不会修改预测表。
 
-本模块不接入赛果入库、竞彩场次构建、预期进球观测或导入库。那些入口属于后续拉取请求。
+竞彩场次构建、赛果入库和 BSD 未解析路径通过入库闸调用本模块，只观察或加别名，不把新字符串升成常用名。
+预期进球观测不在这里改队名。本模块不抓取网页。
 """
 from __future__ import annotations
 
@@ -347,6 +349,20 @@ def pool_observe(
         if repeated is not None:
             return _result_from_audit(conn, repeated, normalized, loosened, repeated=True)
         decision = _analyze(conn, kind, observed, normalized, loosened, cleaned)
+        if decision["action"] != MODE_AUTO:
+            # 第 3、4 步只加别名；第 5 步只把取证需求写入待定池。这里不抓取网页。
+            from app.name_resolve_gate import augment_observe_decision
+
+            decision = augment_observe_decision(
+                conn,
+                kind,
+                observed,
+                normalized,
+                context if isinstance(context, dict) else {},
+                cleaned,
+                decision,
+                source_ref=ref_text,
+            )
         moment = now_beijing_text()
         if decision["action"] == MODE_AUTO:
             return _apply_auto(
@@ -816,6 +832,8 @@ def _apply_pool(
     if sighting_inserted:
         _refresh_entry(conn, entry_id, decision, kind, source, context, moment)
     entry = _fetchone_dict(conn, "SELECT * FROM alias_pool_entry WHERE id = ?", (entry_id,))
+    _store_extras(conn, entry_id, decision)
+    entry = _fetchone_dict(conn, "SELECT * FROM alias_pool_entry WHERE id = ?", (entry_id,))
     if not sighting_inserted:
         message = "同一个来源位置已经上报过，出现次数没有增加。"
     elif entry["status"] == STATUS_AMBIGUOUS:
@@ -888,6 +906,22 @@ def _refresh_entry(
             manual_reason,
             entry_id,
         ),
+    )
+
+
+def _store_extras(conn: sqlite3.Connection, entry_id: int, decision: dict) -> None:
+    """把闸给出的线索合并进待定池备注。比分不在这份字典里。"""
+    extras = decision.get("extras")
+    if not isinstance(extras, dict) or not extras:
+        return
+    current = _fetchone_dict(conn, "SELECT extras FROM alias_pool_entry WHERE id = ?", (entry_id,))
+    if current is None:
+        return
+    merged = _load_object(current.get("extras") or "{}")
+    merged.update(extras)
+    conn.execute(
+        "UPDATE alias_pool_entry SET extras = ? WHERE id = ?",
+        (_dump(merged), entry_id),
     )
 
 

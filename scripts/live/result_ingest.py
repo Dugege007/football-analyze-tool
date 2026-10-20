@@ -393,9 +393,26 @@ def apply(db: str, decisions: list[tuple[dict, dict]], backup_root: Path, batch_
             if inserted_ids:
                 res["market_settle"] = _refresh_market_settle(con, inserted_ids, now)
                 res["xg_queue"] = _enqueue_xg_after_results(con, inserted_ids, now)
+        # 赛果已经提交。名称闸只观察空编号，失败不回滚比分，也不改比赛文本列。
+        res["name_gate"] = _observe_result_names(con, [m["id"] for m, _decision in writes])
     finally:
         con.close()
     return res
+
+
+def _observe_result_names(con: sqlite3.Connection, match_ids: list[int]) -> dict:
+    """赛果入库里的新字符串走七步闸。默认进待定池，不升格。"""
+    if not match_ids:
+        return {"observed": [], "errors": [], "match_text_rewritten": False}
+    api_root = Path(__file__).resolve().parents[2] / "api"
+    if str(api_root) not in sys.path:
+        sys.path.insert(0, str(api_root))
+    try:
+        from app.name_resolve_gate import observe_open_slots
+
+        return observe_open_slots(con, match_ids, source="result_ingest")
+    except (Exception, SystemExit) as exc:
+        return {"observed": [], "errors": [{"error": str(exc)}], "match_text_rewritten": False}
 
 
 def _enqueue_xg_after_results(con: sqlite3.Connection, match_ids: list[int], now: dt.datetime) -> dict:
