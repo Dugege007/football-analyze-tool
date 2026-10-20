@@ -58,6 +58,9 @@ assert.deepEqual(fund.children.map((col) => ('headerName' in col ? col.headerNam
   '近10主进失', '近10客进失', '近6主进失', '近6客进失', '交锋场次', '交锋近6',
   '主排名', '客排名', '人气差值', '伤停', '天气',
 ])
+for (const id of FUND_ORDER) {
+  assert.equal(byId.get(id)?.width, 60, id)
+}
 
 for (const tab of ALL_SHEET_TABS) {
   const ids = columnIds(buildSheetColumns({ tab, settleBook: 'pinnacle', resultOnly: false, orderBooks }))
