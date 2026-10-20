@@ -217,7 +217,7 @@ export default function SheetPage() {
               { value: 'both', label: '接口+模拟' },
             ]}
           />
-          <HelpTip tip={'第 1 期调试用。\n接口：只用批量接口的数据。盘口格子缺字段显示「无法获取」；基本面缺字段显示「-」。\n模拟：只用前端模拟数据。\n接口+模拟：两者都列出。'} />
+          <HelpTip tip={'第 1 期调试用。\n接口：只用批量接口的数据。盘口格子缺字段显示「无法获取」。基本面里的 xG 缺字段显示「-」，其余基本面缺字段显示「—」。\n模拟：只用前端模拟数据。\n接口+模拟：两者都列出。'} />
         </Space>
         <Button icon={<ReloadOutlined />} onClick={() => void load()} loading={loading}>
           刷新

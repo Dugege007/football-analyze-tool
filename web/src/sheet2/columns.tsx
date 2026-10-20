@@ -23,6 +23,7 @@ import {
   x1x2Move,
 } from './format'
 import { BOOK_NAME, PHASES, PHASE_NAME, type Phased, type X1x2Cell, type AvgDetail, type Book, type CellStatus, type FundNumberCell, type Move, type MoveDir, type Phase, type ResultReason, type Row } from './types'
+import { fundSourceTip, goalsText, h2hLast6Text, h2hMatchesText, injuryCell, popularityText, rankText, weatherText } from './fundamentals'
 import { XG_COLUMNS, xgCellView } from './xg'
 
 export type Market = 'ah' | 'ou' | 'x1x2'
@@ -511,25 +512,64 @@ function XgText({ cell }: { cell: FundNumberCell | null | undefined }) {
   return view.tip ? <Tooltip title={view.tip}>{el}</Tooltip> : el
 }
 
+function FundText({ text, tip }: { text: string; tip?: string | null }) {
+  if (!tip) return text
+  return <Tooltip title={tip}><span>{text}</span></Tooltip>
+}
+
+function fundTip(parts: Array<string | null | undefined>): string | null {
+  const lines = parts.filter((line): line is string => Boolean(line))
+  return lines.length ? lines.join('\n') : null
+}
+
 /**
- * 基本面数据组。目前只亮 xG 六列，放在组末（近况、交锋、排名、人气、伤停、天气尚未亮列）。
- * 只挂在「基本面」标签，预测标签和机构标签不使用本组。
+ * 基本面列，只挂在「基本面」标签。
+ * 顺序：近 10／近 6 主客进失、交锋场次、交锋近 6、xG、主客排名、人气差值、伤停、天气。
+ * xG 默认只显示全场主客两列；上半场与下半场在分组展开后出现。
  */
 export function fundCols(): ColGroupDef<Row> {
-  const children = XG_COLUMNS.map((col, i) =>
-    withAlign(
-      {
-        colId: `fund.${col.key}`,
-        headerName: col.header,
-        width: w('fund.xg'),
-        headerClass: i === 0 ? SEC : undefined,
-        cellClass: i === 0 ? SEC : undefined,
-        cellRenderer: (p: P) => <XgText cell={p.data?.fundamentals?.[col.key]} />,
-      },
-      'fund.xg',
-    ),
-  )
-  return { groupId: 'fund', headerName: '基本面', headerClass: SEC, children }
+  const textCol = (
+    colId: string,
+    headerName: string,
+    widthKey: WidthKey,
+    value: (row: Row | undefined) => string,
+    tip: (row: Row | undefined) => string | null,
+    first = false,
+  ): ColDef<Row> => withAlign({
+    colId,
+    headerName,
+    width: w(widthKey),
+    headerClass: first ? SEC : undefined,
+    cellClass: first ? SEC : undefined,
+    valueGetter: (p) => value(p.data),
+    cellRenderer: (p: P) => <FundText text={String(p.value ?? '—')} tip={tip(p.data)} />,
+  }, widthKey)
+
+  const children: Col[] = [
+    textCol('fund.recent10.home', '近10主进失', 'fund.gfga', (r) => goalsText(r?.stats?.recent?.last10?.home), (r) => fundSourceTip(r?.stats?.meta?.recent), true),
+    textCol('fund.recent10.away', '近10客进失', 'fund.gfga', (r) => goalsText(r?.stats?.recent?.last10?.away), (r) => fundSourceTip(r?.stats?.meta?.recent)),
+    textCol('fund.recent6.home', '近6主进失', 'fund.gfga', (r) => goalsText(r?.stats?.recent?.last6?.home), (r) => fundSourceTip(r?.stats?.meta?.recent)),
+    textCol('fund.recent6.away', '近6客进失', 'fund.gfga', (r) => goalsText(r?.stats?.recent?.last6?.away), (r) => fundSourceTip(r?.stats?.meta?.recent)),
+    textCol('fund.h2h.n', '交锋场次', 'fund.h2h.n', (r) => h2hMatchesText(r?.stats?.h2h?.matches), (r) => fundSourceTip(r?.stats?.meta?.h2h)),
+    textCol('fund.h2h.last6', '交锋近6', 'fund.h2h.last6', (r) => h2hLast6Text(r?.stats?.h2h?.last6), (r) => fundSourceTip(r?.stats?.meta?.h2h)),
+    ...XG_COLUMNS.map((col, i) => withAlign({
+      colId: `fund.${col.key}`,
+      headerName: col.header,
+      width: w('fund.xg'),
+      // 默认收起：全场两列始终可见，上半场与下半场随「基本面」分组展开。
+      columnGroupShow: i < 2 ? undefined : 'open',
+      cellRenderer: (p: P) => <XgText cell={p.data?.fundamentals?.[col.key]} />,
+    }, 'fund.xg')),
+    textCol('fund.rank.home', '主排名', 'fund.rank', (r) => rankText(r?.stats?.rank?.home), (r) => fundSourceTip(r?.stats?.meta?.rank)),
+    textCol('fund.rank.away', '客排名', 'fund.rank', (r) => rankText(r?.stats?.rank?.away), (r) => fundSourceTip(r?.stats?.meta?.rank)),
+    textCol('fund.popularity', '人气差值', 'fund.popularity', (r) => popularityText(r?.stats?.popularity_diff), (r) => fundSourceTip(r?.stats?.meta?.popularity)),
+    textCol('fund.injury', '伤停', 'fund.injury', (r) => injuryCell(r?.stats?.injury, r?.stats?.obs?.injury?.known_empty === true).text, (r) => {
+      const cell = injuryCell(r?.stats?.injury, r?.stats?.obs?.injury?.known_empty === true)
+      return fundTip([cell.detail, fundSourceTip(r?.stats?.meta?.injury)])
+    }),
+    textCol('fund.weather', '天气', 'fund.weather', (r) => weatherText(r?.stats?.weather), (r) => fundSourceTip(r?.stats?.meta?.weather)),
+  ]
+  return { groupId: 'fund', headerName: '基本面', headerClass: SEC, openByDefault: false, children }
 }
 
 // ───────────── 预测列 ─────────────

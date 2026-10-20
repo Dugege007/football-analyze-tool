@@ -2,7 +2,8 @@
  * 第 1 期模拟数据：字段名照后端草案。覆盖各种 cell_status、升降（含主让加深、受让方变化）、预警三档、
  * 比赛中、未开始、取消、推迟，以及无临盘退回澳门结算的情况。
  */
-import { REAL_BOOKS, type AvgDetail, type AhCell, type Book, type ByBookResult, type FundNumberCell, type OuCell, type Phase, type Phased, type Row, type SettleItem, type X1x2Cell } from './types'
+import { emptyFundStats } from './fundamentals'
+import { REAL_BOOKS, type AvgDetail, type AhCell, type Book, type ByBookResult, type FundNumberCell, type FundStats, type OuCell, type Phase, type Phased, type Row, type SettleItem, type X1x2Cell } from './types'
 import { emptyFundNumber, emptyFundamentals } from './xg'
 
 const pend = { cell_status: 'pending' as const, cell_status_reason: 'not_due' }
@@ -315,8 +316,37 @@ function build(s: Spec): Row {
     result,
     settlement_by_book: settle,
     fundamentals: emptyFundamentals(),
+    stats: sampleStats(s),
     _mock: true,
   }
+}
+
+function sampleStats(s: Spec): FundStats {
+  if (s.id === '三001') {
+    return {
+      recent: {
+        last10: { home: { gf: 31, ga: 6 }, away: { gf: 16, ga: 18 } },
+        last6: { home: { gf: 15, ga: 5 }, away: { gf: 8, ga: 11 } },
+      },
+      h2h: { matches: 6, last6: { home_gf: 10, home_ga: 8 } },
+      rank: { home: 5, away: 12 },
+      popularity_diff: 0.053,
+      injury: { summary: '主队门将缺阵', home: [{ player: '门将甲', status: '伤' }], away: [] },
+      weather: '下雨',
+      meta: {
+        recent: { source: 'manual_seed', as_of: '2026-10-14T12:00:00+08:00' },
+        popularity: { source: 'close_euro_avg', as_of: '2026-10-14T18:00:00+08:00' },
+      },
+    }
+  }
+  if (s.id === '三002') {
+    return {
+      ...emptyFundStats(),
+      obs: { injury: { known_empty: true } },
+      meta: { injury: { source: 'bsd', as_of: '2026-10-14T16:00:00+08:00' } },
+    }
+  }
+  return emptyFundStats()
 }
 
 const WEEK: Record<string, string> = { 四: '08', 五: '09', 六: '10', 日: '11', 一: '12', 二: '13', 三: '14' }

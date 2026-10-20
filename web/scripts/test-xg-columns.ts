@@ -158,7 +158,9 @@ for (const tab of ALL_SHEET_TABS) {
     assert.ok(fund && 'children' in fund)
     if (fund && 'children' in fund) {
       for (const child of fund.children) {
-        assert.equal('width' in child ? child.width : undefined, 60)
+        if ('colId' in child && String(child.colId).startsWith('fund.xg_')) {
+          assert.equal(child.width, 60)
+        }
       }
     }
   } else {

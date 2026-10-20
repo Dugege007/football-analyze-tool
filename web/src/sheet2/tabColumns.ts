@@ -1,6 +1,6 @@
 /**
  * 数据表标签顺序与各标签的列装配。
- * 基本面组（含 xG 六列）只挂在「基本面」标签。预测标签只有基本列和预测列。机构标签不加基本面组。
+ * 基本面组只挂在「基本面」标签。预测标签只有基本列和预测列。机构标签不加基本面组。
  */
 import type { ColDef, ColGroupDef } from 'ag-grid-community'
 import { baseCols, bookCols, fundCols, jcCols, predCols, type Market } from './columns'
