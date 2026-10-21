@@ -155,6 +155,44 @@ export function statusOf(c: { cell_status?: CellStatus | null; avg_detail?: { av
   return c.cell_status
 }
 
+/** 空态横线：现行 ASCII 连字符，以及改成连字符之前用过的长横、短横、减号、全角横线。 */
+const EMPTY_DASH_TEXT = /^[\u002D\u2013\u2014\u2212\uFF0D]+$/
+const EMPTY_STATUS_LABEL = new Set(['无法获取', '未填写'])
+
+/** 多家平均明细里用来判断「有没有机构参与」的字段。第 2 版只有 books_used，第 3 版另有 averaged_books 与 averaged_count。 */
+export interface AvgParticipation {
+  averaged_count?: number | null
+  averaged_books?: readonly string[] | null
+  books_used?: readonly string[] | null
+}
+
+/**
+ * 多家平均汇总浮动面板是否出现。
+ * 只有格子状态有效、本格展示的是数值、并且确有机构参与平均时才出现。
+ * 无法获取、未填写、横线、参与家数为 0、整格没有数值时不出现。
+ */
+export function showsAvgSummaryPanel(input: {
+  status: CellStatus
+  display?: string | null
+  value?: number | null
+  detail?: AvgParticipation | null
+}): boolean {
+  if (input.status !== 'ok') return false
+  const display = (input.display ?? '').trim()
+  if (!display || EMPTY_STATUS_LABEL.has(display) || EMPTY_DASH_TEXT.test(display)) return false
+  if (typeof input.value !== 'number' || !Number.isFinite(input.value)) return false
+  return hasAvgParticipants(input.detail)
+}
+
+/** 家数为 0、参与名单为空、或明细缺失，都视为没有有效多家平均。家数优先于名单。 */
+function hasAvgParticipants(detail: AvgParticipation | null | undefined): boolean {
+  if (!detail) return false
+  const count = detail.averaged_count
+  if (typeof count === 'number' && Number.isFinite(count)) return count > 0
+  const books = detail.averaged_books ?? detail.books_used
+  return Array.isArray(books) && books.length > 0
+}
+
 export function waterDir(prev: number | null | undefined, cur: number | null | undefined): MoveDir {
   if (prev == null || cur == null) return null
   if (Math.abs(cur - prev) < 1e-9) return 'flat'
