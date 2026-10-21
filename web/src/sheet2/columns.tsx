@@ -19,6 +19,7 @@ import {
   ouMove,
   reasonHoverText,
   resultCellReason,
+  showsAvgSummaryPanel,
   statusOf,
   x1x2Move,
 } from './format'
@@ -324,9 +325,11 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
         const emptyN = t.subs.some((x) => x.alert) ? ((cell as { alert_sample_n?: number | null } | undefined)?.alert_sample_n ?? null) : null
         const oddsReason = oddsCellReason(cell)
         const stxTip = <StatusText st={st} reason={oddsReason.reason} reasonZh={oddsReason.reasonZh} extra={t.subs.some((x) => x.alert) && emptyN ? sampleText(emptyN) : null} />
-        return t.avg && cell?.avg_detail ? <AvgTip d={cell.avg_detail as AvgDetail} market={t.avg} phase={t.phase}>{stxTip}</AvgTip> : stxTip
+        // 无法获取、未填写等空态不挂多家平均汇总面板。格子自身的状态原因仍由 StatusText 悬停，与单机构列相同。
+        return stxTip
       }
-      const v = cell[sub.field] as number | null
+      const raw = cell[sub.field]
+      const v = typeof raw === 'number' && Number.isFinite(raw) ? raw : null
       const text = (sub.fmt ?? fmtNum)(v)
       const pre = sub.key === 'line' && t.prefix ? t.prefix(r) : null
       const body = <>{pre}<Mv text={text} dir={move?.[sub.key] as MoveDir | undefined} colored={t.phase !== 'open'} /></>
@@ -334,7 +337,10 @@ function tripleGroup(t: TripleSpec): ColGroupDef<Row> {
       const sampleN = sub.alert ? ((cell as { alert_sample_n?: number | null }).alert_sample_n ?? null) : null
       const alertLv = sub.alert ? ((cell as { alert?: string | null }).alert ?? null) : null
       const tipParts = [alertLv && t.phase !== 'open' ? `预警等级：${ALERT_NAME[alertLv] ?? alertLv}。` : null, sampleN == null ? null : sampleText(sampleN)].filter((x): x is string => Boolean(x))
-      if (t.avg) return <AvgTip d={cell.avg_detail as AvgDetail | null | undefined} market={t.avg} phase={t.phase} notes={tipParts}>{body}</AvgTip>
+      // 横线、0 家、整格无数值不打开汇总面板；有有效赔率时仍打开。预警说明在不打开面板时单独悬停。
+      if (t.avg && showsAvgSummaryPanel({ status: st, display: text, value: v, detail: cell.avg_detail as AvgDetail | null | undefined })) {
+        return <AvgTip d={cell.avg_detail as AvgDetail} market={t.avg} phase={t.phase} notes={tipParts}>{body}</AvgTip>
+      }
       return tipParts.length ? <Tooltip title={tipParts.join('')}><span className="alert-sample-tip">{body}</span></Tooltip> : body
     },
   }))
