@@ -64,10 +64,10 @@ export function formatMatchHeaderLine(opts: {
   home: string
   away: string
 }): string {
-  const no = (opts.jcNo ?? '').trim() || '—'
+  const no = (opts.jcNo ?? '').trim() || '-'
   const time = opts.kickoff
     ? opts.kickoff.slice(11, 16)
-    : '—'
-  const league = opts.league || '—'
+    : '-'
+  const league = opts.league || '-'
   return `- ${no} ${time} ${league} ${opts.home}-${opts.away}：`
 }

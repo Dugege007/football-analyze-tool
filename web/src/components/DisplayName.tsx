@@ -27,7 +27,7 @@ export function DisplayLeague({
   name,
   title,
   pending = false,
-  empty = '—',
+  empty = '-',
 }: {
   name: string | null
   title?: string
@@ -49,7 +49,7 @@ export function DisplayLeague({
 export function DisplayTeam({
   label,
   strong = false,
-  empty = '—',
+  empty = '-',
 }: {
   label: TeamLabel
   strong?: boolean

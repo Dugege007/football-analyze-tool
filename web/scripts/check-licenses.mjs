@@ -19,7 +19,7 @@ const FORBIDDEN = [
 const problems = []
 function check(name, where) {
   for (const f of FORBIDDEN) {
-    if (f.match(name)) problems.push(`${name} —— ${f.why}（出现在 ${where}）`)
+    if (f.match(name)) problems.push(`${name}：${f.why}（出现在 ${where}）`)
   }
 }
 

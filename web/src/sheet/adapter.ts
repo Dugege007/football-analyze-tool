@@ -346,10 +346,10 @@ function sheetNames(m: {
     home_team_pending_confirm: optionalBool(m.home_team_pending_confirm),
     away_team_pending_confirm: optionalBool(m.away_team_pending_confirm),
   })
-  const home = labels.home.text ?? '—'
-  const away = labels.away.text ?? '—'
+  const home = labels.home.text ?? '-'
+  const away = labels.away.text ?? '-'
   return {
-    league: labels.league ?? '—',
+    league: labels.league ?? '-',
     leaguePending: labels.leaguePending,
     leagueAliasTip: labels.leagueTitle,
     home,
@@ -367,7 +367,7 @@ function kickoffLabel(kickoffAt: string | null | undefined, hour: number | null 
     const d = dayjs(kickoffAt)
     if (d.isValid()) return d.format('MM-DD HH:mm')
   }
-  return hour != null ? `${String(hour).padStart(2, '0')}:00` : '—'
+  return hour != null ? `${String(hour).padStart(2, '0')}:00` : '-'
 }
 
 /** 唯一的 嵌套 → 平铺 转换 */
@@ -452,7 +452,7 @@ export function normalizeTableRow(api: ApiTableRow, asOf: string | null = null):
     id: m.id,
     date: m.date,
     scope: m.scope,
-    jcNo: m.jc_no ?? '—',
+    jcNo: m.jc_no ?? '-',
     ...sheetNames(m),
     // 推迟场显示实际开赛（kickoff_actual；后端 kickoff_at 也是实际开赛）
     kickoffAt: (m.postponed ? m.kickoff_actual : null) ?? m.kickoff_at ?? null,
@@ -952,7 +952,7 @@ export async function loadSheet(p: LoadParams): Promise<LoadResult> {
     if (typeof total !== 'number' || items.length >= total || body.items.length === 0) break
   }
   const rows = items.map((it) => normalizeTableRow(isBackendRow(it) ? fromBackendRow(it) : it, asOf))
-  console.info(`[数据表] 数据来源：批量接口 ${base}/table/matches（meta.db=${meta?.db ?? '—'}），${rows.length} 场，后端口径 ${cfg ?? '—'}`)
+  console.info(`[数据表] 数据来源：批量接口 ${base}/table/matches（meta.db=${meta?.db ?? '-'}），${rows.length} 场，后端口径 ${cfg ?? '-'}`)
   return { rows, asOf, backendConfigVersion: cfg, settlementVersion: sv, meta, dailyCheckSummary: dcs }
 }
 

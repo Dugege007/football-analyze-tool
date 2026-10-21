@@ -24,7 +24,7 @@ import {
 } from './format'
 import { BOOK_NAME, PHASES, PHASE_NAME, type Phased, type X1x2Cell, type AvgDetail, type Book, type CellStatus, type FundNumberCell, type Move, type MoveDir, type Phase, type ResultReason, type Row } from './types'
 import { GfGaText, TonedText } from './fundCells'
-import { fundSourceTip, goalsText, h2hLast6Text, h2hMatchesText, injuryCell, popularityText, popularityTone, rankText, rankTone, weatherText } from './fundamentals'
+import { FUND_DASH, fundSourceTip, goalsText, h2hLast6Text, h2hMatchesText, injuryCell, popularityText, popularityTone, rankText, rankTone, weatherText } from './fundamentals'
 import { XG_COLUMNS, xgCellView } from './xg'
 
 export type Market = 'ah' | 'ou' | 'x1x2'
@@ -535,7 +535,7 @@ function pairCol(
     headerClass: first ? SEC : undefined,
     cellClass: first ? SEC : undefined,
     valueGetter: (p) => value(p.data),
-    cellRenderer: (p: P) => <GfGaText text={String(p.value ?? '—')} tip={tip(p.data)} />,
+    cellRenderer: (p: P) => <GfGaText text={String(p.value ?? FUND_DASH)} tip={tip(p.data)} />,
   }, widthKey)
 }
 
@@ -564,7 +564,7 @@ export function fundCols(): ColGroupDef<Row> {
     headerClass: first ? SEC : undefined,
     cellClass: first ? SEC : undefined,
     valueGetter: (p) => value(p.data),
-    cellRenderer: (p: P) => <FundText text={String(p.value ?? '—')} tip={tip(p.data)} />,
+    cellRenderer: (p: P) => <FundText text={String(p.value ?? FUND_DASH)} tip={tip(p.data)} />,
   }, widthKey)
 
   const children: Col[] = [
@@ -587,21 +587,21 @@ export function fundCols(): ColGroupDef<Row> {
       headerName: '主排名',
       width: w('fund.rank'),
       valueGetter: (p) => rankText(p.data?.stats?.rank?.home),
-      cellRenderer: (p: P) => <TonedText text={String(p.value ?? '—')} tone={rankTone('home', p.data?.stats?.rank?.home)} tip={fundSourceTip(p.data?.stats?.meta?.rank)} />,
+      cellRenderer: (p: P) => <TonedText text={String(p.value ?? FUND_DASH)} tone={rankTone('home', p.data?.stats?.rank?.home)} tip={fundSourceTip(p.data?.stats?.meta?.rank)} />,
     }, 'fund.rank'),
     withAlign({
       colId: 'fund.rank.away',
       headerName: '客排名',
       width: w('fund.rank'),
       valueGetter: (p) => rankText(p.data?.stats?.rank?.away),
-      cellRenderer: (p: P) => <TonedText text={String(p.value ?? '—')} tone={rankTone('away', p.data?.stats?.rank?.away)} tip={fundSourceTip(p.data?.stats?.meta?.rank)} />,
+      cellRenderer: (p: P) => <TonedText text={String(p.value ?? FUND_DASH)} tone={rankTone('away', p.data?.stats?.rank?.away)} tip={fundSourceTip(p.data?.stats?.meta?.rank)} />,
     }, 'fund.rank'),
     withAlign({
       colId: 'fund.popularity',
       headerName: '人气差值',
       width: w('fund.popularity'),
       valueGetter: (p) => popularityText(p.data?.stats?.popularity_diff),
-      cellRenderer: (p: P) => <TonedText text={String(p.value ?? '—')} tone={popularityTone(p.data?.stats?.popularity_diff)} tip={fundSourceTip(p.data?.stats?.meta?.popularity)} />,
+      cellRenderer: (p: P) => <TonedText text={String(p.value ?? FUND_DASH)} tone={popularityTone(p.data?.stats?.popularity_diff)} tip={fundSourceTip(p.data?.stats?.meta?.popularity)} />,
     }, 'fund.popularity'),
     textCol('fund.injury', '伤停', 'fund.injury', (r) => injuryCell(r?.stats?.injury, r?.stats?.obs?.injury?.known_empty === true).text, (r) => {
       const cell = injuryCell(r?.stats?.injury, r?.stats?.obs?.injury?.known_empty === true)

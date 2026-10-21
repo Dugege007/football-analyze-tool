@@ -3325,7 +3325,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                 "columns_off": ["streak", "support_proxy_odds"],
                 "popularity_diff": "已有小数原样投影；空值用本行临盘欧赔现算（≥2 家算术平均，否则平博→威廉→澳门→皇冠→Bet365）。"
                                    "只读已组装的 euro_1x2 close（优先 odds_snapshot），不用雷速，不用仅主胜的 odds_euro_home。GET 不写库。",
-                "empty": "非 xG 由前端显示 —；xG 外壳不变",
+                "empty": "非 xG 由前端显示 -；xG 外壳不变",
             },
             "xg_fundamentals": {
                 "keys": list(xg_obs.COLUMN_KEYS),

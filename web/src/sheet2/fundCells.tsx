@@ -1,6 +1,6 @@
 /**
  * 基本面格子的色字。进失对必须拆成进、斜杠、失三段，不能把一个色类加在整串上。
- * 缺测「—」与零值不上色。
+ * 缺测「-」与零值不上色。
  */
 import { Tooltip } from 'antd'
 import type { ReactNode } from 'react'

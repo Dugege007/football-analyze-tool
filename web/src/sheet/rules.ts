@@ -597,7 +597,7 @@ export const RULES: RuleDef[] = [
     style: { kind: 'font', levels: [] },
     defaultOn: true,
     available: true,
-    note: '未完场一律显示「—」不着色',
+    note: '未完场一律显示「-」不着色',
     evaluate(row, meta) {
       if (meta.kind !== 'settle' && meta.kind !== 'pnl') return null
       if (!row.settleCode || (!row.finished && row.settleCode !== 'void_postponed')) return null
