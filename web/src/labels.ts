@@ -19,7 +19,7 @@ export const SKIP_REASON_LABEL: Record<string, string> = {
 }
 
 export function labelSkipReason(reason: string | null | undefined): string {
-  if (!reason) return '—'
+  if (!reason) return '-'
   return SKIP_REASON_LABEL[reason] ?? reason
 }
 
@@ -35,7 +35,7 @@ export const RESULT_CODE_LABEL: Record<string, string> = {
 
 /** 方向在页面上的写法。接口取值「不下注」只用于识别，展示为「无方向」。 */
 export function labelDirection(direction: string | null | undefined): string {
-  if (!direction) return '—'
+  if (!direction) return '-'
   if (direction === '不下注') return '无方向'
   return direction
 }
@@ -74,7 +74,7 @@ export function labelDataSource(source: 'api' | 'mock'): string {
 
 /** 结算盘口展示：常见值译中文，其余原样。缺省令牌与 docs/schema/v1_9-settle-book-pinnacle-then-macau.md 一致。 */
 export function labelSettleBook(book: string | null | undefined): string {
-  if (!book) return '—'
+  if (!book) return '-'
   const map: Record<string, string> = {
     pinnacle_then_macau: '平博临盘优先，没有再用澳门',
     'pinnacle_close>macau_close': '平博临盘优先，没有再用澳门',
@@ -87,7 +87,7 @@ export function labelSettleBook(book: string | null | undefined): string {
 }
 
 export function labelScope(scope: string | null | undefined): string {
-  if (!scope) return '—'
+  if (!scope) return '-'
   const map: Record<string, string> = {
     jingcai: '竞彩',
     extra: '扩展',
@@ -98,7 +98,7 @@ export function labelScope(scope: string | null | undefined): string {
 
 /** 方案模板展示：中文（英文名） */
 export function labelTemplate(name: string | null | undefined): string {
-  if (!name) return '—'
+  if (!name) return '-'
   const map: Record<string, string> = {
     default: '默认',
     simple_gate: '简单门槛',
@@ -113,23 +113,23 @@ export const STAKE_MODE_LABEL: Record<string, string> = {
 }
 
 export function labelStakeMode(mode: string | null | undefined): string {
-  if (!mode) return '—'
+  if (!mode) return '-'
   return STAKE_MODE_LABEL[mode] ?? mode
 }
 
 export function formatMaxDrawdown(dd: unknown): string {
-  if (!dd || typeof dd !== 'object') return '—'
+  if (!dd || typeof dd !== 'object') return '-'
   const o = dd as { amount?: unknown; pct?: unknown }
   const amount = typeof o.amount === 'number' && Number.isFinite(o.amount) ? o.amount : null
   const pct = typeof o.pct === 'number' && Number.isFinite(o.pct) ? o.pct : null
-  if (amount == null && pct == null) return '—'
-  const a = amount == null ? '—' : amount.toFixed(2)
+  if (amount == null && pct == null) return '-'
+  const a = amount == null ? '-' : amount.toFixed(2)
   const p = pct == null ? '' : `（${(pct * 100).toFixed(2)}%）`
   return `${a}${p}`
 }
 
 export function formatPnlAmount(v: unknown): string {
-  if (typeof v !== 'number' || !Number.isFinite(v)) return '—'
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '-'
   return v.toFixed(2)
 }
 
@@ -142,8 +142,8 @@ export function formatConflictMatchup(
   const h = (home ?? '').trim()
   const a = (away ?? '').trim()
   if (h && a) return `${h} vs ${a}`
-  if (h) return `${h} vs —`
-  if (a) return `— vs ${a}`
+  if (h) return `${h} vs -`
+  if (a) return `- vs ${a}`
   return '对阵未知'
 }
 
@@ -151,7 +151,7 @@ export function formatConflictMatchup(
 export function formatJcId(jcId: string | null | undefined, matchId?: number): string {
   const id = (jcId ?? '').trim()
   if (id) return id
-  return matchId != null ? `场次 #${matchId}` : '—'
+  return matchId != null ? `场次 #${matchId}` : '-'
 }
 
 /** 开赛时间：尽量可读；失败则原样 */
@@ -167,7 +167,7 @@ export function formatKickoffAt(iso: string | null | undefined): string {
 export const L1_MIN_HITS = 80
 
 export function formatCoverage(v: unknown): string {
-  if (typeof v !== 'number' || !Number.isFinite(v)) return '—'
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '-'
   // API 现为 0–1 比例；若已是百分数（>1 且 ≤100）则按百分数展示
   if (v >= 0 && v <= 1) return `${(v * 100).toFixed(1)}%`
   if (v > 1 && v <= 100) return `${v.toFixed(1)}%`
@@ -241,13 +241,13 @@ export const SETTLEMENT_VERSION_LABEL: Record<string, string> = {
 }
 
 export function labelSettlementVersion(v: string | null | undefined): string {
-  if (!v) return '—'
+  if (!v) return '-'
   return SETTLEMENT_VERSION_LABEL[v] ?? v
 }
 
-/** 回落比例：0–1 → 百分比；null/非法 → — */
+/** 回落比例：0–1 → 百分比；null/非法 → - */
 export function formatFallbackRate(v: unknown): string {
-  if (typeof v !== 'number' || !Number.isFinite(v)) return '—'
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '-'
   if (v >= 0 && v <= 1) return `${(v * 100).toFixed(1)}%`
   return v.toFixed(2)
 }
@@ -379,7 +379,7 @@ export const LEDGER_NOTE_REASON_LABEL: Record<string, string> = {
 
 /** 回报率（后端为比例，如 -0.123684）→「-12.37%」 */
 export function formatRoi(v: unknown): string {
-  if (typeof v !== 'number' || !Number.isFinite(v)) return '—'
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '-'
   return `${(v * 100).toFixed(2)}%`
 }
 

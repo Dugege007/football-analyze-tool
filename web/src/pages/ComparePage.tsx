@@ -437,7 +437,7 @@ export default function ComparePage() {
     const conflicts = result?.stack?.conflicts ?? []
     return conflicts.map((c, idx) => {
       const dirs = (c.legs ?? [])
-        .map((leg) => `${leg.strategy_key ?? '—'}：${labelDirection(leg.side)}`)
+        .map((leg) => `${leg.strategy_key ?? '-'}：${labelDirection(leg.side)}`)
         .join('；')
       const datePart = (c.jingcai_date ?? '').trim()
       const kick = formatKickoffAt(c.kickoff_at)
@@ -454,7 +454,7 @@ export default function ComparePage() {
         jcLabel: formatJcId(c.jc_id, c.match_id),
         matchupLabel: formatConflictMatchup(c.home_team, c.away_team),
         whenLabel,
-        directionsLabel: dirs || '—',
+        directionsLabel: dirs || '-',
       }
     })
   }, [result])
@@ -607,7 +607,7 @@ export default function ComparePage() {
       width: 110,
       render: (s: string | undefined, r) => {
         if (r.kind === 'source') return <Tag>分来源</Tag>
-        if (!s) return '—'
+        if (!s) return '-'
         if (r.kind === 'stack') return <Tag color="purple">组合</Tag>
         const color =
           s === 'ok' ? 'success' : s === 'missing_run' ? 'warning' : 'error'
@@ -631,19 +631,19 @@ export default function ComparePage() {
             ) : null}
           </Text>
         ) : (
-          '—'
+          '-'
         )
       },
     },
     {
       title: '场次',
       width: 64,
-      render: (_, r) => num(r.summary?.n) ?? '—',
+      render: (_, r) => num(r.summary?.n) ?? '-',
     },
     {
       title: '可评场次',
       width: 88,
-      render: (_, r) => num(r.summary?.n_eligible) ?? '—',
+      render: (_, r) => num(r.summary?.n_eligible) ?? '-',
     },
     // 「不可评估」：仅当接口返回 n_not_evaluable 时出列（如缺平博数据的场）
     ...(summaryRows.some((r) => r.summary?.n_not_evaluable != null)
@@ -653,7 +653,7 @@ export default function ComparePage() {
             width: 88,
             render: (_: unknown, r: SummaryRow) => {
               const n = num(r.summary?.n_not_evaluable)
-              if (n == null) return '—'
+              if (n == null) return '-'
               const lines = notEvaluableLines(r.summary)
               if (!lines) return n
               return (
@@ -676,7 +676,7 @@ export default function ComparePage() {
     {
       title: '命中数',
       width: 72,
-      render: (_, r) => <LeakGrey leak={r.leak}>{num(r.summary?.hits) ?? '—'}</LeakGrey>,
+      render: (_, r) => <LeakGrey leak={r.leak}>{num(r.summary?.hits) ?? '-'}</LeakGrey>,
     },
     {
       title: '覆盖率',
@@ -686,19 +686,19 @@ export default function ComparePage() {
     {
       title: '真实水位场次',
       width: 112,
-      render: (_, r) => num(r.summary?.n_actual_water) ?? '—',
+      render: (_, r) => num(r.summary?.n_actual_water) ?? '-',
     },
     {
       title: '回落0.95场次',
       width: 112,
-      render: (_, r) => num(r.summary?.n_fallback_095) ?? '—',
+      render: (_, r) => num(r.summary?.n_fallback_095) ?? '-',
     },
     {
       title: '回落比例',
       width: 96,
       render: (_, r) => {
         const text = formatFallbackRate(r.summary?.fallback_rate)
-        if (text === '—') return text
+        if (text === '-') return text
         if (isFallbackRateHigh(r.summary?.fallback_rate)) {
           return (
             <Text type="warning" title={FALLBACK_RATE_WARN_HINT}>
@@ -719,7 +719,7 @@ export default function ComparePage() {
       width: 140,
       render: (_, r) => {
         const v = num(r.summary?.roi)
-        if (v == null) return '—'
+        if (v == null) return '-'
         const text = formatRoi(v)
         if (r.leak?.suspect) return <LeakGrey leak={r.leak}>{text}</LeakGrey>
         // L1：每行只看自己的命中数（hits，不是场次），来源之间不合并
@@ -744,7 +744,7 @@ export default function ComparePage() {
     {
       title: '方向数',
       width: 72,
-      render: (_, r) => num(r.summary?.bet_count) ?? '—',
+      render: (_, r) => num(r.summary?.bet_count) ?? '-',
     },
     {
       title: '最大回撤',
@@ -781,7 +781,7 @@ export default function ComparePage() {
       width: 96,
       render: (_, r) =>
         r.conflict.staked_both == null
-          ? '—'
+          ? '-'
           : r.conflict.staked_both
             ? '是'
             : '否',
@@ -936,15 +936,15 @@ export default function ComparePage() {
         {result && (result.sensitivity || result.n_actual_water != null) ? (
           <Space wrap style={{ marginBottom: 12 }}>
             <Text type="secondary">
-              主表 · 真实水位场次 {num(result.n_actual_water) ?? '—'} · 回落0.95场次{' '}
-              {num(result.n_fallback_095) ?? '—'} · 回落比例{' '}
+              主表 · 真实水位场次 {num(result.n_actual_water) ?? '-'} · 回落0.95场次{' '}
+              {num(result.n_fallback_095) ?? '-'} · 回落比例{' '}
               {formatFallbackRate(result.fallback_rate)}
             </Text>
             {result.sensitivity ? (
               <Text type="secondary">
                 灵敏度 · 真实水位场次{' '}
-                {num(result.sensitivity.n_actual_water) ?? '—'} · 回落0.95场次{' '}
-                {num(result.sensitivity.n_fallback_095) ?? '—'} · 回落比例{' '}
+                {num(result.sensitivity.n_actual_water) ?? '-'} · 回落0.95场次{' '}
+                {num(result.sensitivity.n_fallback_095) ?? '-'} · 回落比例{' '}
                 {formatFallbackRate(result.sensitivity.fallback_rate)}
                 {result.sensitivity.settlement_version
                   ? ` · ${labelSettlementVersion(result.sensitivity.settlement_version)}`
@@ -1020,7 +1020,7 @@ export default function ComparePage() {
             num(result.stack.summary.conflict_count) != null ? (
               <Text type="secondary">
                 冲突 {String(result.stack.summary.conflict_count)} · 双边方向{' '}
-                {String(result.stack.summary.conflict_staked_both_count ?? '—')} · 冲突净盈亏{' '}
+                {String(result.stack.summary.conflict_staked_both_count ?? '-')} · 冲突净盈亏{' '}
                 {formatPnlAmount(result.stack.summary.conflict_net_pnl)}
               </Text>
             ) : null

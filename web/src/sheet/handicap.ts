@@ -105,7 +105,8 @@ export function parseHandicap(input: unknown): ParsedLine {
     return parseHandicap((input as { handicap: unknown }).handicap)
   }
   const raw = String(input).trim()
-  let s = raw.replace(/\s+/g, '').replace(/[／]/g, '/').replace(/[−–—]/g, '-')
+  // 盘口原文里的减号、短横线、长横线先折成 ASCII 连字符，再解析数值。
+  let s = raw.replace(/\s+/g, '').replace(/[／]/g, '/').replace(/[\u2212\u2013\u2014]/g, '-')
   // 「受让」「受」「*」前缀 → 主受让（负）
   let sign = 1
   const recv = /^(主?受让|受|\*)/.exec(s)
@@ -137,7 +138,7 @@ export function formatHandicap(v: number | null | undefined): string {
 
 /** 与 formatHandicap 相同；集中出口，便于以后对齐雷速完整规范 */
 export function formatHandicapLine(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return '—'
+  if (v == null || !Number.isFinite(v)) return '-'
   if (Object.is(v, -0) || Math.abs(v) < 1e-9) return '0'
   // 去掉多余尾零：1 → 1，0.50 → 0.5，1.75 → 1.75
   const abs = Math.abs(v)
@@ -147,7 +148,7 @@ export function formatHandicapLine(v: number | null | undefined): string {
 
 /** 旧汉字盘口（悬停对照用）；主格请用 formatHandicap / formatHandicapLine */
 export function formatHandicapCn(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return '—'
+  if (v == null || !Number.isFinite(v)) return '-'
   const abs = Math.abs(v)
   const q = Math.round(abs * 4)
   if (!isQuarter(abs) || q >= NAME_BY_QUARTERS.length) {
@@ -187,7 +188,7 @@ export function lineMove(open: number | null, close: number | null): LineMove | 
 }
 
 export function formatMove(m: LineMove | null): string {
-  if (!m) return '—'
+  if (!m) return '-'
   switch (m.kind) {
     case 'none':
       return '不变'

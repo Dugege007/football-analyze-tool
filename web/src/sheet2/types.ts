@@ -169,7 +169,7 @@ export const XG_KEYS = ['xg_ft_home', 'xg_ft_away', 'xg_ht_home', 'xg_ht_away', 
 export type XgKey = (typeof XG_KEYS)[number]
 export type Fundamentals = Record<XgKey, FundNumberCell>
 
-/** 近况一侧的进球、失球。缺任一侧时格子显示「—」，不把 0 当成缺失。 */
+/** 近况一侧的进球、失球。缺任一侧时格子显示「-」，不把 0 当成缺失。 */
 export interface FundGoals {
   gf?: number | null
   ga?: number | null
@@ -256,7 +256,7 @@ export interface Row {
   settlement_by_book: Partial<Record<Book, { ah: SettleItem | null; ou: SettleItem | null; x1x2: SettleItem | null; jc: SettleItem | null } | null>> | null
   /** 基本面 xG。接口尚未返回 fundamentals 时六列均为 not_filled，页面显示「-」。 */
   fundamentals: Fundamentals
-  /** 基本面近况、交锋、排名、人气、伤停、天气。旧接口没有时各格显示「—」。 */
+  /** 基本面近况、交锋、排名、人气、伤停、天气。旧接口没有时各格显示「-」。 */
   stats: FundStats
   /** 前端标记：这一行哪些部分来自模拟数据 */
   _mock?: boolean

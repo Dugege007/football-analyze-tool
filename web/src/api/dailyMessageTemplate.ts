@@ -38,10 +38,10 @@ export function messageJcNo(jcId?: string | null): string {
   return id || '-'
 }
 
-/** 从开赛时间文本里取出「时:分」；取不到时返回「—」。 */
+/** 从开赛时间文本里取出「时:分」；取不到时返回「-」。 */
 export function messageKickoffHm(kickoffText: string): string {
   const m = /(\d{1,2}:\d{2})/.exec(kickoffText || '')
-  if (!m) return '—'
+  if (!m) return '-'
   const [h, min] = m[1].split(':')
   return `${h.padStart(2, '0')}:${min}`
 }

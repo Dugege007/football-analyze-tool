@@ -1,13 +1,13 @@
 /**
  * 基本面宽表里除 xG 以外的格子。
- * 缺测用单个「—」。伤停只有 obs.injury.known_empty 为真时才显示「无」，空名单不算已知无伤停。
+ * 缺测用单个「-」。伤停只有 obs.injury.known_empty 为真时才显示「无」，空名单不算已知无伤停。
  * 人气差值只做已有的小数换算（乘以 100、一位小数、不写百分号），不在页面上用赔率重算。
  * 进失对写成「进/失」，分段上色由渲染层拆开，不在这里给整串上一个色。
  */
 import { formatPopularityDiff } from '../api/popularity'
 import type { FundGoals, FundMetaEntry, FundStats } from './types'
 
-export const FUND_DASH = '—'
+export const FUND_DASH = '-'
 
 /** 侧别轴：正／主为橙，负／客为蓝，零与缺测不上色。 */
 export type SideTone = 'orange' | 'blue' | 'plain'
@@ -119,7 +119,7 @@ function clip(short: string, full: string): { text: string; detail: string | nul
 
 /**
  * 伤停短文案。knownEmpty 为真时显示「无」。
- * 没有名单、空数组、空对象都显示「—」，不写成已确认无伤停。
+ * 没有名单、空数组、空对象都显示「-」，不写成已确认无伤停。
  */
 export function injuryCell(injury: unknown, knownEmpty: boolean): { text: string; detail: string | null } {
   if (knownEmpty) return { text: '无', detail: null }

@@ -101,7 +101,7 @@ export function computePresence(rows: SheetRow[]): Presence {
 // ───────────────────────── 格式 ─────────────────────────
 
 export function fmtNum(v: unknown, d = 3): string {
-  if (typeof v !== 'number' || !Number.isFinite(v)) return '—'
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '-'
   return Number(v.toFixed(d)).toString()
 }
 
@@ -109,7 +109,7 @@ export function fmtNum(v: unknown, d = 3): string {
 export function formatAhLineWithWater(
   c: { line: number | null; lineRaw: string | null; lineNonStandard: boolean; hw?: number | null; aw?: number | null } | null | undefined,
 ): string {
-  if (!c || c.line == null) return '—'
+  if (!c || c.line == null) return '-'
   if (c.lineNonStandard && c.lineRaw && Number.isNaN(Number(c.lineRaw))) return c.lineRaw
   return formatHandicapLine(c.line)
 }
@@ -123,7 +123,7 @@ export function ahLineWaterTipExtra(c: {
   source?: string | null
   bookLane?: string | null
 }): string {
-  const cn = c.line != null ? formatHandicapCn(c.line) : '—'
+  const cn = c.line != null ? formatHandicapCn(c.line) : '-'
   const parts: string[] = [`汉字对照 ${cn}`]
   if (c.hw == null && c.aw == null) parts.push('暂无水位')
   else parts.push(`主水 ${fmtNum(c.hw)} · 客水 ${fmtNum(c.aw)}`)
@@ -148,7 +148,7 @@ export function formatJc1x2Cell(
   } | null | undefined,
   side: 'home' | 'draw' | 'away',
 ): string {
-  if (!c) return '—'
+  if (!c) return '-'
   if (isCollectorEmpty(c.missingReason) || (c.available === false && c.home == null && c.draw == null && c.away == null)) {
     return '暂无竞彩官方数据'
   }
@@ -161,7 +161,7 @@ export function formatJc1x2Cell(
     return '竞彩胜平负不完整'
   }
   const v = c[side]
-  return typeof v === 'number' && Number.isFinite(v) ? fmtNum(v, 2) : '—'
+  return typeof v === 'number' && Number.isFinite(v) ? fmtNum(v, 2) : '-'
 }
 
 export function jc1x2Tip(
@@ -216,11 +216,11 @@ export function formatJcHhadLine(
     away: number | null
   } | null | undefined,
 ): string {
-  if (!c) return '—'
+  if (!c) return '-'
   if (isCollectorEmpty(c.missingReason) || (c.available === false && c.goalLine == null)) return '暂无竞彩官方数据'
   if (c.outOfWindow) return '自采超出 11:00–11:20'
   if (c.incomplete) return '竞彩让球胜平负不完整'
-  if (c.goalLine == null && c.decisionLine == null) return '—'
+  if (c.goalLine == null && c.decisionLine == null) return '-'
   const line = c.goalLine ?? c.decisionLine
   const odds =
     c.home != null || c.draw != null || c.away != null
@@ -255,7 +255,7 @@ export function jcHhadTip(
   if (c.fromHist) lines.push('决策线来自 hist')
   if (c.postDecisionLineChange) {
     lines.push(
-      `决策后让球线已变：当前线 ${c.currentLine != null ? formatHandicapLine(c.currentLine) : '—'}（仅悬停对照，不计入该点特征）`,
+      `决策后让球线已变：当前线 ${c.currentLine != null ? formatHandicapLine(c.currentLine) : '-'}（仅悬停对照，不计入该点特征）`,
     )
   }
   if (c.outOfWindow) lines.push('自采超出 11:00–11:20，不当完整官方即时')
@@ -269,7 +269,7 @@ export function jcHhadTip(
 
 /** 产出时间 → 🔒 已冻结 HH:mm（与竞彩日不同天时带上月-日，避免误读） */
 export function fmtFrozen(row: SheetRow | undefined): string {
-  if (!row?.producedAt) return '—'
+  if (!row?.producedAt) return '-'
   const d = dayjs(row.producedAt.replace(' ', 'T'))
   if (!d.isValid()) return `🔒 已冻结 ${row.producedAt}`
   const sameDay = d.format('YYYY-MM-DD') === row.date
@@ -425,7 +425,7 @@ function rrWaterTip(c: { returnRate: number | null; waterSource: string | null }
 }
 
 /**
- * 0.3.17：初盘为空且后端 open_basis_reason=no_open_data 的格子显示空（不写「—」）。
+ * 0.3.17：初盘为空且后端 open_basis_reason=no_open_data 的格子显示空（不写「-」）。
  * withTip=true 时，格子为空、原悬停也为空时补一句 openMissingTip（亚盘线/水位格由 approx_data 规则提示，不用补）。
  */
 function blankNoOpen(
@@ -529,7 +529,7 @@ function ahGroup(
         valueGetter: (p) => p.data?.ah[book][phase]?.line ?? null,
         valueFormatter: (p) => {
           const c = p.data?.ah[book][phase]
-          if (!c || c.line == null) return phase === 'open' && p.data?.openReason.ah[book] === 'no_open_data' ? '' : '—'
+          if (!c || c.line == null) return phase === 'open' && p.data?.openReason.ah[book] === 'no_open_data' ? '' : '-'
           // 格内只显示盘口数字；开盘时间仅悬停 tip（API/规角标保留）
           return formatAhLineWithWater(c)
         },
@@ -569,7 +569,7 @@ function ahGroup(
         // 只显示后端给的时刻（精确到分钟，不按整点截断）；旧手工数据 target_at/recorded_at 为空，改用 schedule 并说明
         const target = c.targetAt ?? (phase === 'mid' ? r.schedule.midTarget : r.schedule.closeTarget)
         const legacy = isLegacy(c) && !c.targetAt ? `（${LEGACY_TIP}）` : ''
-        const time = `目标时间 ${fmtTime(target) ?? '—'}${legacy} / 抓取时间 ${fmtTime(c.recordedAt) ?? '未知'}`
+        const time = `目标时间 ${fmtTime(target) ?? '-'}${legacy} / 抓取时间 ${fmtTime(c.recordedAt) ?? '未知'}`
         return [exc, `${formatHandicapLine(c.line)}（主让为正）；${time}`, ahLineWaterTipExtra(c), phaseExtraTip(r, phase, false, c)].filter(Boolean).join('；')
       },
     )
@@ -589,7 +589,7 @@ function ahGroup(
       valueFormatter: (p) => {
         if (!p.data?.phaseException) return ''
         const c = p.data.ah[book][key]
-        if (!c || c.line == null) return '—'
+        if (!c || c.line == null) return '-'
         return formatAhLineWithWater(c)
       },
       tooltip: (p: TooltipCallbackParams<SheetRow>) => {
@@ -603,7 +603,7 @@ function ahGroup(
           const h = r.ah[book].hidden[key] === 'after_as_of' ? hiddenTip('after_as_of') : '暂无真实时点数据'
           return [`${h}${target ? `（目标时间 ${fmtTime(target)}）` : ''}`, extra].filter(Boolean).join('；')
         }
-        return [`${phaseName}（真实）：目标时间 ${fmtTime(target) ?? '—'} / 抓取时间 ${fmtTime(c.recordedAt) ?? '—'} · 主水 ${fmtNum(c.hw)} · 客水 ${fmtNum(c.aw)}`, extra]
+        return [`${phaseName}（真实）：目标时间 ${fmtTime(target) ?? '-'} / 抓取时间 ${fmtTime(c.recordedAt) ?? '-'} · 主水 ${fmtNum(c.hw)} · 客水 ${fmtNum(c.aw)}`, extra]
           .filter(Boolean)
           .join('；')
       },
@@ -654,7 +654,7 @@ function ahGroup(
       valueGetter: (p) => p.data?.ah[book].live.filter((c) => c.label !== 'rule_1110').at(-1)?.line ?? null,
       valueFormatter: (p) => {
         const c = p.data?.ah[book].live.filter((c) => c.label !== 'rule_1110').at(-1)
-        if (!c || c.line == null) return '—'
+        if (!c || c.line == null) return '-'
         return formatAhLineWithWater(c)
       },
       tooltip: (p) => {
@@ -680,7 +680,7 @@ function ahGroup(
           return m.kind === 'up' ? m.amount : -m.amount
         },
         valueFormatter: (p) =>
-          p.data ? formatMove(lineMove(p.data.ah[book].open?.line ?? null, p.data.ah[book].close?.line ?? null)) : '—',
+          p.data ? formatMove(lineMove(p.data.ah[book].open?.line ?? null, p.data.ah[book].close?.line ?? null)) : '-',
       },
       { kind: 'ahChg', book },
       (p) => {
@@ -881,10 +881,10 @@ export function buildColumnDefs({ view, presence: pr, books, showReal }: BuildOp
         pinned: 'left',
         valueGetter: (p) => p.data?.kickoffAt ?? null,
         valueFormatter: (p) => {
-          if (!p.data) return '—'
+          if (!p.data) return '-'
           // 0.3.20：开赛时间未确认 → 灰字「待归阶段」
           if (p.data.phasePending) return PHASE_PENDING_LABEL
-          return p.data.kickoffLabel ?? '—'
+          return p.data.kickoffLabel ?? '-'
         },
         tooltip: (p: TooltipCallbackParams<SheetRow>) => p.data?.kickoffNote ?? null,
         cellClassRules: {
@@ -908,10 +908,10 @@ export function buildColumnDefs({ view, presence: pr, books, showReal }: BuildOp
           const row = p.data
           if (!row) return null
           return createElement(DisplayLeague, {
-            name: row.league === '—' ? null : row.league,
+            name: row.league === '-' ? null : row.league,
             title: row.leagueAliasTip,
             pending: row.leaguePending,
-            empty: '—',
+            empty: '-',
           })
         },
       },
@@ -923,7 +923,7 @@ export function buildColumnDefs({ view, presence: pr, books, showReal }: BuildOp
         pinned: 'left',
         filter: 'agTextColumnFilter',
         valueFormatter: (p) => {
-          const name = (p.value as string) ?? '—'
+          const name = (p.value as string) ?? '-'
           return p.data?.manualReview ? `${name} · 人工复核中` : name
         },
         cellRenderer: (p: { data?: SheetRow; value?: unknown }) => {
@@ -933,8 +933,8 @@ export function buildColumnDefs({ view, presence: pr, books, showReal }: BuildOp
             'span',
             null,
             createElement(DisplayTeam, {
-              label: { text: row.home === '—' ? null : row.home, tip: row.homeAliasTip, pending: row.homePending },
-              empty: '—',
+              label: { text: row.home === '-' ? null : row.home, tip: row.homeAliasTip, pending: row.homePending },
+              empty: '-',
             }),
             row.manualReview ? ' · 人工复核中' : null,
           )
@@ -957,8 +957,8 @@ export function buildColumnDefs({ view, presence: pr, books, showReal }: BuildOp
           const row = p.data
           if (!row) return null
           return createElement(DisplayTeam, {
-            label: { text: row.away === '—' ? null : row.away, tip: row.awayAliasTip, pending: row.awayPending },
-            empty: '—',
+            label: { text: row.away === '-' ? null : row.away, tip: row.awayAliasTip, pending: row.awayPending },
+            empty: '-',
           })
         },
         cellClassRules: { 'hl-manual-review': (p) => p.data?.manualReview === true },
@@ -1049,7 +1049,7 @@ export function buildColumnDefs({ view, presence: pr, books, showReal }: BuildOp
           valueFormatter: (p) =>
             p.data
               ? formatMove(lineMove(p.data.ahMacau5df?.open?.line ?? null, p.data.ahMacau5df?.close?.line ?? null))
-              : '—',
+              : '-',
         },
         { kind: 'ahChg', book: 'macau_5df' },
         () => '临盘−初盘（仅澳门5DF本路，不与手工澳门跨源）',
@@ -1177,7 +1177,7 @@ export function buildColumnDefs({ view, presence: pr, books, showReal }: BuildOp
       filter: 'agTextColumnFilter',
       valueFormatter: (p) => {
         const v = p.value as string | null | undefined
-        if (v == null || v === '') return '—'
+        if (v == null || v === '') return '-'
         return v === '不下注' ? '无方向' : v
       },
       cellClassRules: {
@@ -1219,8 +1219,8 @@ export function buildColumnDefs({ view, presence: pr, books, showReal }: BuildOp
     groupId: 'res',
     headerName: '赛果',
     children: [
-      { colId: 'res.score', field: 'score', headerName: '比分', width: 70, hide: resHidden, valueFormatter: (p) => (dash(p) ? '—' : (p.value as string)), tooltip: (p) => (p.data?.finished ? null : (p.data?.hiddenReason ?? '未完场')) },
-      { colId: 'res.wdl', field: 'wdl', headerName: '胜平负', width: 76, hide: resHidden, filter: 'agTextColumnFilter', valueFormatter: (p) => (dash(p) ? '—' : ((p.value as string) ?? '—')) },
+      { colId: 'res.score', field: 'score', headerName: '比分', width: 70, hide: resHidden, valueFormatter: (p) => (dash(p) ? '-' : (p.value as string)), tooltip: (p) => (p.data?.finished ? null : (p.data?.hiddenReason ?? '未完场')) },
+      { colId: 'res.wdl', field: 'wdl', headerName: '胜平负', width: 76, hide: resHidden, filter: 'agTextColumnFilter', valueFormatter: (p) => (dash(p) ? '-' : ((p.value as string) ?? '-')) },
       withRules(
         {
           colId: 'res.settle',
@@ -1230,7 +1230,7 @@ export function buildColumnDefs({ view, presence: pr, books, showReal }: BuildOp
           filter: 'agTextColumnFilter',
           valueGetter: (p) =>
             (p.data?.finished || isVoid(p.data)) && p.data?.settleCode ? SETTLE_LABEL[p.data.settleCode] : null,
-          valueFormatter: (p) => (p.value as string) ?? '—',
+          valueFormatter: (p) => (p.value as string) ?? '-',
         },
         { kind: 'settle' },
         (p) => {
@@ -1243,11 +1243,11 @@ export function buildColumnDefs({ view, presence: pr, books, showReal }: BuildOp
       ),
       withRules(
         {
-          // 推迟作废：盈亏一律「—」（后端 pnl 为空，前端也不算）
+          // 推迟作废：盈亏一律「-」（后端 pnl 为空，前端也不算）
           ...numCol('res.pnl', '盈亏(份)', (r) => (r.finished && !isVoid(r) ? r.pnlUnits : null), 2, 86),
           hide: resHidden,
           valueFormatter: (p) => {
-            if (typeof p.value !== 'number') return '—'
+            if (typeof p.value !== 'number') return '-'
             const v = Number(p.value.toFixed(2))
             return v > 0 ? `+${v}` : String(v)
           },

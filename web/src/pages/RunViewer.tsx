@@ -92,7 +92,7 @@ export default function RunViewer() {
                 const note = readLedgerNote(r, s)
                 return (
                   <Space size={4} wrap>
-                    <span>{key ?? `方案 ${r.strategy_def_id ?? '—'}`}{zh ? ` · ${zh}` : ''}</span>
+                    <span>{key ?? `方案 ${r.strategy_def_id ?? '-'}`}{zh ? ` · ${zh}` : ''}</span>
                     {leak.suspect ? (
                       <Tooltip title={leak.reason ?? '后端标记疑似泄漏'}>
                         <Tag style={{ marginInlineEnd: 0, color: '#8c8c8c' }}>{LEAK_SUSPECT_TAG}</Tag>
@@ -109,17 +109,17 @@ export default function RunViewer() {
                 )
               },
             },
-            { title: '标签', dataIndex: 'run_label', width: 180, render: (v) => v ?? '—' },
-            { title: '完成时间', dataIndex: 'finished_at', width: 150, render: (v) => v ?? '—' },
+            { title: '标签', dataIndex: 'run_label', width: 180, render: (v) => v ?? '-' },
+            { title: '完成时间', dataIndex: 'finished_at', width: 150, render: (v) => v ?? '-' },
             { title: '状态', dataIndex: 'status', width: 80, render: (v: string) => <Tag>{labelCompareStatus(v)}</Tag> },
-            { title: '场次', width: 64, render: (_, r) => num(r.summary?.n) ?? '—' },
-            { title: '可评场次', width: 80, render: (_, r) => num(r.summary?.n_eligible) ?? '—' },
+            { title: '场次', width: 64, render: (_, r) => num(r.summary?.n) ?? '-' },
+            { title: '可评场次', width: 80, render: (_, r) => num(r.summary?.n_eligible) ?? '-' },
             {
               title: '不可评估',
               width: 80,
               render: (_, r) => {
                 const n = num(r.summary?.n_not_evaluable)
-                if (n == null) return '—'
+                if (n == null) return '-'
                 const lines = notEvaluableLines(r.summary)
                 if (!lines) return n
                 return (
@@ -134,7 +134,7 @@ export default function RunViewer() {
               width: 64,
               render: (_, r) => {
                 const leak = readLeakSuspect(r, r.summary)
-                const v = num(r.summary?.hits) ?? '—'
+                const v = num(r.summary?.hits) ?? '-'
                 return leak.suspect ? (
                   <Tooltip title={`${LEAK_SUSPECT_TAG}${leak.reason ? `：${leak.reason}` : ''}`}>
                     <Typography.Text type="secondary">{v}</Typography.Text>
@@ -149,7 +149,7 @@ export default function RunViewer() {
               width: 140,
               render: (_, r) => {
                 const v = num(r.summary?.roi)
-                if (v == null) return '—'
+                if (v == null) return '-'
                 const leak = readLeakSuspect(r, r.summary)
                 if (leak.suspect)
                   return (

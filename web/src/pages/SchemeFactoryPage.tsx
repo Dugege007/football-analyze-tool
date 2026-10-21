@@ -122,7 +122,7 @@ export default function SchemeFactoryPage() {
             {r.is_default ? <Tag color="blue" style={{ marginLeft: 8 }}>默认</Tag> : null}
           </Text>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            {labelShadowScheme(r.strategy_key, r.status) || r.display_name || '—'} · 版本 {r.version}
+            {labelShadowScheme(r.strategy_key, r.status) || r.display_name || '-'} · 版本 {r.version}
           </Text>
         </Space>
       ),
@@ -150,7 +150,7 @@ export default function SchemeFactoryPage() {
       ellipsis: true,
       render: (_, r) => (
         <Text type="secondary" style={{ fontSize: 12 }}>
-          {r.config_fingerprint ? `${r.config_fingerprint.slice(0, 12)}…` : '—'}
+          {r.config_fingerprint ? `${r.config_fingerprint.slice(0, 12)}…` : '-'}
         </Text>
       ),
     },
@@ -185,7 +185,7 @@ export default function SchemeFactoryPage() {
           templates.length > 0 ? (
             <LabelWithHelp
               label="从模板生成方案"
-              tip={templates.map((t) => `${labelTemplate(t.name)}：${t.description || '—'}`).join('\n')}
+              tip={templates.map((t) => `${labelTemplate(t.name)}：${t.description || '-'}`).join('\n')}
             />
           ) : (
             '从模板生成方案'
@@ -239,7 +239,7 @@ export default function SchemeFactoryPage() {
         <Card size="small" title="最近一次验证">
           <Space wrap>
             <Tag color={lastValidate.reused ? 'purple' : 'green'}>
-              {labelReused(lastValidate.reused) ?? '—'}
+              {labelReused(lastValidate.reused) ?? '-'}
             </Tag>
             <Text>
               验证记录 #{lastValidate.id} · 方案定义 #{lastValidate.strategy_def_id} · 状态{' '}

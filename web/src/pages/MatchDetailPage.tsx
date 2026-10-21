@@ -34,7 +34,7 @@ import { matchLabels } from '../names/matchLabels'
 import { isCollectorEmpty } from '../sheet/types'
 import { apiBase } from '../api/dataSource'
 import { GfGaText, TonedText } from '../sheet2/fundCells'
-import { goalsText, h2hLast6Text, injuryCell, popularityText, popularityTone, rankText, rankTone } from '../sheet2/fundamentals'
+import { FUND_DASH, goalsText, h2hLast6Text, injuryCell, popularityText, popularityTone, rankText, rankTone } from '../sheet2/fundamentals'
 import '../sheet2/sheet2.css'
 import type {
   AsianLineFull,
@@ -61,10 +61,10 @@ function metaLabel(
   return bits.length ? bits.join(' · ') : null
 }
 
-/** 伤停与数据表同一字面量：已知为空显示「无」，其余缺失显示「—」。有名单时详情显示完整名单。 */
+/** 伤停与数据表同一字面量：已知为空显示「无」，其余缺失显示「-」。有名单时详情显示完整名单。 */
 function formatInjury(stats: MatchDetail['stats']): string {
   const cell = injuryCell(stats.injury, stats.obs?.injury?.known_empty === true)
-  if (cell.text === '无' || cell.text === '—') return cell.text
+  if (cell.text === '无' || cell.text === FUND_DASH) return cell.text
   return cell.detail ?? cell.text
 }
 
@@ -75,9 +75,9 @@ const directionColor: Record<Direction, string> = {
 }
 
 function formatAsian(phase: AsianPhases | undefined, key: 'open' | 'mid' | 'close') {
-  if (!phase) return '—'
+  if (!phase) return '-'
   const v = phase[key]
-  if (v == null) return '—'
+  if (v == null) return '-'
   if (typeof v === 'number') return String(v)
   const line = v as AsianLineFull
   const parts = [
@@ -85,7 +85,7 @@ function formatAsian(phase: AsianPhases | undefined, key: 'open' | 'mid' | 'clos
     line.handicap != null ? `盘 ${line.handicap}` : null,
     line.away_water != null ? `客水 ${line.away_water}` : null,
   ].filter(Boolean)
-  return parts.length ? parts.join(' · ') : '—'
+  return parts.length ? parts.join(' · ') : '-'
 }
 
 export default function MatchDetailPage() {
@@ -256,7 +256,7 @@ export default function MatchDetailPage() {
                     />
                   ) : (
                     <LabelWithHelp
-                      label={`竞彩让球 ${odds.jc_hhad.open.goal_line ?? '—'}`}
+                      label={`竞彩让球 ${odds.jc_hhad.open.goal_line ?? '-'}`}
                       tip="这里显示的是当前主表里的竞彩让球数据。"
                     />
                   )
@@ -264,7 +264,7 @@ export default function MatchDetailPage() {
                 description={
                   isCollectorEmpty(odds.jc_hhad.open.missing_reason)
                     ? undefined
-                    : `胜 ${odds.jc_hhad.open.home ?? '—'} / 平 ${odds.jc_hhad.open.draw ?? '—'} / 负 ${odds.jc_hhad.open.away ?? '—'}${
+                    : `胜 ${odds.jc_hhad.open.home ?? '-'} / 平 ${odds.jc_hhad.open.draw ?? '-'} / 负 ${odds.jc_hhad.open.away ?? '-'}${
                         odds.jc_hhad.open.post_decision_line_change
                           ? '；决策后让球线已变'
                           : ''
@@ -283,7 +283,7 @@ export default function MatchDetailPage() {
                 {metaLabel(stats, 'rank') ? <HelpTip tip={`数据来源：${metaLabel(stats, 'rank')}`} /> : null}
               </Descriptions.Item>
               <Descriptions.Item label="交锋场次">
-                {String(h2h.matches ?? '—')}
+                {String(h2h.matches ?? '-')}
                 {metaLabel(stats, 'h2h') ? <HelpTip tip={`数据来源：${metaLabel(stats, 'h2h')}`} /> : null}
               </Descriptions.Item>
               <Descriptions.Item label={<LabelWithHelp label="交锋近6" tip="主队视角的进球和失球。" />}>
@@ -304,7 +304,7 @@ export default function MatchDetailPage() {
                 {metaLabel(stats, 'popularity') ? <HelpTip tip={`数据来源：${metaLabel(stats, 'popularity')}`} /> : null}
               </Descriptions.Item>
               <Descriptions.Item label="支持率代理">
-                {stats.support_proxy_odds ?? '—'}
+                {stats.support_proxy_odds ?? '-'}
               </Descriptions.Item>
             </Descriptions>
           </Card>
@@ -383,7 +383,7 @@ export default function MatchDetailPage() {
               <Descriptions.Item label="方案">{prediction.strategy}</Descriptions.Item>
               <Descriptions.Item label="结算盘口">{labelSettleBook(prediction.settle_book)}</Descriptions.Item>
               <Descriptions.Item label="置信度">
-                {prediction.confidence ?? '—'}
+                {prediction.confidence ?? '-'}
               </Descriptions.Item>
             </Descriptions>
             <div>

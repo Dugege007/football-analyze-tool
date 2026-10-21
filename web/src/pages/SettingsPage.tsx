@@ -32,7 +32,7 @@ export default function SettingsPage() {
       </Title>
       <Descriptions bordered size="small" column={1}>
         <Descriptions.Item label="统计本金">
-          {initialBankroll ?? '—'} {fxCurrency}
+          {initialBankroll ?? '-'} {fxCurrency}
         </Descriptions.Item>
         <Descriptions.Item label="展示币种">
           <Tag>{fxCurrency}</Tag>

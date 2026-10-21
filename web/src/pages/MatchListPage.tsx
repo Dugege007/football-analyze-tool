@@ -72,7 +72,7 @@ function formatKickoff(row: MatchListItem): string {
   if (m.kickoff_hour != null) {
     return `竞彩日 ${m.date} 的 ${String(m.kickoff_hour).padStart(2, '0')}时（日期和分钟未知）`
   }
-  return '—'
+  return '-'
 }
 
 /**
@@ -157,7 +157,7 @@ export default function MatchListPage() {
     {
       title: '竞彩号',
       width: 88,
-      render: (_, row) => row.match.jc?.id ?? '—',
+      render: (_, row) => row.match.jc?.id ?? '-',
     },
     {
       title: '联赛',
