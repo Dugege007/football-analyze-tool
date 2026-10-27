@@ -19,8 +19,8 @@ def test_health_without_token_is_public(client: TestClient) -> None:
     assert response.json() == {
         "ok": True,
         "service": "football-openclaw-gateway",
-        "version": "0.1.0-b0",
-        "stage": "b0",
+        "version": "0.1.0-b1",
+        "stage": "b1",
     }
     assert response.headers["cache-control"] == "no-store"
 
@@ -44,7 +44,7 @@ def test_health_requires_token_when_flag_enabled(
     assert missing.json()["error"]["code"] == "unauthorized"
     ok = client.get("/v1/health", headers=_auth(token))
     assert ok.status_code == 200
-    assert ok.json()["stage"] == "b0"
+    assert ok.json()["stage"] == "b1"
 
 
 def test_health_unknown_flag_fails_closed(
@@ -79,13 +79,19 @@ def test_capabilities_with_wrong_or_malformed_token(client: TestClient, token: s
     assert empty.status_code == 401
 
 
-def test_capabilities_with_token_returns_empty_list(client: TestClient, token: str) -> None:
+def test_capabilities_with_token_lists_two_read_routes(client: TestClient, token: str) -> None:
     response = client.get(
         "/v1/capabilities",
         headers={"Authorization": f"bearer {token}"},
     )
     assert response.status_code == 200
-    assert response.json() == {"stage": "b0", "capabilities": []}
+    assert response.json() == {
+        "stage": "b1",
+        "capabilities": [
+            {"name": "read.matches", "methods": ["GET /v1/read/matches"]},
+            {"name": "read.match", "methods": ["GET /v1/read/matches/{match_id}"]},
+        ],
+    }
 
 
 def test_capabilities_rejects_empty_configured_token(
@@ -112,7 +118,7 @@ def test_post_jobs_with_token_is_not_implemented(client: TestClient, token: str)
     assert response.json() == {
         "error": {
             "code": "not_implemented",
-            "message": "该接口已列入规划，但在当前阶段（b0）尚未实现。",
+            "message": "该接口已列入规划，但在当前阶段（b1）尚未实现。",
         }
     }
     assert "do-not-echo" not in response.text
@@ -131,12 +137,12 @@ def test_get_job_with_token_is_not_implemented(client: TestClient, token: str) -
     assert response.json()["error"]["code"] == "not_implemented"
 
 
-def test_read_routes_require_token_then_return_not_implemented(
+def test_unregistered_read_routes_require_token_then_return_not_implemented(
     client: TestClient, token: str
 ) -> None:
-    missing = client.get("/v1/read/matches")
+    missing = client.get("/v1/read/matches/42/odds")
     assert missing.status_code == 401
-    for path in ("/v1/read", "/v1/read/matches", "/v1/read/matches/42/odds"):
+    for path in ("/v1/read", "/v1/read/matches/42/odds", "/v1/read/strategies"):
         response = client.get(path, headers=_auth(token))
         assert response.status_code == 501
         assert response.json()["error"]["code"] == "not_implemented"

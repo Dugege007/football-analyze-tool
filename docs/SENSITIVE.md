@@ -103,7 +103,7 @@
 | 建议 | 指向备份库时设置 `APP_READONLY=1`；副本库请复制一份单独文件，不要与 `APP_DB_PATH` 相同（采集脚本会拒绝写现网库） |
 | 为什么不进仓库 | 库内含个人的预测、注单与历史赔率整理结果，属于私人数据；体积也大 |
 
-## 10. OpenClaw 网关令牌（阶段 B0）
+## 10. OpenClaw 网关令牌（阶段 B0／B1）
 
 | 项 | 说明 |
 |---|---|
@@ -113,7 +113,7 @@
 | 示例 | `openclaw-gateway/openclaw-gateway.env.example` 把该变量留空，可以提交 |
 | 禁止 | 不要把真实令牌写进 Git、Nginx 配置、systemd 单元或聊天记录 |
 
-生成示例：`python -c 'import secrets; print(secrets.token_hex(32))'`。详细行为见 `docs/openclaw-gateway-b0.md`。
+生成示例：`python -c 'import secrets; print(secrets.token_hex(32))'`。阶段 B1 沿用同一套令牌，不新增口令。详细行为见 `docs/openclaw-gateway-b0.md` 与 `docs/openclaw-gateway-b1.md`。
 
 ## 11. GitHub（仅贡献者需要）
 
