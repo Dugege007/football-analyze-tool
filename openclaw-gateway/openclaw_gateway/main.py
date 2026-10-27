@@ -1,12 +1,14 @@
-"""football-openclaw-gateway 的阶段 B0 应用。
+"""football-openclaw-gateway 的阶段 B1 应用。
 
-本进程与 `api/app/main.py` 相互独立：不注册分析接口的路由，不读取它的只读开关，
-也不把请求转发到 8787。
+本进程与 `api/app/main.py` 相互独立：不注册分析接口的路由，不读取它的只读开关。
+阶段 B1 只把两条已鉴权的 GET 转到本机 8787 的白名单路径。
 """
 
 from __future__ import annotations
 
 import logging
+import re
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, FastAPI, Header, Request
@@ -15,15 +17,32 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from openclaw_gateway.auth import Unauthorized, ensure_authorized
 from openclaw_gateway.config import SERVICE_NAME, STAGE, VERSION, require_auth_on_health
+from openclaw_gateway.upstream import (
+    UpstreamFailure,
+    fetch_upstream_json,
+    is_safe_match_id,
+    match_upstream_url,
+    matches_upstream_url,
+    shape_match_detail,
+)
 
 log = logging.getLogger("openclaw_gateway")
 
 _UNAUTHORIZED_MESSAGE = "缺少 Bearer 令牌，或令牌与服务器配置不一致。"
-_NOT_IMPLEMENTED_MESSAGE = "该接口已列入规划，但在当前阶段（b0）尚未实现。"
 _NOT_FOUND_MESSAGE = "请求的路径不存在。"
 _METHOD_NOT_ALLOWED_MESSAGE = "该路径不支持当前的 HTTP 方法。"
 _INTERNAL_ERROR_MESSAGE = "服务内部发生错误，详情已写入日志。"
+_MATCH_NOT_FOUND_MESSAGE = "比赛不存在。"
+_LIST_NOT_FOUND_MESSAGE = "上游没有找到对应的比赛列表。"
 _EXTENSION_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+_JINGCAI_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_LIST_SCOPES = frozenset({"jingcai", "extra", "all"})
+# 上游 /matches/dates 是另一条接口。这个路径段不能当成单场编号转发。
+_RESERVED_MATCH_SEGMENTS = frozenset({"dates"})
+CAPABILITIES: list[dict[str, object]] = [
+    {"name": "read.matches", "methods": ["GET /v1/read/matches"]},
+    {"name": "read.match", "methods": ["GET /v1/read/matches/{match_id}"]},
+]
 
 router = APIRouter(prefix="/v1")
 
@@ -60,7 +79,11 @@ def unauthorized_response() -> JSONResponse:
 
 def not_implemented_response() -> JSONResponse:
     """渲染已规划但尚未实现的扩展点。"""
-    return error_response(501, "not_implemented", _NOT_IMPLEMENTED_MESSAGE)
+    return error_response(
+        501,
+        "not_implemented",
+        f"该接口已列入规划，但在当前阶段（{STAGE}）尚未实现。",
+    )
 
 
 def handle_unauthorized(_request: Request, _exc: Unauthorized) -> JSONResponse:
@@ -122,9 +145,9 @@ def capabilities(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, object]:
-    """声明当前阶段已开放的能力。阶段 B0 固定返回空列表。"""
+    """声明当前阶段已开放的能力。阶段 B1 只登记两条读能力。"""
     ensure_authorized(authorization, request)
-    return {"stage": STAGE, "capabilities": []}
+    return {"stage": STAGE, "capabilities": CAPABILITIES}
 
 
 @router.post("/jobs")
@@ -132,7 +155,7 @@ def create_job(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> JSONResponse:
-    """创建任务的预留入口。阶段 B0 校验令牌后固定返回 501，不读取、不保存请求体。"""
+    """创建任务的预留入口。校验令牌后固定返回 501，不读取、不保存请求体。"""
     ensure_authorized(authorization, request)
     return not_implemented_response()
 
@@ -143,10 +166,110 @@ def get_job(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> JSONResponse:
-    """查询任务的预留入口。阶段 B0 不区分任务是否存在，校验令牌后固定返回 501。"""
+    """查询任务的预留入口。不区分任务是否存在，校验令牌后固定返回 501。"""
     del job_id
     ensure_authorized(authorization, request)
     return not_implemented_response()
+
+
+def _valid_jingcai_day(value: str) -> bool:
+    """竞彩日必须是真实存在的 YYYY-MM-DD。网关不代填今天。"""
+    if _JINGCAI_DAY_RE.fullmatch(value) is None:
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _matches_query(request: Request) -> tuple[dict[str, str] | None, JSONResponse | None]:
+    """只保留 date 与 scope。其它查询键丢弃，不转发。"""
+    dates = request.query_params.getlist("date")
+    if len(dates) != 1:
+        return None, error_response(
+            400,
+            "bad_request",
+            "查询参数 date 必填，且只能出现一次，格式为 YYYY-MM-DD。",
+        )
+    if not _valid_jingcai_day(dates[0]):
+        return None, error_response(
+            400,
+            "bad_request",
+            "查询参数 date 必须是有效日期，格式为 YYYY-MM-DD。",
+        )
+    scopes = request.query_params.getlist("scope")
+    params = {"date": dates[0]}
+    if not scopes:
+        return params, None
+    if len(scopes) != 1:
+        return None, error_response(400, "bad_request", "查询参数 scope 只能出现一次。")
+    if scopes[0] not in _LIST_SCOPES:
+        return None, error_response(
+            400,
+            "bad_request",
+            "查询参数 scope 只能是 jingcai、extra 或 all。",
+        )
+    params["scope"] = scopes[0]
+    return params, None
+
+
+def _upstream_error(exc: UpstreamFailure) -> JSONResponse:
+    return error_response(exc.status_code, exc.code, exc.message)
+
+
+@router.get("/read/matches")
+def read_matches(
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+) -> JSONResponse:
+    """按竞彩日转发上游比赛列表。成功时透传上游 JSON。"""
+    ensure_authorized(authorization, request)
+    params, query_error = _matches_query(request)
+    if query_error is not None:
+        return query_error
+    if params is None:
+        return error_response(
+            400,
+            "bad_request",
+            "查询参数 date 必填，且只能出现一次，格式为 YYYY-MM-DD。",
+        )
+    try:
+        payload = fetch_upstream_json(
+            matches_upstream_url(),
+            params,
+            route_name="read.matches",
+            not_found_message=_LIST_NOT_FOUND_MESSAGE,
+        )
+    except UpstreamFailure as exc:
+        return _upstream_error(exc)
+    return JSONResponse(status_code=200, content=payload)
+
+
+@router.get("/read/matches/{match_id}")
+def read_match(
+    match_id: str,
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+) -> JSONResponse:
+    """取上游单场详情后精简。不另请求预测接口。"""
+    ensure_authorized(authorization, request)
+    if match_id in _RESERVED_MATCH_SEGMENTS:
+        return not_implemented_response()
+    if not is_safe_match_id(match_id):
+        return error_response(404, "not_found", _MATCH_NOT_FOUND_MESSAGE)
+    try:
+        payload = fetch_upstream_json(
+            match_upstream_url(match_id),
+            None,
+            route_name="read.match",
+            not_found_message=_MATCH_NOT_FOUND_MESSAGE,
+        )
+    except UpstreamFailure as exc:
+        return _upstream_error(exc)
+    if not isinstance(payload, dict):
+        return error_response(502, "upstream_error", "上游响应无法解析。")
+    return JSONResponse(status_code=200, content=shape_match_detail(match_id, payload))
 
 
 @router.api_route("/read", methods=_EXTENSION_METHODS)
@@ -154,7 +277,7 @@ def read_root(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> JSONResponse:
-    """读接口前缀的预留入口。阶段 B0 不转发到现有分析接口。"""
+    """读接口前缀本身仍未开放。校验令牌后返回 501，不转发。"""
     ensure_authorized(authorization, request)
     return not_implemented_response()
 
@@ -165,7 +288,7 @@ def read_child(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> JSONResponse:
-    """读接口子路径的预留入口。阶段 B0 不按子路径转发。"""
+    """未登记的读子路径。先鉴权，再返回 501，不按子路径转发。"""
     del resource_path
     ensure_authorized(authorization, request)
     return not_implemented_response()

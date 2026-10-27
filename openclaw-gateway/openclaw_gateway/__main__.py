@@ -6,6 +6,7 @@ import logging
 
 from openclaw_gateway.config import (
     STAGE,
+    UPSTREAM_ORIGIN,
     VERSION,
     bearer_token,
     gateway_bind,
@@ -27,13 +28,15 @@ def main() -> None:
     port = gateway_port()
     token = bearer_token()
     log.info(
-        "football-openclaw-gateway 启动。版本 %s，阶段 %s，监听 %s:%s，健康检查鉴权 %s，令牌 %s。",
+        "football-openclaw-gateway 启动。版本 %s，阶段 %s，监听 %s:%s，"
+        "健康检查鉴权 %s，令牌 %s，上游 %s。",
         VERSION,
         STAGE,
         host,
         port,
         "开启" if require_auth_on_health() else "关闭",
         "已配置" if token else "未配置",
+        UPSTREAM_ORIGIN,
     )
     if not token:
         log.warning(

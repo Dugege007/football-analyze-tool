@@ -6,13 +6,21 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 
 log = logging.getLogger("openclaw_gateway")
 
 SERVICE_NAME = "football-openclaw-gateway"
-VERSION = "0.1.0-b0"
-STAGE = "b0"
+VERSION = "0.1.0-b1"
+STAGE = "b1"
+
+# 只读分析接口的本机地址。阶段 B1 只允许这一处，不能改成其它主机或端口。
+UPSTREAM_ORIGIN = "http://127.0.0.1:8787"
+_DEFAULT_UPSTREAM_TIMEOUT_SECONDS = 3.0
+_MAX_UPSTREAM_TIMEOUT_SECONDS = 10.0
+_DEFAULT_UPSTREAM_MAX_BYTES = 1_048_576
+_warned_config: set[str] = set()
 
 # 现有网页数据接口占用 8787。网关不得抢这个端口。
 _RESERVED_API_PORT = 8787
@@ -98,3 +106,69 @@ def _port_error_message() -> str:
         "GATEWAY_PORT 必须是 1 到 65535 的整数，且不能是 8787。"
         "8787 保留给现有的 football-analyze-api。"
     )
+
+
+def _warn_once(code: str, message: str) -> None:
+    """同一类配置问题只警告一次。警告正文不包含环境变量的原值。"""
+    if code in _warned_config:
+        return
+    _warned_config.add(code)
+    log.warning("%s", message)
+
+
+def upstream_timeout_seconds() -> float:
+    """上游连接与读取超时（秒）。默认 3，超过 10 时按 10 执行。
+
+    无法识别、非有限数或小于等于 0 时回到默认值。日志不回显原值。
+    """
+    raw = os.environ.get("OPENCLAW_UPSTREAM_TIMEOUT_SECONDS", "").strip()
+    if raw == "":
+        return _DEFAULT_UPSTREAM_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        _warn_once(
+            "timeout-invalid",
+            "OPENCLAW_UPSTREAM_TIMEOUT_SECONDS 无法解析，上游超时改用默认 3 秒。",
+        )
+        return _DEFAULT_UPSTREAM_TIMEOUT_SECONDS
+    if not math.isfinite(value) or value <= 0:
+        _warn_once(
+            "timeout-invalid",
+            "OPENCLAW_UPSTREAM_TIMEOUT_SECONDS 不是正的有限数，上游超时改用默认 3 秒。",
+        )
+        return _DEFAULT_UPSTREAM_TIMEOUT_SECONDS
+    if value > _MAX_UPSTREAM_TIMEOUT_SECONDS:
+        _warn_once(
+            "timeout-capped",
+            "OPENCLAW_UPSTREAM_TIMEOUT_SECONDS 超过 10 秒，已按 10 秒执行。",
+        )
+        return _MAX_UPSTREAM_TIMEOUT_SECONDS
+    return value
+
+
+def upstream_max_bytes() -> int:
+    """单次上游响应体上限（字节）。默认 1 MiB，不允许提高。"""
+    raw = os.environ.get("OPENCLAW_UPSTREAM_MAX_BYTES", "").strip()
+    if raw == "":
+        return _DEFAULT_UPSTREAM_MAX_BYTES
+    if len(raw) > 16 or not raw.isdigit():
+        _warn_once(
+            "max-bytes-invalid",
+            "OPENCLAW_UPSTREAM_MAX_BYTES 无法解析，响应体上限改用默认 1 MiB。",
+        )
+        return _DEFAULT_UPSTREAM_MAX_BYTES
+    value = int(raw)
+    if value < 1:
+        _warn_once(
+            "max-bytes-invalid",
+            "OPENCLAW_UPSTREAM_MAX_BYTES 不是正整数，响应体上限改用默认 1 MiB。",
+        )
+        return _DEFAULT_UPSTREAM_MAX_BYTES
+    if value > _DEFAULT_UPSTREAM_MAX_BYTES:
+        _warn_once(
+            "max-bytes-capped",
+            "OPENCLAW_UPSTREAM_MAX_BYTES 超过 1 MiB，已按 1 MiB 执行。",
+        )
+        return _DEFAULT_UPSTREAM_MAX_BYTES
+    return value

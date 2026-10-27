@@ -1,3 +1,5 @@
-"""OpenClaw 入站网关包。阶段 B0 只提供探活、能力清单与未实现扩展点。"""
+"""OpenClaw 入站网关。阶段 B1 在探活与鉴权之上开放两条只读查询。"""
 
-__version__ = "0.1.0-b0"
+from openclaw_gateway.config import VERSION as __version__
+
+__all__ = ["__version__"]

@@ -23,6 +23,17 @@ def _gateway_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GATEWAY_PORT", "8790")
 
 
+@pytest.fixture(autouse=True)
+def _block_live_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """默认禁止单测连接本机 8787。需要上游时由用例替换 open_client。"""
+    import openclaw_gateway.upstream as upstream
+
+    def _blocked(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("单测禁止连接真实上游")
+
+    monkeypatch.setattr(upstream, "open_client", _blocked)
+
+
 @pytest.fixture
 def token() -> str:
     return TEST_TOKEN

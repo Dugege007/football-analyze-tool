@@ -8,7 +8,7 @@
 本仓库是作者足球分析工作流中**可公开的工具部分**：
 
 - **`api/`**：基于 FastAPI 的本地 API，读取 SQLite 库，提供赛程、盘口、预测、数据表（`/table/matches`）、策略回测等只读接口；
-- **`openclaw-gateway/`**：独立的 OpenClaw 入站网关骨架（阶段 B0）。它只监听本机 `8790`，与 `api/` 的路由和鉴权分开。本地运行方式见该目录的 `README.md`；
+- **`openclaw-gateway/`**：独立的 OpenClaw 入站网关（阶段 B1）。它只监听本机 `8790`，在 Bearer 校验通过后开放两条只读查询，与 `api/` 的路由和鉴权分开。本地运行方式见该目录的 `README.md`；
 - **`web/`**：网页界面（Vite 与 React 构建），包含比赛列表、单场详情、预测结论、方案对比与多方案叠加曲线、赛前盘口与水位折线图（可选择博彩公司、横轴为对数刻度的距开赛时间）、数据表等页面，通过本地 API 取数；
 - **`scripts/live/`**：按竞彩日规则时点抓取多家公司（澳门、皇冠、威廉、平博、365、马会、竞彩等）赔率快照，只写研究副本库；附 as-of 补中盘、多日缺口扫描、补救队列 worker；
 - **`docs/schema/`**：盘口阶段术语、漏点补救规则、as-of 补盘、赛果入库节奏、场次消歧、防泄漏铁律等口径文档与 DDL；
@@ -27,7 +27,7 @@
 ```
 .
 ├── api/                    FastAPI 本地 API（app/、scripts/ 运维与导入脚本、tests/、config/）
-├── openclaw-gateway/       OpenClaw 入站网关骨架（阶段 B0，本机 8790，不并入 api/）
+├── openclaw-gateway/       OpenClaw 入站网关（阶段 B1，本机 8790，不并入 api/）
 ├── web/                    网页界面（Vite + React + TypeScript；src/ 源码、.env.example 接口地址样例）
 ├── scripts/
 │   ├── live/               实时采集 live_capture、as-of 补中盘、gap-scan、rescue_queue/worker
@@ -223,7 +223,8 @@ npm run dev
 | 名称系统总方案（常用名、星号、入库闸、雷速升格） | `docs/schema/name-system-design-v1.md` |
 | 防泄漏铁律 | `docs/schema/v2_0-as-of-betting-iron-rules.md`、`research/shadow-ledger/acceptance-leakage-checklist.md` |
 | 本地 API 接口速查 | `api/README.md` |
-| OpenClaw 网关阶段 B0 | `docs/openclaw-gateway-b0.md`、`openclaw-gateway/README.md` |
+| OpenClaw 网关阶段 B0 骨架 | `docs/openclaw-gateway-b0.md` |
+| OpenClaw 网关阶段 B1 读适配 | `docs/openclaw-gateway-b1.md`、`openclaw-gateway/README.md` |
 
 ## 许可证
 
