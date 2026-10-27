@@ -5,6 +5,8 @@
 #
 # 语义对齐竞彩场次行看门狗：输出目录的 daemon.lock 未占用则拉起单实例；已占用则不拉第二份。
 # 安静成功退出 0。heartbeat.json 修改时间距今超过 600 秒且锁仍占用时，打印 HEARTBEAT_STALE 并退出 2（只告警，不结束进程、不二次拉起）。
+# 陈旧阈值固定 600 秒，不要放宽。长 tick 假警靠 daemon 每轮循环开头先写 heartbeat.json 消除，不靠加大 TTL。
+# HEARTBEAT_STALE 只告警：不 kill 已有进程，不再拉起第二份。
 # 需要启动但缺少 FIVEDOLLAR_FOOTBALL_API_KEY 时，打印 START_FAILED_NO_KEY 并退出 3。
 # 缺 .venv-dc／numpy／scipy 且无法安装时，打印 START_FAILED_VENV 或 START_FAILED_DEPS 并退出 4。
 # 取消 LIVE_CAPTURE_CREATE_MATCHES；不打开双写。启动前若正式库旁没有 FORMAL_MERGED.flag，则创建空文件。
@@ -164,12 +166,14 @@ echo "$(ts) running (daemon.lock held) repo=$ROOT" >> "$LOG"
 HB="$OUT/heartbeat.json"
 if [ -f "$HB" ]; then
   age=$(( $(date +%s) - $(stat -c %Y "$HB") ))
+  # 大于 600 秒才算过期；等于 600 秒仍视为新鲜。只告警，不 kill、不二次拉起。
   if [ "$age" -gt 600 ]; then
     echo "$(ts) HEARTBEAT_STALE age=${age}s (daemon.lock held; NOT restarting)" >> "$LOG"
     echo "HEARTBEAT_STALE"
     exit 2
   fi
 else
+  # 锁仍占用但心跳文件不存在：同样只告警，不结束已有进程，也不再拉起第二份。
   echo "$(ts) HEARTBEAT_STALE heartbeat.json missing" >> "$LOG"
   echo "HEARTBEAT_STALE"
   exit 2

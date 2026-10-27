@@ -1,8 +1,10 @@
 """赛果定时入库的单元测试（只用临时库，不碰任何真实库）。"""
+import argparse
 import datetime as dt
 # 与 result_ingest 相同的跨平台文件锁，避免测试文件在 Windows 上因缺少 fcntl 而无法收集。
 import importlib.util as _pl_util
 import json
+import os
 import pathlib as _pl_pathlib
 _pl_spec = _pl_util.spec_from_file_location(
     "_portable_lock", _pl_pathlib.Path(__file__).resolve().parents[2] / "api/app/portable_lock.py")
@@ -11,6 +13,7 @@ _pl_spec.loader.exec_module(fcntl)
 import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -166,6 +169,148 @@ def test_daemon_single_instance_lock(tmp_path):
                        capture_output=True, text=True, timeout=30,
                        env={"FIVEDOLLAR_FOOTBALL_API_KEY": "test", "PATH": "/usr/bin:/bin"})
     assert p.returncode != 0 and "已有一份" in p.stderr
+
+
+def test_daemon_heartbeat_fresh_during_long_tick(tmp_path, monkeypatch):
+    """长 tick／核对尚未结束时，本轮开头已经写过心跳，修改时间保持新鲜。"""
+    monkeypatch.setenv("FIVEDOLLAR_FOOTBALL_API_KEY", "test-key")
+    db = mkdb(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    hb = out / "heartbeat.json"
+    hb.write_text(json.dumps({"pid": 1, "at": "2000-01-01T00:00:00+08:00", "api_calls_5df": 99}), encoding="utf-8")
+    stale = time.time() - 900
+    os.utime(hb, (stale, stale))
+
+    order = []
+    real_write = R.write_heartbeat
+    real_sleep = time.sleep
+
+    def wrapped(out_dir, api_calls_5df):
+        order.append(("heartbeat", api_calls_5df))
+        real_write(out_dir, api_calls_5df)
+
+    def slow_tick(args, st, cl, now, log):
+        age = time.time() - hb.stat().st_mtime
+        doc = json.loads(hb.read_text(encoding="utf-8"))
+        assert age < 5
+        assert doc["pid"] == os.getpid()
+        assert doc["at"] and "2000-01-01" not in doc["at"]
+        assert doc["api_calls_5df"] == 0
+        order.append("tick")
+        cl.calls = 4
+        return {"due": 0, "inserted": 0, "flagged": 0}
+
+    def slow_crosscheck(*_a, **_k):
+        # 重活进行中仍读到本轮开头的心跳，不依赖循环末尾才落盘。
+        assert time.time() - hb.stat().st_mtime < 5
+        order.append("crosscheck")
+        real_sleep(0.2)
+        assert time.time() - hb.stat().st_mtime < 5
+
+    def summary(*_a, **_k):
+        order.append("summary")
+
+    def halt(_sec):
+        doc = json.loads(hb.read_text(encoding="utf-8"))
+        assert doc["pid"] == os.getpid() and doc["api_calls_5df"] == 4 and doc["at"]
+        order.append("sleep")
+        raise SystemExit(0)
+
+    monkeypatch.setattr(R, "write_heartbeat", wrapped)
+    monkeypatch.setattr(R, "tick", slow_tick)
+    monkeypatch.setattr(R, "periodic_crosscheck", slow_crosscheck)
+    monkeypatch.setattr(R, "write_daily_summary", summary)
+    monkeypatch.setattr(R.time, "sleep", halt)
+
+    args = argparse.Namespace(db=db, out_dir=str(out), call_log=str(out / "call_log.tsv"), interval=60)
+    with pytest.raises(SystemExit) as exc:
+        R.daemon(args)
+    assert exc.value.code == 0
+    assert order == [("heartbeat", 0), "tick", "crosscheck", "summary", ("heartbeat", 4), "sleep"]
+
+
+_HOLD_DAEMON_LOCK = r"""
+import fcntl, os, sys, time
+path = sys.argv[1]
+f = open(path, "a+")
+fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+f.seek(0)
+f.truncate()
+f.write(str(os.getpid()))
+f.flush()
+print("held", flush=True)
+time.sleep(120)
+"""
+
+
+def _run_ensure(tmp_path, *, age_sec=None, missing=False):
+    """占住 daemon.lock 后跑看门狗。返回 (进程结果, 日志文本)。调用方负责断言退出码。"""
+    out = tmp_path / "out"
+    out.mkdir(parents=True)
+    venv_bin = tmp_path / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").symlink_to(sys.executable)
+    if not missing:
+        hb = out / "heartbeat.json"
+        hb.write_text("{}", encoding="utf-8")
+        if age_sec is not None:
+            ts = time.time() - age_sec
+            os.utime(hb, (ts, ts))
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _HOLD_DAEMON_LOCK, str(out / "daemon.lock")],
+        stdout=subprocess.PIPE, text=True)
+    try:
+        line = holder.stdout.readline()
+        assert line.strip() == "held"
+        env_file = tmp_path / "empty.env"
+        env_file.write_text("")
+        env = os.environ.copy()
+        env.update({
+            "RESULT_INGEST_OUT": str(out),
+            "FORMAL_MERGED_FLAG": str(tmp_path / "FORMAL_MERGED.flag"),
+            "APP_DB_PATH": str(tmp_path / "app.db"),
+            "RESULT_INGEST_ENV": str(env_file),
+            "RESULT_INGEST_VENV": str(tmp_path / "venv"),
+        })
+        env.pop("FIVEDOLLAR_FOOTBALL_API_KEY", None)
+        script = Path(__file__).resolve().parents[2] / "ops" / "ensure_result_ingest.sh"
+        proc = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env, timeout=30)
+        log_path = out / "ensure_watch.log"
+        log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+        assert holder.poll() is None
+        assert "started pid=" not in log
+        return proc, log
+    finally:
+        holder.kill()
+        holder.wait(timeout=5)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="看门狗脚本依赖 bash、flock 与 GNU stat")
+def test_ensure_stale_heartbeat_alerts_without_restart(tmp_path):
+    """修改时间超过 600 秒：只打印 HEARTBEAT_STALE，不杀占锁进程，不二次拉起。"""
+    proc, log = _run_ensure(tmp_path, age_sec=650)
+    assert proc.returncode == 2
+    assert proc.stdout.strip() == "HEARTBEAT_STALE"
+    assert "NOT restarting" in log
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="看门狗脚本依赖 bash、flock 与 GNU stat")
+def test_ensure_missing_heartbeat_alerts_without_restart(tmp_path):
+    proc, log = _run_ensure(tmp_path, missing=True)
+    assert proc.returncode == 2
+    assert proc.stdout.strip() == "HEARTBEAT_STALE"
+    assert "heartbeat.json missing" in log
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="看门狗脚本依赖 bash、flock 与 GNU stat")
+def test_ensure_heartbeat_within_600s_stays_quiet(tmp_path):
+    """阈值仍是 600 秒：明显未过期的心跳保持安静成功，不告警、不拉起。"""
+    proc, log = _run_ensure(tmp_path, age_sec=500)
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == ""
+    assert "HEARTBEAT_STALE" not in log
+    assert "running (daemon.lock held)" in log
 
 
 # ---------------------------------------------------------------- 竞彩网缓存刷新（大陆本机文件导入。优先使用 YPC，即 YuePC；失败再用 MSI）
