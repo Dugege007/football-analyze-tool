@@ -84,6 +84,9 @@ api/config/kickoff_drift.json
 api/config/leak_suspect.json
 research/shadow-ledger/*.local.csv
 
+# OpenClaw 网关令牌文件（示例 openclaw-gateway.env.example 可以提交）
+openclaw-gateway.env
+
 # 网页界面（web/）
 !web/.env.example
 web/node_modules/
