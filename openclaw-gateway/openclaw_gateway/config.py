@@ -12,8 +12,17 @@ import os
 log = logging.getLogger("openclaw_gateway")
 
 SERVICE_NAME = "football-openclaw-gateway"
-VERSION = "0.1.0-b1"
-STAGE = "b1"
+VERSION = "0.1.0-b2"
+STAGE = "b2"
+
+# 任务库与执行时限。路径可被单测改到临时文件，生产默认不进 Git。
+_DEFAULT_JOB_DB_PATH = "/opt/football-data/openclaw-jobs.sqlite3"
+_DEFAULT_JOB_MAX_SECONDS = 10.0
+_MAX_JOB_MAX_SECONDS = 30.0
+_DEFAULT_JOB_CREATE_TIMEOUT_SECONDS = 5.0
+_MAX_JOB_CREATE_TIMEOUT_SECONDS = 10.0
+_DEFAULT_JOB_RETENTION_SECONDS = 24.0 * 60.0 * 60.0
+_MAX_JOB_RETENTION_SECONDS = 7.0 * 24.0 * 60.0 * 60.0
 
 # 只读分析接口的本机地址。阶段 B1 只允许这一处，不能改成其它主机或端口。
 UPSTREAM_ORIGIN = "http://127.0.0.1:8787"
@@ -144,6 +153,97 @@ def upstream_timeout_seconds() -> float:
             "OPENCLAW_UPSTREAM_TIMEOUT_SECONDS 超过 10 秒，已按 10 秒执行。",
         )
         return _MAX_UPSTREAM_TIMEOUT_SECONDS
+    return value
+
+
+def job_db_path() -> str:
+    """任务 SQLite 文件路径。未设置时使用分析机数据目录下的默认文件。
+
+    单测应把 OPENCLAW_JOB_DB_PATH 指到临时文件。取值含空字符时忽略并回到默认路径。
+    """
+    raw = os.environ.get("OPENCLAW_JOB_DB_PATH", "").strip()
+    if raw == "":
+        return _DEFAULT_JOB_DB_PATH
+    if "\x00" in raw:
+        _warn_once(
+            "job-db-path-invalid",
+            "OPENCLAW_JOB_DB_PATH 无法使用，任务库改用默认路径。",
+        )
+        return _DEFAULT_JOB_DB_PATH
+    return raw
+
+
+def job_max_seconds() -> float:
+    """单次任务最长执行时间（秒）。默认 10，超过 30 时按 30 执行。"""
+    return _bounded_seconds(
+        "OPENCLAW_JOB_MAX_SECONDS",
+        _DEFAULT_JOB_MAX_SECONDS,
+        _MAX_JOB_MAX_SECONDS,
+        allow_zero=False,
+        invalid_code="job-max-invalid",
+        capped_code="job-max-capped",
+        invalid_message="OPENCLAW_JOB_MAX_SECONDS 不是正的有限数，任务最长执行时间改用默认 10 秒。",
+        capped_message="OPENCLAW_JOB_MAX_SECONDS 超过 30 秒，已按 30 秒执行。",
+    )
+
+
+def job_create_timeout_seconds() -> float:
+    """创建请求本身的处理时限（秒）。默认 5，超过 10 时按 10 执行。"""
+    return _bounded_seconds(
+        "OPENCLAW_JOB_CREATE_TIMEOUT_SECONDS",
+        _DEFAULT_JOB_CREATE_TIMEOUT_SECONDS,
+        _MAX_JOB_CREATE_TIMEOUT_SECONDS,
+        allow_zero=False,
+        invalid_code="job-create-timeout-invalid",
+        capped_code="job-create-timeout-capped",
+        invalid_message="OPENCLAW_JOB_CREATE_TIMEOUT_SECONDS 不是正的有限数，创建超时改用默认 5 秒。",
+        capped_message="OPENCLAW_JOB_CREATE_TIMEOUT_SECONDS 超过 10 秒，已按 10 秒执行。",
+    )
+
+
+def job_retention_seconds() -> float:
+    """成功与失败任务的保留时间（秒）。默认 24 小时，超过 7 天时按 7 天执行。
+
+    0 表示终态任务在下一次创建或查询时立即过期。负数或无法解析时回到 24 小时。
+    """
+    return _bounded_seconds(
+        "OPENCLAW_JOB_RETENTION_SECONDS",
+        _DEFAULT_JOB_RETENTION_SECONDS,
+        _MAX_JOB_RETENTION_SECONDS,
+        allow_zero=True,
+        invalid_code="job-retention-invalid",
+        capped_code="job-retention-capped",
+        invalid_message="OPENCLAW_JOB_RETENTION_SECONDS 无法解析，任务保留时间改用默认 24 小时。",
+        capped_message="OPENCLAW_JOB_RETENTION_SECONDS 超过 7 天，已按 7 天执行。",
+    )
+
+
+def _bounded_seconds(
+    env_name: str,
+    default: float,
+    cap: float,
+    *,
+    allow_zero: bool,
+    invalid_code: str,
+    capped_code: str,
+    invalid_message: str,
+    capped_message: str,
+) -> float:
+    """读取秒数环境变量。日志不回显原值。"""
+    raw = os.environ.get(env_name, "").strip()
+    if raw == "":
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        _warn_once(invalid_code, invalid_message)
+        return default
+    if not math.isfinite(value) or value < 0 or (value == 0 and not allow_zero):
+        _warn_once(invalid_code, invalid_message)
+        return default
+    if value > cap:
+        _warn_once(capped_code, capped_message)
+        return cap
     return value
 
 

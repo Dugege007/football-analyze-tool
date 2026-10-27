@@ -3,7 +3,7 @@
 # 运行用户沿用现网的 football。令牌只放在 EnvironmentFile 指向的文件里，权限 600，不要写进本单元。
 
 [Unit]
-Description=football-openclaw-gateway（OpenClaw 入站网关，阶段 B1）
+Description=football-openclaw-gateway（OpenClaw 入站网关，阶段 B2）
 After=network.target
 StartLimitIntervalSec=60
 StartLimitBurst=5

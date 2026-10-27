@@ -1,4 +1,4 @@
-"""OpenClaw 入站网关。阶段 B1 在探活与鉴权之上开放两条只读查询。"""
+"""OpenClaw 入站网关。阶段 B2 在只读查询之上开放最小任务通道。"""
 
 from openclaw_gateway.config import VERSION as __version__
 

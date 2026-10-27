@@ -1,8 +1,9 @@
 # football-openclaw-gateway 阶段 B1 读适配
 
 **状态**：2026-10-27 按契约草稿实现。开放问题采用本文第 2 节的默认决定。合入前由分析师／秘书安排测试。本文件不授权改动大陆站。  
+**阶段 B2**：任务最小通道已经实现。当前的 `stage`、版本号、能力清单和 `POST /v1/jobs`、`GET /v1/jobs/{id}` 以 [`openclaw-gateway-b2.md`](openclaw-gateway-b2.md) 为准。本文件继续记录阶段 B1 的读适配决定。  
 **代码**：`openclaw-gateway/`。不修改 `api/` 与 `web/` 的对外行为。  
-**基线**：阶段 B0 骨架见 [`openclaw-gateway-b0.md`](openclaw-gateway-b0.md)。鉴权、监听地址、Nginx 来源限制和任务占位沿用该文件。  
+**基线**：阶段 B0 骨架见 [`openclaw-gateway-b0.md`](openclaw-gateway-b0.md)。鉴权、监听地址和 Nginx 来源限制沿用该文件。  
 **上游**：只读分析接口 `http://127.0.0.1:8787`。网关监听仍是 `127.0.0.1:8790`。
 
 ## 1. 本阶段交付
@@ -11,7 +12,7 @@
 2. `GET /v1/capabilities` 的 `stage` 为 `b1`，并且只登记两条读能力：`read.matches`、`read.match`。
 3. `GET /v1/read/matches` 把白名单查询转到本机 `GET /matches`，成功时透传上游 JSON。
 4. `GET /v1/read/matches/{match_id}` 读取本机 `GET /matches/{match_id}` 后做精简封装。
-5. 未登记的 `/v1/read/...` 仍先校验 Bearer，再返回 `501`。`POST /v1/jobs` 与 `GET /v1/jobs/{id}` 仍返回 `501`。
+5. 未登记的 `/v1/read/...` 仍先校验 Bearer，再返回 `501`。阶段 B1 交付时 `POST /v1/jobs` 与 `GET /v1/jobs/{id}` 仍返回 `501`；阶段 B2 起这两条改为真实任务通道。
 6. 任何写方法都不进入上游白名单。
 
 ## 2. 开放问题的默认决定
@@ -165,14 +166,14 @@
 6. 带令牌访问已知 `match_uid` → `200`，有 `id`、`match`、`result`，没有 `stats`、`odds`、`meta`。
 7. 带令牌访问未知编号 → `404`，`error.code` 为 `not_found`。
 8. 带令牌访问 `GET /v1/read/matches/{id}/odds` 或其它未登记子路径 → `501`。
-9. 带令牌 `POST /v1/jobs` → `501`。
+9. 带令牌 `POST /v1/jobs`。阶段 B1 交付时期望 `501`。阶段 B2 起，`{"type":"ping","payload":{}}` 期望 `202`，见 B2 文档。
 10. 在 `openclaw-gateway/` 执行 `python -m pytest -q`。
 
 不要在冒烟输出或聊天里打印 Bearer 令牌明文。
 
 ## 9. 明确不做
 
-- 不实现任务队列。`/v1/jobs` 保持 `501`。
+- 阶段 B1 不实现任务队列，`/v1/jobs` 在该阶段保持 `501`。阶段 B2 才开放 ping 任务，见 B2 文档。
 - 不修改 `api/app/main.py` 的路由、鉴权和只读开关，也不给 `8787` 添加入站 Bearer。
 - 不开放赔率时间线、数据表、策略、资金、调度或日历接口。
 - 不把 `8787` 或 `8790` 放进公网或安全组。
@@ -183,6 +184,7 @@
 | 内容 | 路径 |
 |---|---|
 | 本说明 | `docs/openclaw-gateway-b1.md` |
+| 阶段 B2 任务通道 | `docs/openclaw-gateway-b2.md` |
 | 阶段 B0 骨架 | `docs/openclaw-gateway-b0.md` |
 | 本地运行说明 | `openclaw-gateway/README.md` |
 | 转发与精简 | `openclaw-gateway/openclaw_gateway/upstream.py` |
