@@ -258,12 +258,13 @@ def test_list_and_match_without_token_do_not_call_upstream(
     assert calls == []
 
 
-def test_capabilities_contains_exactly_two_read_routes(client: TestClient, token: str) -> None:
+def test_capabilities_still_lists_read_routes(client: TestClient, token: str) -> None:
     response = client.get("/v1/capabilities", headers=_auth(token))
     body = response.json()
     assert response.status_code == 200
-    assert body["stage"] == "b1"
-    assert [item["name"] for item in body["capabilities"]] == ["read.matches", "read.match"]
+    assert body["stage"] == "b2"
+    names = [item["name"] for item in body["capabilities"]]
+    assert names[:2] == ["read.matches", "read.match"]
 
 
 def test_list_passthrough_and_query_whitelist(
@@ -560,7 +561,7 @@ def test_non_json_upstream_is_upstream_error(
     assert _SECRET not in response.text
 
 
-def test_unregistered_read_paths_and_jobs_stay_not_implemented(
+def test_unregistered_read_paths_stay_not_implemented(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, token: str
 ) -> None:
     calls = install_upstream(monkeypatch, _json_response(200, {"items": []}))
@@ -582,8 +583,8 @@ def test_unregistered_read_paths_and_jobs_stay_not_implemented(
         headers=_auth(token),
         json={"type": "ping", "payload": {"secret": _SECRET}},
     )
-    assert jobs.status_code == 501
-    assert jobs.json()["error"]["code"] == "not_implemented"
+    assert jobs.status_code == 400
+    assert jobs.json()["error"]["code"] == "bad_request"
     assert _SECRET not in jobs.text
     assert calls == []
 

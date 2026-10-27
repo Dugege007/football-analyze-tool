@@ -19,8 +19,8 @@ def test_health_without_token_is_public(client: TestClient) -> None:
     assert response.json() == {
         "ok": True,
         "service": "football-openclaw-gateway",
-        "version": "0.1.0-b1",
-        "stage": "b1",
+        "version": "0.1.0-b2",
+        "stage": "b2",
     }
     assert response.headers["cache-control"] == "no-store"
 
@@ -44,7 +44,7 @@ def test_health_requires_token_when_flag_enabled(
     assert missing.json()["error"]["code"] == "unauthorized"
     ok = client.get("/v1/health", headers=_auth(token))
     assert ok.status_code == 200
-    assert ok.json()["stage"] == "b1"
+    assert ok.json()["stage"] == "b2"
 
 
 def test_health_unknown_flag_fails_closed(
@@ -79,17 +79,19 @@ def test_capabilities_with_wrong_or_malformed_token(client: TestClient, token: s
     assert empty.status_code == 401
 
 
-def test_capabilities_with_token_lists_two_read_routes(client: TestClient, token: str) -> None:
+def test_capabilities_with_token_lists_open_routes(client: TestClient, token: str) -> None:
     response = client.get(
         "/v1/capabilities",
         headers={"Authorization": f"bearer {token}"},
     )
     assert response.status_code == 200
     assert response.json() == {
-        "stage": "b1",
+        "stage": "b2",
         "capabilities": [
             {"name": "read.matches", "methods": ["GET /v1/read/matches"]},
             {"name": "read.match", "methods": ["GET /v1/read/matches/{match_id}"]},
+            {"name": "jobs.create", "methods": ["POST /v1/jobs"]},
+            {"name": "jobs.get", "methods": ["GET /v1/jobs/{id}"]},
         ],
     }
 
@@ -103,7 +105,7 @@ def test_capabilities_rejects_empty_configured_token(
     assert response.json()["error"]["code"] == "unauthorized"
 
 
-def test_post_jobs_with_token_is_not_implemented(client: TestClient, token: str) -> None:
+def test_post_jobs_unknown_payload_does_not_echo_secret(client: TestClient, token: str) -> None:
     response = client.post(
         "/v1/jobs",
         headers={**_auth(token), "Content-Type": "application/json"},
@@ -114,15 +116,9 @@ def test_post_jobs_with_token_is_not_implemented(client: TestClient, token: str)
             "client_ref": "ref-1",
         },
     )
-    assert response.status_code == 501
-    assert response.json() == {
-        "error": {
-            "code": "not_implemented",
-            "message": "该接口已列入规划，但在当前阶段（b1）尚未实现。",
-        }
-    }
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "bad_request"
     assert "do-not-echo" not in response.text
-    assert "ping" not in response.text
 
 
 def test_post_jobs_without_token_is_unauthorized(client: TestClient) -> None:
@@ -131,10 +127,10 @@ def test_post_jobs_without_token_is_unauthorized(client: TestClient) -> None:
     assert response.json()["error"]["code"] == "unauthorized"
 
 
-def test_get_job_with_token_is_not_implemented(client: TestClient, token: str) -> None:
+def test_get_unknown_job_is_not_found(client: TestClient, token: str) -> None:
     response = client.get("/v1/jobs/job_123", headers=_auth(token))
-    assert response.status_code == 501
-    assert response.json()["error"]["code"] == "not_implemented"
+    assert response.status_code == 404
+    assert response.json()["error"] == {"code": "not_found", "message": "任务不存在。"}
 
 
 def test_unregistered_read_routes_require_token_then_return_not_implemented(

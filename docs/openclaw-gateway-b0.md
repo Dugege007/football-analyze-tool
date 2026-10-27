@@ -1,7 +1,8 @@
 # football-openclaw-gateway 阶段 B0
 
 **状态**：2026-10-27 已确认，按本文件实现。本文件只描述网关骨架，不授权改动大陆站。  
-**阶段 B1**：同一进程已经接上读适配。当前的 `stage`、版本号、能力清单和两条只读路由以 [`openclaw-gateway-b1.md`](openclaw-gateway-b1.md) 为准。本文件继续记录阶段 B0 当时确认的骨架决定。任务接口仍然未实现。  
+**阶段 B1**：同一进程已经接上读适配，见 [`openclaw-gateway-b1.md`](openclaw-gateway-b1.md)。  
+**阶段 B2**：当前的 `stage`、版本号、能力清单和任务接口以 [`openclaw-gateway-b2.md`](openclaw-gateway-b2.md) 为准。本文件继续记录阶段 B0 当时确认的骨架决定。  
 **代码**：`openclaw-gateway/`。本阶段不修改 `api/app/main.py`。  
 **调用关系**：OpenClaw（阿里云出口地址 `101.132.38.171`）经过大陆站（宝塔，地址 `124.221.56.38`）访问分析机上的本网关。
 
@@ -153,8 +154,8 @@ location /openclaw/ {
 |---|---|---|
 | `ok` | 布尔值 | 进程正常时为 `true` |
 | `service` | 字符串 | 固定为 `football-openclaw-gateway` |
-| `version` | 字符串 | 网关自身版本。阶段 B0 交付时为 `0.1.0-b0`；阶段 B1 起改为 `0.1.0-b1` |
-| `stage` | 字符串 | 阶段标记。阶段 B0 交付时为 `b0`；阶段 B1 起为 `b1` |
+| `version` | 字符串 | 网关自身版本。阶段 B0 交付时为 `0.1.0-b0`；阶段 B1 为 `0.1.0-b1`；阶段 B2 起为 `0.1.0-b2` |
+| `stage` | 字符串 | 阶段标记。阶段 B0 交付时为 `b0`；阶段 B1 为 `b1`；阶段 B2 起为 `b2` |
 
 ### 6.2 `GET /v1/capabilities`
 
@@ -188,7 +189,7 @@ location /openclaw/ {
 
 阶段 B0 收到 `/v1/read` 或其任意子路径时，先校验令牌，然后返回 `501`。这样调用方可以区分「路径已经规划，但当前阶段没有启用」和「地址完全错误」。未带令牌或令牌错误时返回 `401`，不会返回 `501`。
 
-阶段 B1 起，`GET /v1/read/matches` 与 `GET /v1/read/matches/{match_id}` 改为真实只读转发，不再返回 `501`。其余未登记的 `/v1/read/...` 仍然先鉴权再返回 `501`。`POST /v1/jobs` 与 `GET /v1/jobs/{id}` 也仍然是 `501`。上面能力清单预留示例里的 `jobs` 尚未开放。
+阶段 B1 起，`GET /v1/read/matches` 与 `GET /v1/read/matches/{match_id}` 改为真实只读转发，不再返回 `501`。其余未登记的 `/v1/read/...` 仍然先鉴权再返回 `501`。阶段 B2 起，`POST /v1/jobs` 与 `GET /v1/jobs/{id}` 改为真实任务通道，能力名是 `jobs.create` 与 `jobs.get`，不再使用上面预留示例里的单个 `jobs`。详见阶段 B2 文档。
 
 ### 6.4 预留的任务接口
 
@@ -286,7 +287,7 @@ location /openclaw/ {
 4. `curl -sS -H "Authorization: Bearer $OPENCLAW_BEARER_TOKEN" http://127.0.0.1:8790/v1/capabilities`  
    阶段 B0 交付时期望 `capabilities` 为空数组。阶段 B1 起期望含 `read.matches` 与 `read.match`。
 5. `curl -sS -X POST -H "Authorization: Bearer $OPENCLAW_BEARER_TOKEN" -H 'Content-Type: application/json' -d '{"type":"ping","payload":{}}' http://127.0.0.1:8790/v1/jobs`  
-   期望：`501`，`error.code` 为 `not_implemented`。
+   阶段 B0 交付时期望 `501`，`error.code` 为 `not_implemented`。阶段 B2 起期望 `202`，见 B2 文档。
 6. 运行 `python -m pytest -q`。期望相关用例通过。
 
 ## 10. 大陆站冒烟（验收通过之后才允许执行）
@@ -297,7 +298,7 @@ location /openclaw/ {
 2. 从任意网络执行 `curl -sS http://124.221.56.38/openclaw/v1/health`。Nginx 配置完成时期望相同。站点若已启用传输层安全，则改用 `https://`。
 3. 不带令牌访问 `http://124.221.56.38/openclaw/v1/capabilities`。期望 `401`，`error.code` 为 `unauthorized`。
 4. 带正确令牌访问同一路径。阶段 B0 交付时期望 `capabilities` 为空数组。阶段 B1 起期望含两条读能力，见 B1 文档。
-5. 带正确令牌提交 `POST /openclaw/v1/jobs`，请求体为 `{"type":"ping","payload":{}}`。期望 `501`，`error.code` 为 `not_implemented`。
+5. 带正确令牌提交 `POST /openclaw/v1/jobs`，请求体为 `{"type":"ping","payload":{}}`。阶段 B0 交付时期望 `501`，`error.code` 为 `not_implemented`。阶段 B2 起期望 `202`。
 6. 从不属于 `101.132.38.171` 的机器访问 `/openclaw/v1/health`。期望 Nginx 返回 `403`，或由连接策略拒绝。请求不得进入网关的业务逻辑。
 7. 回归现有网页接口：`curl -sS http://124.221.56.38/api/health`。期望仍是现有 `football-analyze-api` 的健康响应，行为与部署网关之前一致。
 8. 从外网访问 `124.221.56.38:8790` 和 `124.221.56.38:8787`。期望超时或被拒绝。
@@ -308,9 +309,10 @@ location /openclaw/ {
 |---|---|
 | 本说明 | `docs/openclaw-gateway-b0.md` |
 | 阶段 B1 读适配 | `docs/openclaw-gateway-b1.md` |
+| 阶段 B2 任务通道 | `docs/openclaw-gateway-b2.md` |
 | 本地运行说明 | `openclaw-gateway/README.md` |
 | 服务代码 | `openclaw-gateway/openclaw_gateway/` |
-| 单测 | `openclaw-gateway/tests/test_b0.py`、`openclaw-gateway/tests/test_b1.py` |
+| 单测 | `openclaw-gateway/tests/test_b0.py`、`openclaw-gateway/tests/test_b1.py`、`openclaw-gateway/tests/test_b2.py` |
 | 依赖 | `openclaw-gateway/requirements.txt` |
 | 环境变量示例 | `openclaw-gateway/openclaw-gateway.env.example` |
 | systemd 示例 | `openclaw-gateway/systemd/football-openclaw-gateway.service` |

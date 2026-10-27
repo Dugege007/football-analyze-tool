@@ -1,13 +1,16 @@
-"""football-openclaw-gateway 的阶段 B1 应用。
+"""football-openclaw-gateway 的阶段 B2 应用。
 
 本进程与 `api/app/main.py` 相互独立：不注册分析接口的路由，不读取它的只读开关。
-阶段 B1 只把两条已鉴权的 GET 转到本机 8787 的白名单路径。
+阶段 B1 的两条只读 GET 仍转到本机 8787 的白名单路径。
+阶段 B2 增加 ping 任务的创建与查询，任务数据只写入网关自己的 SQLite 文件。
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import sqlite3
+import time
 from datetime import date
 from typing import Annotated
 
@@ -17,6 +20,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from openclaw_gateway.auth import Unauthorized, ensure_authorized
 from openclaw_gateway.config import SERVICE_NAME, STAGE, VERSION, require_auth_on_health
+from openclaw_gateway.jobs import (
+    CreateTimeout,
+    IdempotencyConflict,
+    Rejected,
+    accept_job,
+    fetch_job,
+    parse_create_body,
+)
 from openclaw_gateway.upstream import (
     UpstreamFailure,
     fetch_upstream_json,
@@ -34,6 +45,9 @@ _METHOD_NOT_ALLOWED_MESSAGE = "该路径不支持当前的 HTTP 方法。"
 _INTERNAL_ERROR_MESSAGE = "服务内部发生错误，详情已写入日志。"
 _MATCH_NOT_FOUND_MESSAGE = "比赛不存在。"
 _LIST_NOT_FOUND_MESSAGE = "上游没有找到对应的比赛列表。"
+_JOB_NOT_FOUND_MESSAGE = "任务不存在。"
+_IDEMPOTENCY_CONFLICT_MESSAGE = "相同的幂等键对应了不同的任务内容。"
+_CREATE_TIMEOUT_MESSAGE = "创建任务在限定时间内没有完成。"
 _EXTENSION_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 _JINGCAI_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _LIST_SCOPES = frozenset({"jingcai", "extra", "all"})
@@ -42,6 +56,8 @@ _RESERVED_MATCH_SEGMENTS = frozenset({"dates"})
 CAPABILITIES: list[dict[str, object]] = [
     {"name": "read.matches", "methods": ["GET /v1/read/matches"]},
     {"name": "read.match", "methods": ["GET /v1/read/matches/{match_id}"]},
+    {"name": "jobs.create", "methods": ["POST /v1/jobs"]},
+    {"name": "jobs.get", "methods": ["GET /v1/jobs/{id}"]},
 ]
 
 router = APIRouter(prefix="/v1")
@@ -145,19 +161,32 @@ def capabilities(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> dict[str, object]:
-    """声明当前阶段已开放的能力。阶段 B1 只登记两条读能力。"""
+    """声明当前阶段已开放的能力。阶段 B2 在两条读能力之外登记任务创建与查询。"""
     ensure_authorized(authorization, request)
     return {"stage": STAGE, "capabilities": CAPABILITIES}
 
 
 @router.post("/jobs")
-def create_job(
+async def create_job(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> JSONResponse:
-    """创建任务的预留入口。校验令牌后固定返回 501，不读取、不保存请求体。"""
+    """创建 ping 任务。鉴权失败不读正文、不落库。成功时返回 202 与任务快照。"""
     ensure_authorized(authorization, request)
-    return not_implemented_response()
+    started_at = time.monotonic()
+    parsed = parse_create_body(await request.body())
+    if isinstance(parsed, Rejected):
+        return error_response(parsed.status_code, parsed.code, parsed.message)
+    try:
+        snapshot = accept_job(parsed, started_at=started_at)
+    except IdempotencyConflict:
+        return error_response(409, "idempotency_conflict", _IDEMPOTENCY_CONFLICT_MESSAGE)
+    except CreateTimeout:
+        return error_response(504, "timeout", _CREATE_TIMEOUT_MESSAGE)
+    except (sqlite3.Error, OSError) as exc:
+        log.error("任务库操作失败。异常类型 %s。", type(exc).__name__)
+        return error_response(500, "internal_error", _INTERNAL_ERROR_MESSAGE)
+    return JSONResponse(status_code=202, content=snapshot)
 
 
 @router.get("/jobs/{job_id}")
@@ -166,10 +195,16 @@ def get_job(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> JSONResponse:
-    """查询任务的预留入口。不区分任务是否存在，校验令牌后固定返回 501。"""
-    del job_id
+    """按编号返回任务快照。任务失败时仍是 200，失败细节在正文 error 字段。"""
     ensure_authorized(authorization, request)
-    return not_implemented_response()
+    try:
+        snapshot = fetch_job(job_id)
+    except (sqlite3.Error, OSError) as exc:
+        log.error("任务库操作失败。异常类型 %s。", type(exc).__name__)
+        return error_response(500, "internal_error", _INTERNAL_ERROR_MESSAGE)
+    if snapshot is None:
+        return error_response(404, "not_found", _JOB_NOT_FOUND_MESSAGE)
+    return JSONResponse(status_code=200, content=snapshot)
 
 
 def _valid_jingcai_day(value: str) -> bool:

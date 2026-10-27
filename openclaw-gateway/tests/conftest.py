@@ -24,6 +24,16 @@ def _gateway_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _job_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """任务库只写临时文件，避免单测碰到生产默认路径。"""
+    monkeypatch.setenv("OPENCLAW_JOB_DB_PATH", str(tmp_path / "openclaw-jobs.sqlite3"))
+    yield
+    from openclaw_gateway.jobs import close_connections
+
+    close_connections()
+
+
+@pytest.fixture(autouse=True)
 def _block_live_upstream(monkeypatch: pytest.MonkeyPatch) -> None:
     """默认禁止单测连接本机 8787。需要上游时由用例替换 open_client。"""
     import openclaw_gateway.upstream as upstream
