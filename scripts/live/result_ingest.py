@@ -634,6 +634,16 @@ def periodic_crosscheck(args, st: State, now: dt.datetime, log):
             f"单一来源 {r['single_source']} 场，比分不一致 {r['fd_score_mismatch']} 场，备份 {r['backup']}")
 
 
+def write_heartbeat(out_dir: Path, api_calls_5df: int) -> None:
+    """覆盖写入 heartbeat.json。字段保持 pid、at、api_calls_5df。
+
+    看门狗只看该文件的修改时间，阈值固定 600 秒（ops/ensure_result_ingest.sh），此处不配置、不放宽。
+    超过阈值且 daemon.lock 仍被占用时，看门狗只打印 HEARTBEAT_STALE，不结束进程，也不再拉起第二份。
+    """
+    payload = {"pid": os.getpid(), "at": iso(now_cn()), "api_calls_5df": api_calls_5df}
+    (out_dir / "heartbeat.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
 def daemon(args):
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -654,6 +664,10 @@ def daemon(args):
     log(f"启动，进程号 {os.getpid()}，数据库 {check_db_path(args.db)}")
     last_summary = None
     while True:
+        # 每轮一进来先写。tick、Football-Data.co.uk 核对、日汇总都可能单轮超过 600 秒；
+        # 心跳若留到循环末尾，看门狗会把仍在干活的进程判成 HEARTBEAT_STALE。
+        # 阈值保持 600 秒，不靠放宽消假警。重活结束后再写一次，睡眠期间从本轮收尾起算。
+        write_heartbeat(out_dir, cl.calls)
         now = now_cn()
         try:
             r = tick(args, st, cl, now, log)
@@ -671,8 +685,7 @@ def daemon(args):
                 last_summary = now
             except Exception as e:
                 log(f"汇总出错：{e}")
-        (out_dir / "heartbeat.json").write_text(json.dumps({"pid": os.getpid(), "at": iso(now_cn()),
-                                                            "api_calls_5df": cl.calls}), encoding="utf-8")
+        write_heartbeat(out_dir, cl.calls)
         time.sleep(args.interval)
 
 
