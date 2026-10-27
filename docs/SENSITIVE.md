@@ -103,7 +103,19 @@
 | 建议 | 指向备份库时设置 `APP_READONLY=1`；副本库请复制一份单独文件，不要与 `APP_DB_PATH` 相同（采集脚本会拒绝写现网库） |
 | 为什么不进仓库 | 库内含个人的预测、注单与历史赔率整理结果，属于私人数据；体积也大 |
 
-## 10. GitHub（仅贡献者需要）
+## 10. OpenClaw 网关令牌（阶段 B0）
+
+| 项 | 说明 |
+|---|---|
+| 用途 | `openclaw-gateway/` 校验入站请求头 `Authorization: Bearer <token>` |
+| 变量 | `OPENCLAW_BEARER_TOKEN` |
+| 存放 | 本机 shell，或服务器文件 `/opt/football-data/openclaw-gateway.env`（权限 `600`）。网关不读取仓库根目录的 `.env` |
+| 示例 | `openclaw-gateway/openclaw-gateway.env.example` 把该变量留空，可以提交 |
+| 禁止 | 不要把真实令牌写进 Git、Nginx 配置、systemd 单元或聊天记录 |
+
+生成示例：`python -c 'import secrets; print(secrets.token_hex(32))'`。详细行为见 `docs/openclaw-gateway-b0.md`。
+
+## 11. GitHub（仅贡献者需要）
 
 克隆公开仓库不需要任何凭证。提交/推送请使用你自己的 `gh auth login` 或 SSH key；**不要**把 Personal Access Token 写进 `.env` 以外的任何文件或 remote URL。
 
@@ -114,6 +126,7 @@
 | 内容 | 原因 |
 |---|---|
 | `.env`、任何 key/token/cookie/密码 | 凭证，泄漏即被盗用额度或账号 |
+| `openclaw-gateway.env`、`OPENCLAW_BEARER_TOKEN` 的真实值 | OpenClaw 入站令牌；仓库只提交留空的 `openclaw-gateway.env.example` |
 | `*.db` / `*.sqlite*`、`backups/` | 私人预测、注单、整理后的数据；体积大 |
 | 原始历史缓存（`raw/`、`hist/`、`staging/`、各数据源完整响应） | 体积大（数百 MB）；部分数据源条款不允许再分发 |
 | 由真实数据派生的配置：`api/config/kickoff_drift.json`、`api/config/leak_suspect.json` | 来自作者私人库；公开仓只附 `*.example.json` 模板。kickoff_drift 用 `python api/scripts/build_kickoff_drift.py --csv <你的改期扫描 CSV>` 生成；leak_suspect 手工维护 |

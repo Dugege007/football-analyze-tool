@@ -1,0 +1,31 @@
+# 示例单元，路径对应服务器上的 /etc/systemd/system/football-openclaw-gateway.service。
+# 分析师验收通过之前，不要把本单元安装到大陆站，也不要执行 systemctl enable。
+# 运行用户沿用现网的 football。令牌只放在 EnvironmentFile 指向的文件里，权限 600，不要写进本单元。
+
+[Unit]
+Description=football-openclaw-gateway（OpenClaw 入站网关，阶段 B0）
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=football
+Group=football
+WorkingDirectory=/opt/football-openclaw-gateway
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/opt/football-data/openclaw-gateway.env
+ExecStart=/opt/football-openclaw-gateway/.venv/bin/python -m openclaw_gateway
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+# 标准输出与标准错误进入 journald，可用 journalctl -u football-openclaw-gateway 查看。
+# 若改为文件日志，请先创建 /var/log/football-analyze-tool 并把属主设为 football，再使用下面两行。
+# 使用 append 前，目标文件本身需要已经存在。
+# StandardOutput=append:/var/log/football-analyze-tool/openclaw-gateway.log
+# StandardError=append:/var/log/football-analyze-tool/openclaw-gateway.log
+
+[Install]
+WantedBy=multi-user.target

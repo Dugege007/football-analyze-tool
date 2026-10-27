@@ -1,0 +1,5 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+# httpx 供 FastAPI 的 TestClient 使用，pytest 供本目录单测使用。
+httpx>=0.27
+pytest>=8.3
