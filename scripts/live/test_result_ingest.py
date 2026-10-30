@@ -462,7 +462,8 @@ def _seed_single_source(db, match_id, jc_id, home, away, score=(1, 0), *, flag=T
     connection = sqlite3.connect(db)
     R.ensure_schema(connection)
     connection.execute(
-        "insert into matches values (?, ?, 'jingcai', ?, ?, ?, ?, ?)",
+        "insert into matches(id, match_uid, scope, jingcai_date, jc_id, home_team, away_team, kickoff_at) "
+        "values (?, ?, 'jingcai', ?, ?, ?, ?, ?)",
         (match_id, f"uid{match_id}", jingcai, jc_id, home, away, f"{jingcai}T13:00:00+08:00"))
     connection.execute(
         "insert into results values (?, ?, ?, ?, ?)",
@@ -486,9 +487,11 @@ def _write_msi_cache(directory: Path, rows: list[dict]) -> None:
         json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
-def _crosscheck(db: str, cache: Path, root: Path, apply: bool):
-    """对临时库执行一次竞彩网二次核对。"""
-    return R.run_sporttery_crosscheck(db, [str(cache)], root / "bk", root / "out", CROSSCHECK_NOW, apply=apply)
+def _crosscheck(db: str, cache: Path, root: Path, apply: bool, approve=None):
+    """对临时库执行一次竞彩网二次核对。approve 是分析师逐场放行的兜底清单。"""
+    return R.run_sporttery_crosscheck(
+        db, [str(cache)], root / "bk", root / "out", CROSSCHECK_NOW,
+        apply=apply, approve_fallback=approve)
 
 
 def _stored_state(db: str, match_id: int):
@@ -523,6 +526,8 @@ def test_sporttery_crosscheck_upgrades_when_score_agrees(tmp_path):
     assert audit["upgrades"][0]["after"]["source"] == "sporttery+5df_csl"
     assert audit["upgrades"][0]["after"]["sporttery_score"] == "2:1"
     assert audit["upgrades"][0]["after"]["single_source_resolved_at"] == R.iso(CROSSCHECK_NOW)
+    assert audit["upgrades"][0]["match_method"] == "文本"
+    assert result["fallback_pending_review_count"] == 0
     assert (Path(result["backup"]) / "sporttery_crosscheck_audit.json").read_text(encoding="utf-8")
     log, score, flag = _stored_state(db, 11)
     assert log == ("sporttery+5df_csl", "2:1", "2:1", None, "{}")
@@ -560,6 +565,7 @@ def test_sporttery_crosscheck_leaves_missing_cache_untouched(tmp_path):
 
 
 def test_sporttery_crosscheck_rejects_team_name_mismatch(tmp_path):
+    """队名文本对不上、又没有球队编号时，比分一致只列入兜底待复核，默认写入不升级。"""
     db = mkdb(tmp_path)
     _seed_single_source(db, 14, "六014", "天津津门虎", "梅州客家", (1, 0))
     _seed_single_source(db, 15, "六015", "上海海港", "甲乙丙丁", (1, 0))
@@ -571,10 +577,12 @@ def test_sporttery_crosscheck_rejects_team_name_mismatch(tmp_path):
     before_14 = _stored_state(db, 14)
     before_15 = _stored_state(db, 15)
     result = _crosscheck(db, cache, tmp_path, True)
-    assert result["upgrade_count"] == 0 and result["no_data_count"] == 2 and result["wrote"] is False
+    assert result["upgrade_count"] == 0 and result["fallback_pending_review_count"] == 2
+    assert result["no_data_count"] == 0 and result["wrote"] is False and result["backup"] is None
     assert _stored_state(db, 14) == before_14
     assert _stored_state(db, 15) == before_15
-    assert all("误匹配" in item["reason"] for item in result["no_data_matches"])
+    assert all(item["match_method"] == "兜底" for item in result["fallback_pending_review_matches"])
+    assert all("兜底待复核" in item["reason"] for item in result["fallback_pending_review_matches"])
 
 
 def test_sporttery_crosscheck_dry_run_does_not_write(tmp_path):
@@ -693,5 +701,196 @@ def test_sporttery_crosscheck_help_describes_preview_and_rollback(capsys):
     assert caught.value.code == 0
     text = capsys.readouterr().out
     assert "竞彩网二次核对" in text
-    assert "--apply" in text and "--rollback" in text
+    assert "--apply" in text and "--rollback" in text and "--approve-fallback" in text
     assert "不修改数据库" in text
+    assert "兜底待复核" in text
+    assert "竞彩日+短编号" in text
+
+
+def _install_team_tables(db: str) -> None:
+    """在临时库里补上球队编号列、规范名表和别名表。调用前应先写入场次，避免按位置插入时列数对不上。"""
+    connection = sqlite3.connect(db)
+    columns = {row[1] for row in connection.execute("pragma table_info(matches)")}
+    if "home_team_id" not in columns:
+        connection.execute("alter table matches add column home_team_id integer")
+    if "away_team_id" not in columns:
+        connection.execute("alter table matches add column away_team_id integer")
+    connection.execute("create table if not exists teams (id integer primary key, name_zh_canonical text)")
+    connection.execute(
+        "create table if not exists team_aliases ("
+        "id integer primary key autoincrement, alias text not null, team_id integer not null, source text)")
+    connection.commit()
+    connection.close()
+
+
+def _save_team(db: str, team_id: int, canonical: str, aliases: list[str]) -> None:
+    """写入一支球队的规范名和别名。这一步还不把场次的球队编号指过去。"""
+    connection = sqlite3.connect(db)
+    connection.execute(
+        "insert or replace into teams(id, name_zh_canonical) values (?, ?)",
+        (team_id, canonical))
+    for alias in aliases:
+        connection.execute(
+            "insert into team_aliases(alias, team_id, source) values (?, ?, ?)",
+            (alias, team_id, "单元测试"))
+    connection.commit()
+    connection.close()
+
+
+def _bind_team(db: str, match_id: int, side: str, team_id: int, canonical: str, aliases: list[str]) -> None:
+    """把一场的主队或客队编号指到规范名，并写入该队的全部别名。"""
+    if side == "home":
+        column = "home_team_id"
+    elif side == "away":
+        column = "away_team_id"
+    else:
+        raise AssertionError("测试只能绑定主队或客队。")
+    _save_team(db, team_id, canonical, aliases)
+    connection = sqlite3.connect(db)
+    connection.execute(f"update matches set {column} = ? where id = ?", (team_id, match_id))
+    connection.commit()
+    connection.close()
+
+
+def test_sporttery_crosscheck_alias_match_upgrades(tmp_path):
+    """队名文本对不上时，按球队编号比对规范名和别名，对上并且比分一致就升级。"""
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 61, "六061", "甲乙丙丁", "戊己庚辛", (2, 0))
+    _install_team_tables(db)
+    # 这里使用全角拉丁字母。不做名称规范时，它们和竞彩网的半角 AC 没有共同的英文字母。
+    fullwidth_ac = "\uff21\uff23"
+    _bind_team(db, 61, "home", 901, "无关名称甲", [fullwidth_ac])
+    _bind_team(db, 61, "away", 902, "山东泰山", [])
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [sp("周六061", "2026-10-10", "AC", "山东泰山", "2:0")])
+    result = _crosscheck(db, cache, tmp_path, True)
+    assert result["wrote"] is True
+    assert result["upgrade_count"] == 1 and result["fallback_pending_review_count"] == 0
+    assert result["upgrade_matches"][0]["match_method"] == "别名"
+    audit = json.loads(Path(result["audit"]).read_text(encoding="utf-8"))
+    assert audit["upgrades"][0]["match_method"] == "别名"
+    log, score, flag = _stored_state(db, 61)
+    assert log == ("sporttery+5df_csl", "2:0", "2:0", None, "{}")
+    assert score == (2, 0, 2, "胜")
+    assert flag == (R.iso(CROSSCHECK_NOW),)
+
+
+def test_sporttery_crosscheck_fallback_is_pending_and_apply_does_not_upgrade(tmp_path):
+    """同竞彩日、同短编号、比分一致但队名对不上时，单独标成兜底待复核，默认写入不升级。"""
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 71, "六071", "甲乙丙丁", "戊己庚辛", (1, 0))
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [sp("周六071", "2026-10-10", "上海海港", "山东泰山", "1:0")])
+    before = _stored_state(db, 71)
+    preview = _crosscheck(db, cache, tmp_path, False)
+    assert preview["applied"] is False and preview["wrote"] is False and preview["backup"] is None
+    assert preview["upgrade_count"] == 0 and preview["fallback_pending_review_count"] == 1
+    pending = preview["fallback_pending_review_matches"][0]
+    assert pending["category"] == "fallback_pending_review" and pending["match_method"] == "兜底"
+    report = Path(preview["report"]).read_text(encoding="utf-8")
+    assert "兜底待复核" in report and "本次没有修改数据库" in report
+    assert _stored_state(db, 71) == before
+    applied = _crosscheck(db, cache, tmp_path, True)
+    assert applied["wrote"] is False and applied["backup"] is None and applied["audit"] is None
+    assert applied["upgrade_count"] == 0 and applied["fallback_pending_review_count"] == 1
+    assert _stored_state(db, 71) == before
+
+
+def test_sporttery_crosscheck_approve_fallback_upgrades_only_listed_matches(tmp_path, capsys):
+    """只有放行清单里的兜底场次才会升级，没有写进清单的场次保持原样。"""
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 81, "六081", "甲乙丙丁", "戊己庚辛", (3, 1))
+    _seed_single_source(db, 82, "六082", "子丑寅卯", "辰巳午未", (1, 1))
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [
+        sp("周六081", "2026-10-10", "上海海港", "山东泰山", "3:1"),
+        sp("周六082", "2026-10-10", "北京国安", "广州队", "1:1"),
+    ])
+    approval = tmp_path / "放行清单.txt"
+    approval.write_text(
+        "# 分析师只放行下面这一场\n\n2026-10-10+六081\n",
+        encoding="utf-8")
+    before_82 = _stored_state(db, 82)
+    preview = _crosscheck(db, cache, tmp_path, False, approve=[str(approval)])
+    assert preview["wrote"] is False and preview["backup"] is None
+    assert preview["upgrade_count"] == 1 and preview["fallback_pending_review_count"] == 1
+    assert preview["upgrade_matches"][0]["match_id"] == 81
+    assert preview["upgrade_matches"][0]["match_method"] == "兜底"
+    assert preview["fallback_pending_review_matches"][0]["match_id"] == 82
+    assert _stored_state(db, 81)[0][0] == "5df_csl"
+    R.main([
+        "sporttery_crosscheck", "--apply", "--db", db,
+        "--out-dir", str(tmp_path / "cli-out"),
+        "--sporttery-dir", str(cache), "--sporttery-cache", str(cache),
+        "--backup-root", str(tmp_path / "cli-bk"),
+        "--approve-fallback", str(approval),
+    ])
+    printed = capsys.readouterr().out
+    assert "已升级" in printed and "这场的匹配方式是兜底" in printed
+    assert "兜底待复核" in printed
+    log, score, flag = _stored_state(db, 81)
+    assert log[0] == "sporttery+5df_csl" and log[1] == "3:1"
+    assert score == (3, 1, 4, "胜")
+    assert flag[0]
+    assert _stored_state(db, 82) == before_82
+    audit_path = next((tmp_path / "cli-out").glob("sporttery_crosscheck_audit_*.json"))
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert audit["upgrades"][0]["match_id"] == 81
+    assert audit["upgrades"][0]["match_method"] == "兜底"
+    restored = R.rollback_sporttery_crosscheck(
+        db, audit_path, tmp_path / "cli-bk", tmp_path / "cli-out", CROSSCHECK_NOW, apply=True)
+    assert restored["wrote"] is True
+    assert _stored_state(db, 81)[0][0] == "5df_csl"
+    assert _stored_state(db, 81)[2] == (None,)
+    assert _stored_state(db, 82) == before_82
+
+
+def test_sporttery_crosscheck_fallback_score_mismatch_is_not_upgraded(tmp_path):
+    """比分不一致时，即使同竞彩日、同短编号，并且已经写进放行清单，也不升级。"""
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 91, "六091", "甲乙丙丁", "戊己庚辛", (1, 0))
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [sp("周六091", "2026-10-10", "上海海港", "山东泰山", "0:1")])
+    before = _stored_state(db, 91)
+    result = _crosscheck(db, cache, tmp_path, True, approve=["2026-10-10+周六091"])
+    assert result["upgrade_count"] == 0 and result["fallback_pending_review_count"] == 0
+    assert result["mismatch_count"] == 1 and result["wrote"] is False and result["backup"] is None
+    assert result["mismatch_matches"][0]["match_method"] == "兜底"
+    assert "兜底也不升级" in result["mismatch_matches"][0]["reason"]
+    assert "2026-10-10+六091" in result["unused_fallback_approvals"]
+    assert _stored_state(db, 91) == before
+
+
+def test_sporttery_crosscheck_empty_team_id_skips_alias_and_stays_fallback(tmp_path):
+    """球队编号为空时跳过别名。别名表里即使有能对上的名称，也只进入兜底待复核。"""
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 101, "六101", "甲乙丙丁", "戊己庚辛", (2, 0))
+    _install_team_tables(db)
+    _save_team(db, 801, "上海海港", ["上海海港"])
+    _save_team(db, 802, "山东泰山", ["山东泰山"])
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [sp("周六101", "2026-10-10", "上海海港", "山东泰山", "2:0")])
+    before = _stored_state(db, 101)
+    result = _crosscheck(db, cache, tmp_path, True)
+    assert result["upgrade_count"] == 0 and result["fallback_pending_review_count"] == 1
+    assert result["wrote"] is False and result["backup"] is None
+    pending = result["fallback_pending_review_matches"][0]
+    assert pending["match_method"] == "兜底"
+    assert pending["home_team_id"] is None and pending["away_team_id"] is None
+    assert "球队编号为空" in pending["reason"] and "跳过别名" in pending["reason"]
+    assert _stored_state(db, 101) == before
+
+
+def test_sporttery_crosscheck_next_day_name_mismatch_is_not_fallback(tmp_path):
+    """开赛次日才出现、队名又对不上的记录，不进入兜底，也不因为放行清单而升级。"""
+    db = mkdb(tmp_path)
+    _seed_single_source(db, 111, "六111", "甲乙丙丁", "戊己庚辛", (1, 0))
+    cache = tmp_path / "cache"
+    _write_msi_cache(cache, [sp("周六111", "2026-10-11", "上海海港", "山东泰山", "1:0")])
+    before = _stored_state(db, 111)
+    result = _crosscheck(db, cache, tmp_path, True, approve=["2026-10-10+六111"])
+    assert result["no_data_count"] == 1
+    assert result["upgrade_count"] == 0 and result["fallback_pending_review_count"] == 0
+    assert result["wrote"] is False and result["backup"] is None
+    assert "不能使用同竞彩日兜底" in result["no_data_matches"][0]["reason"]
+    assert _stored_state(db, 111) == before
