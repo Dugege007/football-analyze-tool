@@ -240,6 +240,33 @@ _hb_status: dict = {}
 _stop_event = threading.Event()
 
 
+
+# ----------------------------------------------------------------------------- stage completion marks（巡检只读）
+# 用户 2026-11-07：阶段成功后再打带时间的完成标记；禁止开始前打成功标。
+
+def _stage_marks_write(stage: str, *, status: str = "ok", summary: dict | None = None,
+                       refs: dict | None = None) -> None:
+    """写入统一阶段标记；失败只记 health，不影响采集主路径。"""
+    try:
+        import sys as _sys
+        _scripts = str(Path(__file__).resolve().parents[1])
+        if _scripts not in _sys.path:
+            _sys.path.insert(0, _scripts)
+        from stage_marks.mark import write_stage_mark
+        write_stage_mark(
+            stage,
+            status=status,
+            summary=summary or {},
+            source="scripts/live/live_capture.py",
+            refs=refs or {"heartbeat": str(D_LOG / "heartbeat.json")},
+        )
+    except Exception as e:
+        try:
+            health("stage_mark_error", stage=stage, error=str(e)[:200])
+        except Exception:
+            pass
+
+
 def touch_heartbeat(*, progress: bool = True, **fields) -> dict:
     """写入 heartbeat.json。progress=True 时更新业务进度 ts（守护看这个）；
     progress=False 时只刷新 watchdog_ts（心跳线程兜底）。
@@ -1427,6 +1454,22 @@ def summary(D: str) -> dict:
         md.append(f"| {k} | {b['targets']} | {b['captured']} | {b['pending']} | {b['missed']} | {b['no_odds']} | {b['error']} | "
                   + " | ".join(str(cb.get(x, 0)) for x in CORE_BOOKS) + " |")
     (D_SUM / f"{D}.md").write_text("\n".join(md) + "\n", encoding="utf-8")
+    # 汇总文件落盘成功后再打阶段标记
+    _stage_marks_write(
+        "live.day_summary",
+        status="ok",
+        summary={
+            "jingcai_date": D,
+            "n_matches": out.get("n_matches"),
+            "n_exception": out.get("n_exception"),
+            "targets_by_phase": {
+                k: {"targets": v.get("targets"), "captured": v.get("captured"),
+                    "missed": v.get("missed"), "pending": v.get("pending")}
+                for k, v in (out.get("targets_by_phase") or {}).items()
+            },
+        },
+        refs={"summary_json": str(D_SUM / f"{D}.json")},
+    )
     return out
 
 
@@ -1481,6 +1524,48 @@ def tick(cl: Client) -> dict:
                          phase="tick_done")
     if groups or missed or now.minute % 30 == 0:
         health("tick", **{k: v for k, v in hb.items() if k not in ("ts", "watchdog_ts", "phase", "hb_thread", "sleep_left_s")})
+    # tick 整轮成功后再打标记（含 0 组：表示本轮无到点目标也正常跑完）
+    # 按本轮 groups 内目标的 phase 统计（已走到 capture_group）
+    captured_by_phase = {"live": 0, "mid": 0, "close": 0, "pending": 0}
+    for (D, fid), ts in groups.items():
+        for t in ts:
+            ph = t.get("phase") or "other"
+            if ph in captured_by_phase:
+                captured_by_phase[ph] += 1
+            else:
+                captured_by_phase.setdefault(ph, 0)
+                captured_by_phase[ph] += 1
+    _stage_marks_write(
+        "live.tick",
+        status="ok",
+        summary={
+            "due": len(due),
+            "groups": len(groups),
+            "missed_new": len(missed),
+            "calls_total": cl.calls,
+            "remaining": cl.remaining,
+            "captured_targets_by_phase": captured_by_phase,
+            "touched_days": touched,
+        },
+    )
+    if captured_by_phase.get("live"):
+        _stage_marks_write(
+            "live.open_batch",
+            status="ok",
+            summary={"captured_targets": captured_by_phase["live"], "note": "phase=live（11:10／开盘补初盘相关）"},
+        )
+    if captured_by_phase.get("mid"):
+        _stage_marks_write(
+            "live.mid_batch",
+            status="ok",
+            summary={"captured_targets": captured_by_phase["mid"]},
+        )
+    if captured_by_phase.get("close"):
+        _stage_marks_write(
+            "live.close_batch",
+            status="ok",
+            summary={"captured_targets": captured_by_phase["close"]},
+        )
     return hb
 
 
@@ -1519,6 +1604,11 @@ def daemon() -> None:
                 touch_heartbeat(progress=True, phase="tick_error", error=str(e)[:120])
             except Exception:
                 pass
+            _stage_marks_write(
+                "live.tick",
+                status="fail",
+                summary={"error": str(e)[:200]},
+            )
         # 每天 12:05 给前一竞彩日出最终汇总
         n = now_cn()
         if n.hour == 12 and n.minute == 5:

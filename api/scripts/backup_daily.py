@@ -87,4 +87,27 @@ for p in removed: os.remove(p)
 rep={"date":str(today),"snapshot":gz,"sha256":sha,"bytes":os.path.getsize(gz),"matches":nm,
      "raw_archive":arc,"raw_files":n,"raw_bytes":os.path.getsize(arc),"removed":removed}
 open(os.path.join(OUT,"last_backup.json"),"w").write(json.dumps(rep,ensure_ascii=False,indent=1))
+# 备份与 last_backup.json 落盘成功后再打统一阶段标记
+try:
+    import sys as _sys
+    from pathlib import Path as _P
+    _scripts = str(_P(__file__).resolve().parents[2] / "scripts")
+    if _scripts not in _sys.path:
+        _sys.path.insert(0, _scripts)
+    from stage_marks.mark import write_stage_mark
+    write_stage_mark(
+        "backup.daily",
+        status="ok",
+        summary={
+            "date": rep.get("date"),
+            "matches": rep.get("matches"),
+            "bytes": rep.get("bytes"),
+            "sha256_prefix": (rep.get("sha256") or "")[:16],
+            "raw_files": rep.get("raw_files"),
+        },
+        source="api/scripts/backup_daily.py",
+        refs={"last_backup": os.path.join(OUT, "last_backup.json"), "snapshot": rep.get("snapshot")},
+    )
+except Exception as _e:
+    print(f"[stage_mark_warn] backup.daily: {_e}", file=sys.stderr)
 print(json.dumps(rep,ensure_ascii=False))
