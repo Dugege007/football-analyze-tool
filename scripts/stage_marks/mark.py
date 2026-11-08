@@ -46,6 +46,11 @@ STAGE_DEFS: dict[str, dict[str, Any]] = {
         "fresh_minutes": 36 * 60,
         "required_for_profiles": [],
     },
+    "live.prematch_standings": {
+        "label": "实时采集赛前积分榜快照",
+        "fresh_minutes": 20,
+        "required_for_profiles": [],
+    },
     "hist.scan_gaps": {
         "label": "历史补数扫缺口",
         "fresh_minutes": 36 * 60,

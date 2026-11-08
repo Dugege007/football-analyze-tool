@@ -35,6 +35,20 @@
 - 健康：`logs/heartbeat.json`（每轮覆盖）、`logs/health.jsonl`（事件）、`logs/call_log.tsv`（每次 API 调用及剩余额度）、`logs/missing_mapping.jsonl`、`logs/ingest_undo.jsonl`（每次写库前的旧值，供回滚）。
 - 日汇总：`summary/<竞彩日>.md|json`。每次抓取后更新，次日 12:05 再出一次终版。
 
+## 赛前积分榜快照
+
+实时采集的每一轮 `tick` 在处理完到点赔率之后，调用 `scripts/live/prematch_standings.py`。常驻进程是 `scripts/live/live_capture.py daemon`，看门狗用同一脚本的 `ensure-daemon` 拉起；定时唤醒如果只跑一轮，跑的也是这个 `tick`。这一步不另起任务。
+
+数据来自 5DollarFootballAPI（仓库里简称 5DF）的 `GET /v1/standings?league=`。同一联赛的多场比赛合并成一次请求，用来节省接口额度。同一联赛六十分钟内不重复请求；这段时间里新出现、且尚未开赛的场次，沿用刚才那次拉取的结果。
+
+写入研究副本的正式名次字段：`stats.rank_home`、`stats.rank_away`、`stats.source_rank`、`stats.as_of_rank`。来源固定为 `5df_standings`，表示 5DF 积分榜。`as_of_rank` 是这次拉取的时刻，使用带 `+08:00` 的北京时间，不是赛季名称，也不是开赛时刻。同一条观测同时写入 `stats_obs`，`kind` 为 `rank`，载荷里保留名次、已赛场次、胜平负、进球、失球和积分。
+
+只接受拉取时刻早于该场开赛时刻的积分榜。开赛之后不再写入，也不用后来的积分榜覆盖已经保存的赛前名次。开赛前，如果库里已有本次采集写下的赛前快照，新的一次更晚的拉取可以覆盖它，以开赛前最后一次为准。手工底座或其他来源已经写下的名次不会被覆盖。已经开赛或已经完赛、但名次仍为空的场次，不会用今天的积分榜回填。这些接口没有「截至开赛当时」的日期参数，历史名次不能靠当前积分榜补；公开仓里的历史探测脚本 `scripts/backfill/af_step2.py` 只落 JSON，不写名次列。完整一场历史补数队列不在公开仓里，同样不得把当前积分榜写进历史场次。
+
+国家队赛事没有联赛积分榜。5DF 若返回 `standings_not_available`，两队名次留空，来源仍记为 `5df_standings`，观测状态为不可得，原因代码是 `no_standings`（这项赛事没有积分榜）。数据表按既有空态显示「无法获取」。不填写国际足联排名，因为 5DF、BSD 和 API-Football 都不提供这个排名。
+
+这一步结束之后写入阶段标记 `live.prematch_standings`。没有可写场次也记成功；接口失败记失败。标记带完成时刻。
+
 ## 落盘
 - 原始：`all/<竞彩日>/<fixture>_<抓取时刻>_<phase-variant>.json`（完整 `/odds` 响应加 `_meta`），平博亚盘切片另存 `pinnacle_ah/<竞彩日>/`（口径卡 §7 路径）。
 - 归一化：`staging/<竞彩日>.jsonl`（只追加），`staging/<竞彩日>.csv`（汇总时由 JSONL 去重导出）。

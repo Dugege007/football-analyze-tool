@@ -136,6 +136,8 @@ python3 run_fullmatch_queue.py --limit 28 --max-per-min 1 --yield-check
 
 原则：空闲才补；固定时间窗与 due 邻近直接 skip；**禁止**再无监督地大批量连排。完整一场补数队列（`5df-fullmatch-history-queue`）的代码与方案文档暂未放入公开仓。
 
+完整一场补数如果下载了积分榜响应，那是当前赛季的积分榜，不能写入 `stats.rank_home` 或 `stats.rank_away`。5DollarFootballAPI、BSD 和 API-Football 都没有按开赛日回放积分榜的参数。公开仓里的 `scripts/backfill/af_step2.py` 只把探测到的积分榜存成 JSON 文件，不写名次列。赛前名次只由实时采集在开赛前写入。
+
 ---
 
 ## 7. 下一步（非本轮必做）

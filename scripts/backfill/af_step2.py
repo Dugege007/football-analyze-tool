@@ -13,5 +13,7 @@ b=get('odds/bookmakers'); save('odds_bookmakers.json',b.get('response',[])); res
 b=get('odds/bets'); save('odds_bets.json',b.get('response',[])); res['bets']=len(b.get('response',[]))
 odds_paged('unl_2026', league=5, season=2026)
 odds_paged('date_2026-10-07', date='2026-10-07')
+# 这里只把当前赛季积分榜存成探测 JSON。禁止写入 stats.rank_home / rank_away：
+# 接口没有按开赛日回放的参数，写进去会把今天的名次盖到历史场次上。
 b=get('standings',league=5,season=2026); save('standings_unl_2026.json',b); res['standings_unl']={'n':b.get('results'),'err':b.get('errors')}
 print(json.dumps(res,ensure_ascii=False))

@@ -158,6 +158,24 @@ def test_load_stats_many_matches_build_stats_and_does_not_invent_known_empty():
 
     assert many[2]["injury"] is None
     assert many[2]["obs"]["injury"]["known_empty"] is True
+
+    conn.execute(
+        "INSERT INTO stats (match_id, rank_home, rank_away) VALUES (4, NULL, NULL)"
+    )
+    conn.execute(
+        "INSERT INTO stats_obs (match_id, kind, as_of, source, payload_json, quality, fetched_at) VALUES "
+        "(4, 'rank', '2026-11-08T10:00:00+08:00', '5df_standings', ?, 'unavailable', '2026-11-08T10:00:00+08:00')",
+        (json.dumps({"home": None, "away": None, "status": "unavailable", "reason": "no_standings"}),),
+    )
+    conn.commit()
+    national = build_stats(conn, 4)
+    assert national["rank"]["home"] is None and national["rank"]["away"] is None
+    assert national["rank"]["status"] == "unavailable"
+    assert national["rank"]["reason"] == "no_standings"
+    assert national["rank"]["reason_zh"] == "这项赛事没有积分榜"
+    numbered = build_stats(conn, 1)
+    assert numbered["rank"] == {"home": 5, "away": 12}
+    assert "status" not in numbered["rank"]
     projected = project_table_stats(many[2], {})
     assert projected["obs"]["injury"]["known_empty"] is True
     assert "support_proxy_odds" not in project_table_stats(many[1], {})
