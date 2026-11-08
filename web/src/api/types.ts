@@ -148,7 +148,13 @@ export interface StatsObsEntry {
 export interface Stats {
   recent?: Record<string, unknown>
   h2h?: Record<string, unknown>
-  rank?: { home?: number | null; away?: number | null }
+  rank?: {
+    home?: number | null
+    away?: number | null
+    status?: 'unavailable' | 'insufficient' | null
+    reason?: string | null
+    reason_zh?: string | null
+  }
   popularity_diff?: number | null
   support_proxy_odds?: number | null
   /** 未采到 = null；禁止把空当成 []+known_empty */

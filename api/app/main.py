@@ -24,6 +24,7 @@ from app import leak_suspect as _leak  # 0.3.20
 from app import odds_timeline_chart as otc  # 0.3.23
 from app import league_pending as lp  # 2026-10-18 赛事常用名尚未确定才标星
 from app import team_pending as tp  # 2026-10-14 待确认球队；2026-10-18 改为常用名规则
+from app import reason_codes
 
 log = logging.getLogger(__name__)
 
@@ -346,6 +347,30 @@ def _obs_entry(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _rank_view(s: sqlite3.Row, obs_rows: list[sqlite3.Row] | None) -> dict[str, Any]:
+    """名次投影。两队都空、且最新 rank 观测明确不可得时，带上无法获取的状态壳。
+
+    没有观测、只是库里还没写名次时，不把空值说成无法获取。
+    """
+    rank: dict[str, Any] = {"home": s["rank_home"], "away": s["rank_away"]}
+    if not obs_rows or rank["home"] is not None or rank["away"] is not None:
+        return rank
+    latest = next((row for row in obs_rows if row["kind"] == "rank"), None)
+    if latest is None:
+        return rank
+    payload = loads_json(latest["payload_json"])
+    if not isinstance(payload, dict):
+        return rank
+    status = payload.get("status")
+    if status not in ("unavailable", "insufficient"):
+        return rank
+    reason = payload.get("reason") if isinstance(payload.get("reason"), str) and payload.get("reason") else "no_standings"
+    rank["status"] = status
+    rank["reason"] = reason
+    rank["reason_zh"] = reason_codes.zh(reason)
+    return rank
+
+
 def _assemble_stats(s: sqlite3.Row, keys: set[str], obs_rows: list[sqlite3.Row] | None) -> dict[str, Any]:
     """一行 stats 加该场各 kind 最新观测。空伤停保持 null，不写成已知无伤停。"""
     recent = loads_json(s["recent_json"]) or {}
@@ -359,7 +384,7 @@ def _assemble_stats(s: sqlite3.Row, keys: set[str], obs_rows: list[sqlite3.Row] 
     h2h = loads_json(s["h2h_json"])
     if h2h is not None:
         out["h2h"] = h2h
-    out["rank"] = {"home": s["rank_home"], "away": s["rank_away"]}
+    out["rank"] = _rank_view(s, obs_rows)
     out["popularity_diff"] = s["popularity_diff"]
     if "support_proxy_odds" in extras:
         out["support_proxy_odds"] = extras["support_proxy_odds"]

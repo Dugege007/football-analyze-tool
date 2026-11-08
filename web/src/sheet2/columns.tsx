@@ -25,7 +25,7 @@ import {
 } from './format'
 import { BOOK_NAME, PHASES, PHASE_NAME, type Phased, type X1x2Cell, type AvgDetail, type Book, type CellStatus, type FundNumberCell, type Move, type MoveDir, type Phase, type ResultReason, type Row } from './types'
 import { GfGaText, TonedText } from './fundCells'
-import { FUND_DASH, fundSourceTip, goalsText, h2hLast6Text, h2hMatchesText, injuryCell, popularityText, popularityTone, rankText, rankTone, weatherText } from './fundamentals'
+import { FUND_DASH, fundSourceTip, goalsText, h2hLast6Text, h2hMatchesText, injuryCell, popularityText, popularityTone, rankSideText, rankTone, weatherText } from './fundamentals'
 import { XG_COLUMNS, xgCellView } from './xg'
 
 export type Market = 'ah' | 'ou' | 'x1x2'
@@ -573,6 +573,21 @@ export function fundCols(): ColGroupDef<Row> {
     cellRenderer: (p: P) => <FundText text={String(p.value ?? FUND_DASH)} tip={tip(p.data)} />,
   }, widthKey)
 
+  const rankCol = (side: 'home' | 'away'): ColDef<Row> => withAlign({
+    colId: `fund.rank.${side}`,
+    headerName: side === 'home' ? '主排名' : '客排名',
+    width: w('fund.rank'),
+    valueGetter: (p) => rankSideText(p.data?.stats?.rank, side),
+    cellRenderer: (p: P) => {
+      const rank = p.data?.stats?.rank
+      if (rank?.status === 'unavailable' || rank?.status === 'insufficient') {
+        return <StatusText st={rank.status} reason={rank.reason} reasonZh={rank.reason_zh} />
+      }
+      const value = side === 'home' ? rank?.home : rank?.away
+      return <TonedText text={String(p.value ?? FUND_DASH)} tone={rankTone(side, value)} tip={fundSourceTip(p.data?.stats?.meta?.rank)} />
+    },
+  }, 'fund.rank')
+
   const children: Col[] = [
     pairCol('fund.recent10.home', '近10主进失', 'fund.gfga', (r) => goalsText(r?.stats?.recent?.last10?.home), (r) => fundSourceTip(r?.stats?.meta?.recent), true),
     pairCol('fund.recent10.away', '近10客进失', 'fund.gfga', (r) => goalsText(r?.stats?.recent?.last10?.away), (r) => fundSourceTip(r?.stats?.meta?.recent)),
@@ -588,20 +603,8 @@ export function fundCols(): ColGroupDef<Row> {
       columnGroupShow: i < 2 ? undefined : 'open',
       cellRenderer: (p: P) => <XgText cell={p.data?.fundamentals?.[col.key]} />,
     }, 'fund.xg')),
-    withAlign({
-      colId: 'fund.rank.home',
-      headerName: '主排名',
-      width: w('fund.rank'),
-      valueGetter: (p) => rankText(p.data?.stats?.rank?.home),
-      cellRenderer: (p: P) => <TonedText text={String(p.value ?? FUND_DASH)} tone={rankTone('home', p.data?.stats?.rank?.home)} tip={fundSourceTip(p.data?.stats?.meta?.rank)} />,
-    }, 'fund.rank'),
-    withAlign({
-      colId: 'fund.rank.away',
-      headerName: '客排名',
-      width: w('fund.rank'),
-      valueGetter: (p) => rankText(p.data?.stats?.rank?.away),
-      cellRenderer: (p: P) => <TonedText text={String(p.value ?? FUND_DASH)} tone={rankTone('away', p.data?.stats?.rank?.away)} tip={fundSourceTip(p.data?.stats?.meta?.rank)} />,
-    }, 'fund.rank'),
+    rankCol('home'),
+    rankCol('away'),
     withAlign({
       colId: 'fund.popularity',
       headerName: '人气差值',

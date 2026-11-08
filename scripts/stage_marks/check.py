@@ -58,7 +58,9 @@ def _load_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def read_heartbeat(path: Path = HEARTBEAT_DEFAULT) -> dict[str, Any]:
+def read_heartbeat(path: Path | None = None) -> dict[str, Any]:
+    # 默认路径在调用时读取，测试替换 HEARTBEAT_DEFAULT 才能生效。
+    path = HEARTBEAT_DEFAULT if path is None else path
     raw = _load_json(path) or {}
     ts = raw.get("ts")
     age = None
@@ -212,7 +214,14 @@ def stages_for_profile(profile: str) -> list[str]:
     if profile == "all":
         return list(STAGE_DEFS.keys())
     if profile == "live":
-        return ["live.tick", "live.open_batch", "live.mid_batch", "live.close_batch", "live.day_summary"]
+        return [
+            "live.tick",
+            "live.open_batch",
+            "live.mid_batch",
+            "live.close_batch",
+            "live.day_summary",
+            "live.prematch_standings",
+        ]
     if profile == "hist":
         return ["hist.scan_gaps", "hist.pull"]
     if profile == "cn":

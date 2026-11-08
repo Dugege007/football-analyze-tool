@@ -36,6 +36,7 @@ JSON，核心字段如下：
 | `live.mid_batch` | 本轮抓到了中盘目标 | 同上 |
 | `live.close_batch` | 本轮抓到了临盘目标 | 同上 |
 | `live.day_summary` | 某竞彩日 summary 写完 | 同上 |
+| `live.prematch_standings` | 本轮赛前积分榜快照写完（没有可写场次也算完成） | `scripts/live/live_capture.py` 调用 `scripts/live/prematch_standings.py` |
 | `hist.scan_gaps` | 历史补数扫缺口入队完成 | `odds-data/.../build_fullmatch_queue.py` |
 | `hist.pull` | 历史补数拉数一轮结束 | `odds-data/.../run_fullmatch_queue.py` |
 | `cn.prepare` | 大陆站打包（pending）完成 | `auto-cn-push-after-close/.../run_auto_cn_push.py` |

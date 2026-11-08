@@ -8,7 +8,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { mapApiRow } from '../src/sheet2/load'
 import { GfGaText, TonedText } from '../src/sheet2/fundCells'
-import { injuryCell, goalsText, h2hLast6Text, h2hMatchesText, mapFundStats, popularityText, popularityTone, rankText, rankTone, splitGfGa, weatherText } from '../src/sheet2/fundamentals'
+import { injuryCell, goalsText, h2hLast6Text, h2hMatchesText, mapFundStats, popularityText, popularityTone, rankSideText, rankText, rankTone, splitGfGa, weatherText } from '../src/sheet2/fundamentals'
 import { ALL_SHEET_TABS, buildSheetColumns, columnIds } from '../src/sheet2/tabColumns'
 import type { ColDef, ColGroupDef } from 'ag-grid-community'
 import type { Row } from '../src/sheet2/types'
@@ -101,6 +101,10 @@ assert.equal(renderToStaticMarkup(createElement(GfGaText, { text: '- -' })).incl
 assert.equal(rankText(5), '5')
 assert.equal(rankText(12), '12')
 assert.equal(rankText(null), '-')
+assert.equal(rankSideText({ home: 4, away: 9 }, 'home'), '4')
+assert.equal(rankSideText({ home: null, away: null }, 'away'), '-')
+assert.equal(rankSideText({ home: null, away: null, status: 'unavailable', reason: 'no_standings', reason_zh: '这项赛事没有积分榜' }, 'home'), '无法获取')
+assert.equal(rankSideText({ home: null, away: null, status: 'unavailable' }, 'away'), '无法获取')
 assert.equal(rankTone('home', 5), 'orange')
 assert.equal(rankTone('away', 12), 'blue')
 assert.equal(rankTone('home', null), 'plain')
@@ -166,6 +170,19 @@ assert.equal(rankText(row.stats.rank?.home), '5')
 assert.equal(rankTone('home', row.stats.rank?.home), 'orange')
 assert.equal(rankText(row.stats.rank?.away), '-')
 assert.equal(rankTone('away', row.stats.rank?.away), 'plain')
+const rankHome = byId.get('fund.rank.home')
+const unavailableRow = mapApiRow({
+  match_id: '2026-11-08|日001',
+  match: { jc_id: '日001', jingcai_date: '2026-11-08', home_team: '国家甲', away_team: '国家乙' },
+  stats: {
+    rank: { home: null, away: null, status: 'unavailable', reason: 'no_standings', reason_zh: '这项赛事没有积分榜' },
+  },
+})
+assert.equal(rankHome?.valueGetter?.({ data: unavailableRow } as never), '无法获取')
+const unavailableNode = rankHome?.cellRenderer?.({ data: unavailableRow, value: '无法获取' } as never)
+const unavailableHtml = renderToStaticMarkup(unavailableNode as never)
+assert.equal(unavailableHtml.includes('无法获取'), true)
+assert.equal(unavailableHtml.includes('>5<'), false)
 assert.equal(row.stats.obs?.injury?.known_empty, null)
 assert.equal('support_proxy_odds' in row.stats, false)
 assert.equal('home_streak_last6' in (row.stats.recent ?? {}), false)

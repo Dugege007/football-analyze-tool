@@ -17,7 +17,7 @@ jingcai_date_from_code），与 /dispatch/pending 同一套函数；/dispatch/pe
 子命令：
   plan [--date D]            刷新竞彩日 D 的场次与目标（1–2 次 CSL 调用）
   status [--date D]          列出目标（不调 API）
-  tick                       一轮：按需刷新清单 → 抓到点目标 → 入副本 → 写汇总（定时器/循环调用它）
+  tick                       一轮：按需刷新清单 → 抓到点目标 → 入副本 → 写汇总 → 赛前积分榜快照（定时器/循环调用它）
   daemon                     常驻循环：每 60s 一轮 tick（只有目标到点才调 /odds）
   ensure-daemon              没在跑就后台拉起 daemon（幂等；看门狗用）
   capture --target-key K | --nearest [--allow-early-min N] [--allow-late]   手动抓一个目标（演练用）
@@ -640,10 +640,13 @@ def build_plan(D: str, csl: dict, prev: dict | None = None, now: datetime | None
         if cs.jingcai_date_from_code(num, kick) != D and pm is None:
             continue
         fid = it.get("id")
+        league = it.get("league") or {}
+        home_team = ((it.get("teams") or {}).get("home") or {})
+        away_team = ((it.get("teams") or {}).get("away") or {})
         m = {"match_uid": uid, "jingcai_date": D, "jc_code": code, "jc_number": num,
-             "fixture_id": fid, "league": (it.get("league") or {}).get("name"),
-             "home": ((it.get("teams") or {}).get("home") or {}).get("name"),
-             "away": ((it.get("teams") or {}).get("away") or {}).get("name"),
+             "fixture_id": fid, "league": league.get("name"), "league_id": league.get("id"),
+             "home": home_team.get("name"), "away": away_team.get("name"),
+             "home_id": home_team.get("id"), "away_id": away_team.get("id"),
              "kickoff_source": "5df", "status": it.get("status"),
              "has_jc_odds": bool(lot.get("odds"))}
         if _merge_kickoff(D, m, pm, kick, now, it.get("status"), manual.get(uid), prev.get("built_at"), klog):
@@ -1475,6 +1478,23 @@ def summary(D: str) -> dict:
 
 # ----------------------------------------------------------------------------- tick / daemon
 
+def _run_prematch_standings(cl: Client, plans: list[dict]) -> dict:
+    """本轮赔率处理之后抓赛前积分榜。失败只记健康日志，不让赔率轮次变成失败。"""
+    try:
+        from prematch_standings import capture_for_plans
+        return capture_for_plans(cl, plans, REPLICA_DB)
+    except Exception as e:
+        health("prematch_standings_error", error=str(e)[:300], tb=traceback.format_exc()[-800:])
+        return {"status": "fail", "error": str(e)[:200], "written": 0, "eligible": 0}
+
+
+def _prematch_mark_status(summary: dict) -> str:
+    status = str(summary.get("status") or "fail")
+    if status in ("ok", "fail", "partial", "skipped"):
+        return status
+    return "fail"
+
+
 def tick(cl: Client) -> dict:
     now = now_cn()
     today = now.date()
@@ -1518,10 +1538,13 @@ def tick(cl: Client) -> dict:
         except Exception as e:
             health("ingest_error", jingcai_date=D, error=str(e)[:300], tb=traceback.format_exc()[-800:])
         summary(D)
+    # 赔率窗口先抓完，再按联赛拉赛前积分榜，避免积分榜请求挡住到点的赔率。
+    standings_summary = _run_prematch_standings(cl, plans)
     hb = touch_heartbeat(progress=True, due=len(due), groups=len(groups),
                          missed_new=len(missed), calls_total=cl.calls, remaining=cl.remaining,
                          plans={p["jingcai_date"]: p["n_targets"] for p in plans},
-                         phase="tick_done")
+                         phase="tick_done",
+                         prematch_standings=standings_summary.get("status"))
     if groups or missed or now.minute % 30 == 0:
         health("tick", **{k: v for k, v in hb.items() if k not in ("ts", "watchdog_ts", "phase", "hb_thread", "sleep_left_s")})
     # tick 整轮成功后再打标记（含 0 组：表示本轮无到点目标也正常跑完）
@@ -1546,6 +1569,30 @@ def tick(cl: Client) -> dict:
             "remaining": cl.remaining,
             "captured_targets_by_phase": captured_by_phase,
             "touched_days": touched,
+            "prematch_standings": {
+                "status": standings_summary.get("status"),
+                "eligible": standings_summary.get("eligible"),
+                "written": standings_summary.get("written"),
+                "refreshed": standings_summary.get("refreshed"),
+                "unavailable": standings_summary.get("unavailable"),
+                "leagues_fetched": standings_summary.get("leagues_fetched"),
+            },
+        },
+    )
+    _stage_marks_write(
+        "live.prematch_standings",
+        status=_prematch_mark_status(standings_summary),
+        summary={
+            "status": standings_summary.get("status"),
+            "reason": standings_summary.get("reason"),
+            "eligible": standings_summary.get("eligible"),
+            "written": standings_summary.get("written"),
+            "refreshed": standings_summary.get("refreshed"),
+            "unavailable": standings_summary.get("unavailable"),
+            "leagues_fetched": standings_summary.get("leagues_fetched"),
+            "leagues_cached": standings_summary.get("leagues_cached"),
+            "skipped_after_kickoff": standings_summary.get("skipped_after_kickoff"),
+            "errors": standings_summary.get("errors"),
         },
     )
     if captured_by_phase.get("live"):

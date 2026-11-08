@@ -14,6 +14,7 @@ export type SideTone = 'orange' | 'blue' | 'plain'
 
 const POP_SOURCE: Record<string, string> = {
   manual_seed: '手工底座',
+  '5df_standings': '5DollarFootballAPI 积分榜',
   close_euro_avg: '多家临盘欧赔',
   close_euro_pinnacle: '平博临盘欧赔',
   close_euro_william: '威廉临盘欧赔',
@@ -62,6 +63,17 @@ export function h2hLast6Text(last6: { home_gf?: number | null; home_ga?: number 
 export function rankText(value: unknown): string {
   const n = finite(value)
   return n == null ? FUND_DASH : numText(n)
+}
+
+const RANK_UNAVAILABLE = new Set(['unavailable', 'insufficient'])
+
+/** 没有积分榜时两列都显示「无法获取」。没采到仍是单个「-」，不上色。 */
+export function rankSideText(
+  rank: { home?: number | null; away?: number | null; status?: string | null } | null | undefined,
+  side: 'home' | 'away',
+): string {
+  if (rank && RANK_UNAVAILABLE.has(String(rank.status || ''))) return '无法获取'
+  return rankText(side === 'home' ? rank?.home : rank?.away)
 }
 
 /** 有排名才上侧别色。缺测不上色。 */
@@ -211,7 +223,13 @@ export function mapFundStats(raw: unknown): FundStats {
       matches: finite(h2h?.matches),
       last6: { home_gf: finite(last6?.home_gf), home_ga: finite(last6?.home_ga) },
     },
-    rank: { home: finite(rank?.home), away: finite(rank?.away) },
+    rank: {
+      home: finite(rank?.home),
+      away: finite(rank?.away),
+      status: rank?.status === 'unavailable' || rank?.status === 'insufficient' ? rank.status : null,
+      reason: typeof rank?.reason === 'string' ? rank.reason : null,
+      reason_zh: typeof rank?.reason_zh === 'string' ? rank.reason_zh : null,
+    },
     popularity_diff: finite(src.popularity_diff),
     injury: src.injury ?? null,
     weather: src.weather ?? null,

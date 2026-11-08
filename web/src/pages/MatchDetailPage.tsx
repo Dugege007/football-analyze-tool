@@ -279,7 +279,15 @@ export default function MatchDetailPage() {
           <Card title="交锋 / 近况 / 伤停" size="small">
             <Descriptions column={1} size="small">
               <Descriptions.Item label="排名">
-                主 <TonedText text={rankText(stats.rank?.home)} tone={rankTone('home', stats.rank?.home)} /> / 客 <TonedText text={rankText(stats.rank?.away)} tone={rankTone('away', stats.rank?.away)} />
+                {stats.rank?.status === 'unavailable' || stats.rank?.status === 'insufficient' ? (
+                  <Tooltip title={stats.rank.reason_zh || undefined}>
+                    <span className="t-gray">无法获取</span>
+                  </Tooltip>
+                ) : (
+                  <>
+                    主 <TonedText text={rankText(stats.rank?.home)} tone={rankTone('home', stats.rank?.home)} /> / 客 <TonedText text={rankText(stats.rank?.away)} tone={rankTone('away', stats.rank?.away)} />
+                  </>
+                )}
                 {metaLabel(stats, 'rank') ? <HelpTip tip={`数据来源：${metaLabel(stats, 'rank')}`} /> : null}
               </Descriptions.Item>
               <Descriptions.Item label="交锋场次">

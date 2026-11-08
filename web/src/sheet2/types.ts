@@ -190,7 +190,14 @@ export interface FundStats {
     matches?: number | null
     last6?: { home_gf?: number | null; home_ga?: number | null } | null
   } | null
-  rank?: { home?: number | null; away?: number | null } | null
+  rank?: {
+    home?: number | null
+    away?: number | null
+    /** unavailable / insufficient 时两列显示「无法获取」；缺省表示还没采到，显示「-」。 */
+    status?: 'unavailable' | 'insufficient' | null
+    reason?: string | null
+    reason_zh?: string | null
+  } | null
   /** 小数。页面用 formatPopularityDiff 乘以 100 后显示一位小数，不写百分号。 */
   popularity_diff?: number | null
   injury?: unknown
