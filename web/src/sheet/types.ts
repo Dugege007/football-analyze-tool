@@ -271,6 +271,10 @@ export interface ApiTableMatch {
   phase_assign_late?: boolean | null
   /** 0.3.20：开赛时间曾变更次数；0 不写 */
   kickoff_rev?: number | null
+  /** 推迟、取消，或其他。空表示没有已分类的赛程缺口。 */
+  schedule_status?: 'postponed' | 'cancelled' | 'other' | null
+  /** 开赛格悬停。有新开赛时间时写推迟至该时刻。 */
+  schedule_note?: string | null
   /** 0.3.20：kickoff_drift 附带 */
   kickoff_drift_basis?: string | null
   kickoff_drift_est_at?: string | null
@@ -511,6 +515,8 @@ export interface BeTableRow {
     features_ok?: boolean | null
     phase_assign_late?: boolean | null
     kickoff_rev?: number | null
+    schedule_status?: 'postponed' | 'cancelled' | 'other' | null
+    schedule_note?: string | null
     kickoff_drift_basis?: string | null
     kickoff_drift_est_at?: string | null
     manual_review?: boolean | null

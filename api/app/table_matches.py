@@ -40,6 +40,7 @@ from app import db as app_db
 from app import kickoff_drift as kd
 from app import leak_suspect as leak
 from app import reason_codes
+from app import schedule_status as sched_gap
 from app import fundamentals as fund  # 0.3.21
 from app import league_pending as lp  # 2026-10-18 赛事常用名尚未确定才标星
 from app import team_pending as tp  # 2026-10-14 待确认球队；2026-10-18 改为常用名规则
@@ -2087,6 +2088,12 @@ class MatchInfo(_M_):
     kickoff_drift_basis: Optional[str] = None  # inplay_tick_est（config/kickoff_drift.json）| null
     kickoff_drift_est_at: Optional[str] = None  # 推算的实际开赛时刻
     kickoff_rev: int = 0  # 0.3.20：matches.kickoff_rev；缺列/NULL→0；前端 >0 才悬停「开赛时间曾变更（第 N 次）」
+    schedule_status: Optional[str] = None  # postponed | cancelled | other；空 = 没有已分类的赛程缺口
+    schedule_status_evidence: Optional[str] = None  # 分类依据，不代替中文说明
+    schedule_note: Optional[str] = None  # 开赛格和缺盘格悬停用的一句中文
+    listing_role: Optional[str] = None  # ticket = 原竞彩日编号顺序；kickoff = 按新开赛时间再列的一行
+    list_date: Optional[str] = None  # 这一行参加排序的日期。原行是竞彩日，再列的一行是新开赛日历日
+    list_seq: Optional[int] = None  # 同一 list_date 内的顺序。原有场次按编号，再列的一行插在开赛时间对应的位置
     # 下面三字段：比赛级默认值（前端可绑）；格子级以 ah/x1x2/jc 格为准（快照行）。不读 state、不重算。
     phase_pending: bool = False
     features_ok: bool = True
@@ -2202,6 +2209,7 @@ class Settlement(_M_):
 
 class TableRow(_M_):
     match_id: str
+    row_id: Optional[str] = None  # 同一场再列一行时用来区分。原行等于 match_id
     match: MatchInfo
     phase_exception: bool
     schedule: Schedule
@@ -2346,6 +2354,7 @@ def match_flags(row: sqlite3.Row, kickoff: datetime | None) -> dict:
     if mr:
         daily.append("manual_review")
     out["daily_check"] = daily
+    out.update(sched_gap.match_schedule_fields(row))
     return out
 
 
@@ -2889,7 +2898,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
         where += " AND m.scope = ?"
         args.append(scope_db)
     total = conn.execute(f"SELECT COUNT(1) AS c FROM matches m WHERE {where}", args).fetchone()["c"]
-    rows = conn.execute(
+    rows = list(conn.execute(
         f"""SELECT m.*, l.name_zh_canonical AS league_canonical,
                    th.name_zh_canonical AS home_canonical, ta.name_zh_canonical AS away_canonical
             FROM matches m
@@ -2898,7 +2907,33 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             LEFT JOIN teams ta ON ta.id = m.away_team_id
             WHERE {where}
             ORDER BY m.jingcai_date, COALESCE(m.kickoff_hour, 99), COALESCE(m.jc_no, 999999), m.id
-            LIMIT ? OFFSET ?""", args + [limit, offset]).fetchall()
+            LIMIT ? OFFSET ?""", args + [limit, offset]).fetchall())
+    # 竞彩日不在本页、但新开赛日历日落在本页的推迟场，稍后再按开赛时间列一行。
+    match_cols = {r[1] for r in conn.execute("PRAGMA table_info(matches)")}
+    if "schedule_status" in match_cols and "kickoff_actual" in match_cols:
+        extra_where = (
+            "m.schedule_status = 'postponed' AND m.kickoff_actual IS NOT NULL "
+            "AND substr(m.kickoff_actual, 1, 10) BETWEEN ? AND ? "
+            "AND NOT (m.jingcai_date BETWEEN ? AND ?)"
+        )
+        extra_args: list[Any] = [date_from, date_to, date_from, date_to]
+        if scope_db != "all":
+            extra_where += " AND m.scope = ?"
+            extra_args.append(scope_db)
+        seen_ids = {r["id"] for r in rows}
+        for extra in conn.execute(
+            f"""SELECT m.*, l.name_zh_canonical AS league_canonical,
+                       th.name_zh_canonical AS home_canonical, ta.name_zh_canonical AS away_canonical
+                FROM matches m
+                LEFT JOIN leagues l ON l.id = m.league_id
+                LEFT JOIN teams th ON th.id = m.home_team_id
+                LEFT JOIN teams ta ON ta.id = m.away_team_id
+                WHERE {extra_where}
+                ORDER BY m.id""",
+            extra_args,
+        ):
+            if extra["id"] not in seen_ids:
+                rows.append(extra)
     page_ids = [r["id"] for r in rows]
     _pending = tp.load_pending(conn)
     _groups = tp.load_name_groups(conn)
@@ -3190,6 +3225,10 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
         for _ph in PHASES:
             avg_cells.apply_cell_status("jc_1x2", _ph, jc.get(_ph), kick, sched, eff_as_of)
             avg_cells.apply_cell_status("jc_hhad", _ph, jc_hhad.get(_ph), kick, sched, eff_as_of)
+        # 已分类的推迟、取消、其他：空赔率格子写这场的原因，不再显示成普通漏采。
+        sched_gap.stamp_market_blocks(
+            _mf_row.get("schedule_status"), ah_out, x_out, ou_out, jc, jc_hhad,
+        )
         # 来源字段统一（分析师 2026-10-14 决定，约定 7.8 节）：source 一律写来源代码，原来的取数路径放进 source_path。
         for _blk_all in (ah_out, x_out, ou_out):
             for _blk in _blk_all.values():
@@ -3278,6 +3317,8 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             "stats": project_table_stats(stats_by_id.get(mpk), x_out),
         })
 
+    # 原竞彩日按编号留一行。推迟到更晚日历日的场，在新开赛那天再列一行。
+    items = sched_gap.expand_listings(items, date_from=date_from, date_to=date_to)
     # 2026-10-14：竞彩未开售胜平负的场次改原因代码；所有原因代码同时返回中文说明（前端不再维护对照表）
     _not_on_sale = reason_codes.load_jc_not_on_sale()
     for _it in items:
@@ -3286,6 +3327,7 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
         # stats 原样投影，不给伤停名单里的 reason 补中文说明列
         _ann = reason_codes.annotate({k: v for k, v in _it.items() if k not in ("prediction", "stats")})
         _it.update({k: v for k, v in _ann.items() if k.endswith("reason_zh")})
+        sched_gap.overlay_schedule_notes(_it)
     out_items = items if fmt == "nested" else [_flat_row(i) for i in items]
     return {
         "meta": app_db.db_meta(),  # 0.3.18：db=live|v2d3、promoted、readonly
@@ -3424,7 +3466,9 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
                              for i in items for p in PHASES)],
                          "legacy_tables": ["odds_asian", "odds_euro_home", "odds_jc_home"]},
         "total": total, "limit": limit, "offset": offset, "count": len(items),
-        "daily_check_summary": daily_check_summary(items),
+        "daily_check_summary": daily_check_summary(
+            [it for it in items if (it.get("match") or {}).get("listing_role") != "kickoff"]
+        ),
         "strategy_leak_suspect": leak.leak_suspect_for(strategy),  # 0.3.20
         "items": out_items,
     }

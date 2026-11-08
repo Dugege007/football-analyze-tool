@@ -9,6 +9,7 @@ import { apiBase, metaDb, metaMismatch, type DbMeta } from '../api/dataSource'
 import dayjs from 'dayjs'
 import type { Direction } from '../api/types'
 import { labelsForTableMatch } from '../names/matchLabels'
+import { formatShanghai } from '../sheet2/scheduleStatus'
 import { parseHandicap } from './handicap'
 import type {
   AhBook,
@@ -286,10 +287,16 @@ interface KickoffNoteInput {
   featuresOk?: boolean
   phaseAssignLate?: boolean
   kickoffRev?: number | null
+  scheduleNote?: string | null
+  kickoffActual?: string | null
 }
 
 function kickoffNote(k: KickoffNoteInput): string | null {
   const lines: string[] = []
+  if (k.scheduleNote) lines.push(k.scheduleNote)
+  else if (k.postponed && k.kickoffActual) {
+    lines.push(`推迟至 ${formatShanghai(k.kickoffActual)}（北京时间）`)
+  }
   if (k.postponed) {
     const orig = fmtMd(k.kickoffOriginal)
     if (k.postponeTsUnknown) lines.push(`原定 ${orig ?? '未知'}；${POSTPONE_TS_UNKNOWN_TIP}`)
@@ -472,6 +479,8 @@ export function normalizeTableRow(api: ApiTableRow, asOf: string | null = null):
       featuresOk: m.features_ok !== false,
       phaseAssignLate: m.phase_assign_late === true,
       kickoffRev: typeof m.kickoff_rev === 'number' ? m.kickoff_rev : 0,
+      scheduleNote: m.schedule_note ?? null,
+      kickoffActual: m.kickoff_actual ?? null,
     }),
     kickoffJcConflict: m.kickoff_jc_conflict === true,
     kickoffJc: m.kickoff_jc ?? null,
@@ -821,6 +830,8 @@ export function fromBackendRow(be: BeTableRow): ApiTableRow {
         const ex = (m.extras ?? be.extras) as Record<string, unknown> | null | undefined
         return typeof ex?.kickoff_rev === 'number' ? (ex.kickoff_rev as number) : 0
       })(),
+      schedule_status: m.schedule_status ?? null,
+      schedule_note: m.schedule_note ?? null,
       manual_review: m.manual_review ?? null,
       manual_review_reason: m.manual_review_reason ?? null,
       daily_check: m.daily_check ?? null,

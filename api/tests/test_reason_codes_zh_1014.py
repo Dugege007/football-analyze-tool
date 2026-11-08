@@ -111,6 +111,7 @@ API_REASON_CODES = (
     "deviation_too_large", "conversion_failed",
     # 竞彩格子与赛果
     "collector_empty", "legacy_home_only", "jc_1x2_incomplete", "jc_not_on_sale", "probe_not_sporttery_official",
+    "schedule_postponed", "schedule_cancelled", "schedule_other",
     "no_result", "special_status", "no_close_odds", "no_goal_line", "jc_official_first_quote_missing",
     "no_line_visible_at_decision",
     # 隐藏原因

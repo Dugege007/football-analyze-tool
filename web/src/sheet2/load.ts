@@ -99,6 +99,10 @@ function mapHhad(src: Raw | null | undefined): Phased<JcHhadCell> {
 
 function deriveStatus(it: Raw): MatchStatus | null {
   const m = it.match as Raw
+  const scored = it.result != null && (it.result as Raw).home_goals != null && (it.result as Raw).away_goals != null
+  // 已经有完场比分时仍显示比分。推迟或取消只覆盖还没有比分的场。
+  if (!scored && m.schedule_status === 'cancelled') return 'cancelled'
+  if (!scored && m.schedule_status === 'postponed') return 'postponed'
   if (m.status) return m.status
   if (m.postponed) return 'postponed'
   if (it.result) return 'finished'
@@ -116,6 +120,7 @@ export function mapApiRow(it: Raw): Row {
   const r = it.result as Raw | null
   return {
     match_id: it.match_id,
+    row_id: typeof it.row_id === 'string' ? it.row_id : undefined,
     match: {
       jc_id: m.jc_id ?? null,
       jingcai_date: m.jingcai_date,
@@ -130,6 +135,13 @@ export function mapApiRow(it: Raw): Row {
       away_team_aliases: Array.isArray(m.away_team_aliases) ? m.away_team_aliases : undefined,
       home_team: m.home_team ?? null,
       away_team: m.away_team ?? null,
+      schedule_status: m.schedule_status === 'postponed' || m.schedule_status === 'cancelled' || m.schedule_status === 'other' ? m.schedule_status : null,
+      schedule_note: typeof m.schedule_note === 'string' ? m.schedule_note : null,
+      kickoff_actual: typeof m.kickoff_actual === 'string' ? m.kickoff_actual : null,
+      kickoff_rev: typeof m.kickoff_rev === 'number' ? m.kickoff_rev : null,
+      listing_role: m.listing_role === 'kickoff' || m.listing_role === 'ticket' ? m.listing_role : null,
+      list_date: typeof m.list_date === 'string' ? m.list_date : null,
+      list_seq: typeof m.list_seq === 'number' ? m.list_seq : null,
       // 待确认字段：接口给布尔值时以接口为准；没给时为 undefined，页面改用 teams.csv 的兜底名单。
       home_team_pending_confirm: typeof m.home_team_pending_confirm === 'boolean' ? m.home_team_pending_confirm : undefined,
       away_team_pending_confirm: typeof m.away_team_pending_confirm === 'boolean' ? m.away_team_pending_confirm : undefined,

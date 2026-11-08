@@ -2123,10 +2123,13 @@ def _load_strategy_bets(
     """
     spec = sb.parse_settle_spec(settle_book)
     _special = _match_special(conn)
-    sql = """
+    _match_cols = {r[1] for r in conn.execute("PRAGMA table_info(matches)")}
+    _actual_sql = "m.kickoff_actual" if "kickoff_actual" in _match_cols else "NULL"
+    sql = f"""
         SELECT p.match_id, p.direction, p.stake, p.rationale_json,
                r.home_goals, r.away_goals,
                m.jingcai_date, m.jc_no, m.match_uid, m.jc_id, m.kickoff_at,
+               {_actual_sql} AS kickoff_actual,
                COALESCE(th.name_zh_canonical, m.home_team) AS home_name,
                COALESCE(ta.name_zh_canonical, m.away_team) AS away_name
         FROM predictions p
@@ -2200,6 +2203,7 @@ def _load_strategy_bets(
             "jingcai_date": r["jingcai_date"],
             "jc_id": r["jc_id"],
             "kickoff_at": r["kickoff_at"],
+            "kickoff_actual": r["kickoff_actual"],
             "home_team": r["home_name"],
             "away_team": r["away_name"],
             "order_key": r["jc_no"] or 0,

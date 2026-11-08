@@ -26,6 +26,7 @@ import {
 import { BOOK_NAME, PHASES, PHASE_NAME, type Phased, type X1x2Cell, type AvgDetail, type Book, type CellStatus, type FundNumberCell, type Move, type MoveDir, type Phase, type ResultReason, type Row } from './types'
 import { GfGaText, TonedText } from './fundCells'
 import { FUND_DASH, fundSourceTip, goalsText, h2hLast6Text, h2hMatchesText, injuryCell, popularityText, popularityTone, rankSideText, rankTone, weatherText } from './fundamentals'
+import { kickoffHoverLines, scheduleCellLabel, SCHEDULE_STATUS_LABEL } from './scheduleStatus'
 import { XG_COLUMNS, xgCellView } from './xg'
 
 export type Market = 'ah' | 'ou' | 'x1x2'
@@ -104,16 +105,50 @@ function withAlign(c: ColDef<Row>, k: WidthKey, sub?: string): ColDef<Row> {
   }
 }
 
+/** 已分类的赛程缺口、且还没有比分时，比分等列显示原因，不显示成空赛果。 */
+function gapNode(r?: Row): ReactNode | null {
+  const st = r?.match.schedule_status
+  if (st !== 'postponed' && st !== 'cancelled' && st !== 'other') return null
+  if (r?.result?.home_goals != null && r.result.away_goals != null) return null
+  const text = SCHEDULE_STATUS_LABEL[st]
+  const tip = r?.match.schedule_note
+  const el = <span className="t-gray">{text}</span>
+  return tip ? <Tooltip title={tip}>{el}</Tooltip> : el
+}
+
 function baseChildren(): Col[] {
   return [
     {
       colId: 'jcDay', headerName: '竞彩日', width: w('base.jcDay'), pinned: 'left',
-      valueGetter: (p) => p.data?.match.jingcai_date ?? null,
+      // 排序用 list_date：原行是竞彩日，推迟后再列的一行是新开赛的日历日。格子仍显示竞彩日。
+      valueGetter: (p) => p.data?.match.list_date ?? p.data?.match.jingcai_date ?? null,
+      cellRenderer: (p: P) => p.data?.match.jingcai_date ?? '-',
       cellClass: (p) => dayClass(p.data),
       sort: 'asc', sortIndex: 0,
     },
-    { colId: 'jcNo', headerName: '编号', width: w('base.jcNo'), pinned: 'left', valueGetter: (p) => p.data?.match.jc_id ?? '-', cellClass: (p) => dayClass(p.data), sort: 'asc', sortIndex: 1 },
-    { colId: 'kickoff', headerName: '开赛时间', width: w('base.kickoff'), pinned: 'left', valueGetter: (p) => kickoffText(p.data?.match.kickoff_at ?? null) },
+    {
+      colId: 'jcNo', headerName: '编号', width: w('base.jcNo'), pinned: 'left',
+      valueGetter: (p) => (typeof p.data?.match.list_seq === 'number' ? p.data.match.list_seq : (p.data?.match.jc_id ?? '')),
+      cellRenderer: (p: P) => p.data?.match.jc_id ?? '-',
+      comparator: (a, b) => {
+        const na = typeof a === 'number' ? a : Number.NaN
+        const nb = typeof b === 'number' ? b : Number.NaN
+        if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb
+        return String(a ?? '').localeCompare(String(b ?? ''), 'zh')
+      },
+      cellClass: (p) => dayClass(p.data),
+      sort: 'asc', sortIndex: 1,
+    },
+    {
+      colId: 'kickoff', headerName: '开赛时间', width: w('base.kickoff'), pinned: 'left',
+      valueGetter: (p) => kickoffText(p.data?.match.kickoff_at ?? null),
+      cellRenderer: (p: P) => {
+        const text = kickoffText(p.data?.match.kickoff_at ?? null)
+        const lines = kickoffHoverLines(p.data?.match ?? {})
+        if (!lines.length) return text
+        return <Tooltip title={lines.map((l, k) => <div key={k}>{l}</div>)}><span>{text}</span></Tooltip>
+      },
+    },
     { colId: 'league', headerName: '赛事', width: w('base.league'), pinned: 'left', valueGetter: (p) => (p.data ? labelsForTableMatch(p.data.match).league : null) ?? '-',
       // 格子里是常用名。有别名时悬停一行一个；没有别名时仍是来源赛事名。认不出的赛事在简称旁加待确认星号。
       cellRenderer: (p: P) => {
@@ -154,6 +189,8 @@ function baseChildren(): Col[] {
         if (!r) return null
         const s = r.match.status
         const sc = r.result?.home_goals != null && r.result?.away_goals != null ? `${r.result.home_goals}-${r.result.away_goals}` : null
+        const gap = gapNode(r)
+        if (gap && !sc) return gap
         if (voidOf(r)) return <VoidText r={r} />
         if (s === 'not_started') return <span className="t-gray">未开始</span>
         if (s === 'live') return <span className="t-yellow">{sc ?? '比赛中'}</span>
@@ -162,12 +199,14 @@ function baseChildren(): Col[] {
       },
     },
     { colId: 'goals', headerName: '总进球', width: w('base.goals'), pinned: 'left', valueGetter: (p) => (finished(p.data) ? (p.data!.result!.total_goals ?? '-') : '-'),
-      cellRenderer: (p: P) => (voidOf(p.data) ? <VoidText r={p.data} /> : p.value) },
+      cellRenderer: (p: P) => gapNode(p.data) ?? (voidOf(p.data) ? <VoidText r={p.data} /> : p.value) },
     {
       colId: 'outcome', headerName: '赛果', width: w('base.outcome'), pinned: 'left',
       cellRenderer: (p: P) => {
         const r = p.data
         if (!r) return null
+        const gap = gapNode(r)
+        if (gap) return gap
         if (voidOf(r)) return <VoidText r={r} />
         if (!finished(r)) return '-'
         const gd = r.result!.home_goals! - r.result!.away_goals!
@@ -179,7 +218,7 @@ function baseChildren(): Col[] {
 
 // ───────────── 通用格子 ─────────────
 function StatusText({ st, reason, reasonZh, extra }: { st: CellStatus; reason?: string | null; reasonZh?: string | null; extra?: string | null }) {
-  const t = STATUS_TEXT[st as Exclude<CellStatus, 'ok'>] ?? '无法获取'
+  const t = scheduleCellLabel(reason) ?? STATUS_TEXT[st as Exclude<CellStatus, 'ok'>] ?? '无法获取'
   // 原因和样本数等补充说明放在同一个悬停里，避免两层提示叠在一起。中文优先用接口返回的 reasonZh。
   const lines = [reasonHoverText(reason, reasonZh), extra ?? null].filter(Boolean) as string[]
   const span = <span className={extra ? 't-gray alert-sample-tip' : 't-gray'}>{t}</span>

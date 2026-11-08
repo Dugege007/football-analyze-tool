@@ -90,4 +90,5 @@ kill -TERM $(cat 5dollar/live/logs/daemon.pid)                  # 停
 - **开赛提前空档补抓**（决议 18:36）：新目标尚未到 → 丢掉旧目标只抓新目标；新目标已过窗口 → 立刻补抓一次（`target_at=发现时刻`、`planned_target_at=理论新目标`、`catchup=true`、`phase_assign_late=true`，live 不计命中；事件 `catchup_on_discovery`）；旧目标已抓过的保留在 state；已开赛则无法补抓（`new_target_already_past`）。发现时刻只用来调度，不当 `postponed_announced_at`。
 - **0.3.20 入库字段**（只写 v2d3）：`odds_snapshot.extras_json` 必写 `phase_pending` / `features_ok` / `phase_assign_late`（bool）；`matches.kickoff_rev`（无列则 ALTER 加上）+ `match_meta.extras_json.kickoff_rev`。现网不改。后端读快照 extras / matches.kickoff_rev，不读 state。
 - 推迟作废：`postpone_void_hours=24`、`postpone_void_src=OE67/2018-art11`，`void_postponed = 开赛比原定晚 > 24h`（原定本身是占位的不算推迟）。
+- 赛程状态写在比赛行，不靠解析 `kickoff_log`。从竞彩列表消失、又不能区分推迟或取消时，`schedule_status=other`，证据 `dropped_from_csl`，这场仍按原编号留在计划里，不再给它排新的采集目标。来源写明取消或推迟时才记 `cancelled` 或 `postponed`。同一编号的开赛时刻变动超过 20 分钟时记推迟，并写入 `kickoff_original` 与 `kickoff_actual`。不超过 20 分钟的未公告变动只增加 `kickoff_rev`。计划刷新和入库都会把这些字段写入副本库。
 - 前一竞彩日还有未确认占位场时（开赛后 3 小时内），继续每小时刷新 CSL 等确认；刷新中开赛时间/确认状态有变且已有 staging 时，会重跑一次入库以更新 extras。

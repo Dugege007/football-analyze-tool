@@ -267,7 +267,7 @@ export default function SheetPage() {
           localeText={AG_GRID_LOCALE_CN}
           rowData={rows}
           columnDefs={columnDefs}
-          getRowId={(p) => (p.data._mock ? 'mock:' : '') + p.data.match_id}
+          getRowId={(p) => (p.data._mock ? 'mock:' : '') + (p.data.row_id || p.data.match_id)}
           defaultColDef={{ resizable: true, sortable: true, suppressHeaderMenuButton: true }}
           loading={loading}
           tooltipShowDelay={300}

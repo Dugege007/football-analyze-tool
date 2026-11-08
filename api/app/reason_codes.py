@@ -25,6 +25,9 @@ REASON_ZH: dict[str, str] = {
     "deviation_too_large": "盘口偏离多数盘口三档及以上，已剔除",
     # 竞彩格子与竞彩赛果
     "collector_empty": "采集端没有数据",
+    "schedule_postponed": "这场已推迟，缺盘不是普通漏采",
+    "schedule_cancelled": "这场已取消，缺盘不是普通漏采",
+    "schedule_other": "这场已从竞彩列表消失，不能确定是推迟、取消还是其他原因，缺盘不是普通漏采",
     "legacy_home_only": "手工记录只有主胜赔率，不完整",
     "jc_1x2_incomplete": "竞彩胜平负三项赔率不全",
     "jc_not_on_sale": "竞彩未开售胜平负",
