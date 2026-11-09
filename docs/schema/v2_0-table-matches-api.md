@@ -562,6 +562,30 @@ N5 快照强制 `rho_global` / `rho_league` / `rho_league_se` + 指纹 `rho=glob
 | 补数让路（追加 2） | 北京 11:05–11:20、14:55–15:15、21:55–22:15 让路；共享 （账户上限），分析师采集最多 24 | `app/shared_api_yield.py`（标准库）：时段内 `before_request()` 睡到时段结束；补数合计 ≤ 16 次/分钟（跨进程 flock 账本 `odds-data/5dollar/backfill_yield_ledger.json`）；响应头剩余 ≤ 24 停到 Reset（缺省 61 秒）；事件记 `odds-data/5dollar/backfill_yield.jsonl`。已接入 7 个补数脚本（见 ACCEPTANCE），分析师的 `live_capture.py` 不接（它是被让的一方） |
 | 缓存 | 状态变了要重算 | v2d3 有人工复核 / 推迟场时 `data_rev` 末尾追加 `sp:<hash>` 段（`data_rev_source` 带 `+match_special`）；现网不变 |
 
+## 12.3 赛程缺口（推迟、取消、其他）
+
+竞彩列表里消失的场次、以及同一竞彩编号改到新开赛时间的场次，要在比赛行上留下一个原因。包装、接口和页面读这一处，不再去解析采集计划里的 `kickoff_log`。
+
+`matches.schedule_status` 只有三个值。`postponed` 表示推迟。`cancelled` 表示来源写明了取消。`other` 表示材料不够，不能确定是推迟、取消还是别的情况。没有这列、或值为空，表示这场没有已分类的赛程缺口。不允许因为一场从竞彩列表消失，就把它写成取消。
+
+分类只认已经拿到的证据：
+
+- 来源状态写明 `cancelled` 或 `canceled` 时，记 `cancelled`，证据是 `5df_status_cancelled`。
+- 来源状态写明 `postponed` 或 `delayed` 时，记 `postponed`，证据是 `5df_status_postponed`。新的开赛时间还不知道时，说明写成「比赛推迟，新的开赛时间尚未确认」，不编造时刻。
+- 同一竞彩编号的开赛时刻变了，而且变动超过 20 分钟，并且不是 12:00 占位转成真实开赛，记 `postponed`，证据是 `kickoff_rescheduled`。这时写入既有的 `kickoff_original`、`kickoff_actual`。`kickoff_at` 改成新的实际开赛。`kickoff_hour` 保持原竞彩日上的小时，避免按小时排序把这场从原编号位置拉开。`postponed_announced_at` 仍然不拿发现时刻去填。
+- 变动不超过 20 分钟、又没有推迟公告的，只增加 `kickoff_rev`，不记推迟。约 15 分钟的无公告漂移就落在这道门槛里。
+- 计划里原来有这场，这次竞彩列表没有它，而且上面几条都用不上，记 `other`，证据是 `dropped_from_csl`。这场仍留在原竞彩日的编号顺序里，不再为它生成新的采集目标。它以后以新的开赛时间回到列表时，清掉这个「只知道消失」的状态；新时间超过 20 分钟就改记推迟，并增加 `kickoff_rev`。
+
+接口在 `match` 上返回 `schedule_status`、`schedule_status_evidence` 和 `schedule_note`。`schedule_note` 是给悬停用的一句中文。推迟而且新时间已经知道时，这句话写成「推迟至 2026-11-09 19:00（北京时间）」这种形式，时刻是北京时间，精确到分钟。开赛格仍保留「开赛时间曾变更（第 N 次）」，N 等于 `kickoff_rev`，但不再只写变更次数。
+
+因为这个原因而没有赔率的格子，`cell_status_reason` 用 `schedule_postponed`、`schedule_cancelled` 或 `schedule_other`。悬停的中文改用这场的 `schedule_note`。格子里已经有盘口或赔率的不改。页面上这三格显示「推迟」「取消」「其他」，不显示成「无法获取」，也不留成看起来像没采到的空格。已经有完场比分的场次仍显示比分。
+
+列表有两处位置。`listing_role=ticket` 的一行留在原竞彩日，`list_date` 等于竞彩日，`list_seq` 按竞彩编号排。推迟后的开赛日历日晚于原定开赛日历日，并且这个新日历日落在查询区间里时，再给一行 `listing_role=kickoff`。它的 `list_date` 是新开赛的北京时间日历日，`row_id` 是原来的 `match_id` 加上 `#kickoff`，插在那一天按开赛时间应在的位置，不改那一天原有场次的先后。同一天内的推迟，例如日092 从 08:00 改到 09:00，只保留原竞彩日那一行。`daily_check_summary` 不把再列的那一行再计一次。
+
+这一竞彩日的规则临盘是否收齐，用 `app.schedule_status.jingcai_day_close_report`。默认看平博亚盘规则临盘。推迟、取消、其他这三类已经写在比赛行上的场次，缺临盘也不让整天失败。没有赛程状态、又没有临盘快照的场次仍然算缺。这个函数只读，不写库。
+
+按时间往前走的模拟把 `simulate` 的 `rules["walk"]` 设为 `kickoff`，或调用 `paper_walk_rules`。排序和当日份数上限用实际开赛（有 `kickoff_actual` 用它，否则用 `kickoff_at`）的北京时间。不传 `walk` 时仍按竞彩日加编号，已发布结算的顺序不变。推迟作废仍是 24 小时，来源仍是澳门第 67/2018 号行政命令第十一条。本节约不改写那条时限，也不把不超过 20 分钟的漂移送进推迟作废。
+
 ## 13. 前端名 → 后端名对照（前端 `src/sheet/types.ts` / `adapter.ts`）
 
 - **路由前缀**：前端请求 `/api/table/matches`，Vite 代理把 `/api` 去掉（`vite.config` `rewrite: path.replace(/^\/api/, '')`）→ 后端实际路由是 **`/table/matches`**，后端不加 `/api`，和现有全部路由一致。直连 8787 时用 `/table/matches`。

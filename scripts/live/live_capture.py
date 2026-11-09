@@ -40,6 +40,7 @@ jingcai_date_from_code），与 /dispatch/pending 同一套函数；/dispatch/pe
     （target_at=发现时刻、planned_target_at=理论新目标、catchup=true、phase_assign_late=true，live 不计命中）；
     旧目标已抓过的保留；发现时刻只用来调度，不当 postponed_announced_at。已开赛则无法补抓，只记日志。
   - 开赛确认：改成非 12:00（确认时刻=发现时刻）、5DF 状态已开赛（=开赛时刻）、或 state/kickoff_confirm.json 人工。
+  - 从竞彩列表消失时不猜取消：计划里留下这场，schedule_status=other。来源写明取消或推迟、或开赛时刻变动超过 20 分钟时，才写成 cancelled 或 postponed，并在入库时写入副本比赛行。
 
 窗口：目标 T 在 [T−2min, T+10min] 内到点即抓一次；超过 T+10min 未抓 → missed（同时 R-C 入
 rescue_queue/pending，不调 API；自动消费：`rescue_worker.py` / `live_capture.py rescue-consume`，多日缺口：`rescue_gap_scan.py` / `gap-scan`，见 schema/v2_0-live-miss-rescue-rules.md §7）。
@@ -122,6 +123,7 @@ sys.path.insert(0, str(API_ROOT))
 sys.path.insert(0, str(API_ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from app import collection_schedule as cs  # noqa: E402  后端同一套目标函数
+from app import schedule_status as sched_gap  # noqa: E402  推迟 / 取消 / 其他
 from validate_ah_sign import check_rows  # noqa: E402  后端同一套正负号校验
 
 TZ = timezone(timedelta(hours=8))
@@ -486,7 +488,47 @@ def _merge_kickoff(D: str, m: dict, pm: dict | None, kick: datetime, now: dateti
         "void_postponed": (delta_h is not None and delta_h > POSTPONE_VOID_HOURS),
         "postpone_void_hours": POSTPONE_VOID_HOURS, "postpone_void_src": POSTPONE_VOID_SRC,
     })
+    _attach_schedule_status(m, pm, status, kick, original, rev, orig_ph, now)
     return changed
+
+
+def _attach_schedule_status(m: dict, pm: dict | None, status, kick: datetime, original: datetime,
+                            rev: int, orig_ph: bool, now: datetime) -> None:
+    """按已有证据写赛程状态。从列表消失不在这里判，由 build_plan 对缺席场单独记其他。"""
+    delta = None
+    if not orig_ph and rev and kick != original:
+        delta = kick - original
+    prev_status = (pm or {}).get("schedule_status")
+    prev_ev = (pm or {}).get("schedule_status_evidence")
+    st, ev = sched_gap.classify_schedule(
+        source_status=status,
+        absent_from_list=False,
+        kickoff_changed=delta is not None,
+        delta=delta,
+        placeholder_confirm=bool(orig_ph),
+        previous_status=prev_status,
+        previous_evidence=prev_ev,
+    )
+    m["schedule_status"] = st
+    m["schedule_status_evidence"] = ev
+    m["absent_from_csl"] = False
+    if st == prev_status and ev == prev_ev:
+        m["schedule_status_at"] = (pm or {}).get("schedule_status_at")
+    elif st:
+        m["schedule_status_at"] = iso(now)
+    else:
+        m["schedule_status_at"] = None
+
+
+def _jc_order(m: dict) -> tuple:
+    """同一竞彩日内按编号排。掉出列表的场留在原来的位置，不另插到队尾。"""
+    code = str(m.get("jc_code") or "")
+    tail = code[1:] if code else ""
+    try:
+        number = int(tail)
+    except ValueError:
+        number = 10**9
+    return (number, code, m.get("match_uid") or "")
 
 
 def _exception_basis(m: dict) -> datetime:
@@ -659,10 +701,30 @@ def build_plan(D: str, csl: dict, prev: dict | None = None, now: datetime | None
         targets += _match_targets(D, m, now, prev_t.get(uid, []), st, klog)
         matches.append(m)
     for uid in sorted(set(prev_m) - seen):
-        rec = {"ts": iso(now), "jingcai_date": D, "match_uid": uid, "event": "dropped_from_csl"}
+        pm = dict(prev_m[uid])
+        prev_status = pm.get("schedule_status")
+        prev_ev = pm.get("schedule_status_evidence")
+        st, ev = sched_gap.classify_schedule(
+            source_status=pm.get("status"),
+            absent_from_list=True,
+            kickoff_changed=False,
+            delta=None,
+            placeholder_confirm=False,
+            previous_status=prev_status,
+            previous_evidence=prev_ev,
+        )
+        pm["schedule_status"] = st
+        pm["schedule_status_evidence"] = ev
+        pm["absent_from_csl"] = True
+        if st != prev_status or ev != prev_ev:
+            pm["schedule_status_at"] = iso(now)
+        matches.append(pm)
+        rec = {"ts": iso(now), "jingcai_date": D, "match_uid": uid, "event": "dropped_from_csl",
+               "schedule_status": st, "schedule_status_evidence": ev}
         if not any(e.get("event") == "dropped_from_csl" and e.get("match_uid") == uid for e in klog):
             klog.append(rec)
             append_jsonl(D_LOG / "kickoff_changes.jsonl", rec)
+    matches.sort(key=_jc_order)
     # 编号断号 = 可能有竞彩场没进 5DF CSL（映射缺失），只记不猜
     nos = sorted(int(m["jc_code"][1:]) for m in matches if m["jc_code"][1:].isdigit())
     gaps = sorted(set(range(1, max(nos) + 1)) - set(nos)) if nos else []
@@ -725,6 +787,10 @@ def ensure_plan(cl: Client | None, D: str, max_age: timedelta | None, force=Fals
         return p
     try:
         p = build_plan(D, fetch_csl_day(cl, D))
+        try:
+            persist_schedule_status(D, plan=p)
+        except (Exception, SystemExit) as e:
+            health("schedule_status_persist_error", jingcai_date=D, error=str(e)[:300])
         health("plan_refreshed", jingcai_date=D, n_matches=p["n_matches"], n_targets=p["n_targets"],
                missing_mapping=len(p["missing_mapping"]), jc_number_gaps=p["jc_number_gaps"])
     except Exception as e:
@@ -1277,6 +1343,11 @@ def ingest(D: str, db: Path = REPLICA_DB, dry_run=False, create_missing_matches:
     finally:
         conn.close()
     jdump(ist_p, ist)
+    if not dry_run:
+        try:
+            rep["schedule_status"] = persist_schedule_status(D, db)
+        except (Exception, SystemExit) as e:
+            rep["schedule_status_error"] = str(e)[:300]
     health("ingest", jingcai_date=D, written=rep["written"], counts=rep["counts"], backup=rep["backup"],
            sign=rep["sign_check"]["status"] if rep["sign_check"] else None)
     return rep
@@ -1285,6 +1356,161 @@ def ingest(D: str, db: Path = REPLICA_DB, dry_run=False, create_missing_matches:
 
 def _matches_has_col(conn, col: str) -> bool:
     return any(r[1] == col for r in conn.execute("PRAGMA table_info(matches)"))
+
+
+_SCHEDULE_DB_COLS = {
+    "schedule_status": "TEXT",
+    "schedule_status_evidence": "TEXT",
+    "schedule_status_at": "TEXT",
+    "kickoff_original": "TEXT",
+    "kickoff_actual": "TEXT",
+    "postponed_announced_at": "TEXT",
+    "postpone_ts_unknown": "INTEGER",
+    "postpone_void_check": "TEXT",
+    "postpone_evidence": "TEXT",
+    "kickoff_rev": "INTEGER DEFAULT 0",
+}
+
+
+def _replica_write_allowed(db: Path) -> None:
+    """与 ingest 同一道门：只写 v2d3 研究副本。合并进正式库之后，正式库就是副本目标。"""
+    db = db.resolve()
+    if not (_FORMAL_MERGED and db == PROD_DB) and (db == PROD_DB or db.name != "app.db" or db.parent.name != "v2d3"):
+        raise SystemExit(f"拒绝写入 {db}：只允许 v2d3 研究副本（…/v2d3/app.db）")
+
+
+def persist_schedule_status(D: str, db: Path | None = None, plan: dict | None = None) -> dict:
+    """把计划里的赛程状态写进比赛行。库不存在就跳过。不写赔率，也不改已发布的结算规则。"""
+    db = (db or REPLICA_DB).resolve()
+    if not db.exists():
+        return {"skipped": "db_missing", "path": str(db)}
+    _replica_write_allowed(db)
+    plan = plan or load_plan(D) or {}
+    matches = plan.get("matches") or []
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    added: list[str] = []
+    updated = 0
+    try:
+        for col, typ in _SCHEDULE_DB_COLS.items():
+            if not _matches_has_col(conn, col):
+                conn.execute(f"ALTER TABLE matches ADD COLUMN {col} {typ}")
+                added.append(col)
+        for m in matches:
+            row = conn.execute("SELECT * FROM matches WHERE match_uid=?", (m.get("match_uid"),)).fetchone()
+            if row is None:
+                continue
+            if _write_match_schedule(conn, row, m):
+                updated += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"path": str(db), "columns_added": added, "matches_updated": updated, "jingcai_date": D}
+
+
+def _write_match_schedule(conn, row, m: dict) -> bool:
+    """按计划更新一行。返回是否写过。只清我们自己写下的状态，不动手工推迟证据。"""
+    status = m.get("schedule_status")
+    evidence = m.get("schedule_status_evidence")
+    keys = set(row.keys())
+    prev_status = row["schedule_status"] if "schedule_status" in keys else None
+    prev_ev = row["schedule_status_evidence"] if "schedule_status_evidence" in keys else None
+    wrote = False
+    if status not in sched_gap.STATUSES:
+        if prev_status in sched_gap.STATUSES and prev_ev in sched_gap.OWN_EVIDENCE:
+            conn.execute(
+                "UPDATE matches SET schedule_status=NULL, schedule_status_evidence=NULL, "
+                "schedule_status_at=NULL WHERE id=?",
+                (row["id"],),
+            )
+            if prev_ev == sched_gap.EVIDENCE_RESCHEDULED:
+                conn.execute(
+                    "UPDATE matches SET kickoff_original=NULL, kickoff_actual=NULL, "
+                    "postpone_ts_unknown=NULL, postpone_void_check=NULL, postpone_evidence=NULL WHERE id=?",
+                    (row["id"],),
+                )
+            wrote = True
+        wrote = _sync_listed_kickoff(conn, row, m) or wrote
+        return wrote
+    when = m.get("schedule_status_at") or iso(now_cn())
+    conn.execute(
+        "UPDATE matches SET schedule_status=?, schedule_status_evidence=?, schedule_status_at=? WHERE id=?",
+        (status, evidence, when, row["id"]),
+    )
+    wrote = True
+    if status == sched_gap.STATUS_POSTPONED:
+        wrote = _write_postpone_columns(conn, row, m) or wrote
+    elif prev_ev == sched_gap.EVIDENCE_RESCHEDULED:
+        conn.execute(
+            "UPDATE matches SET kickoff_original=NULL, kickoff_actual=NULL, "
+            "postpone_ts_unknown=NULL, postpone_void_check=NULL, postpone_evidence=NULL WHERE id=?",
+            (row["id"],),
+        )
+    _sync_listed_kickoff(conn, row, m)
+    return wrote
+
+
+def _write_postpone_columns(conn, row, m: dict) -> bool:
+    """新开赛时间已经确认时，写入既有推迟列。发现时刻不当作公告时刻。不超过 20 分钟的漂移不写。"""
+    original = m.get("kickoff_original")
+    actual = m.get("kickoff_actual")
+    if not original or not actual or original == actual:
+        return False
+    delta = None
+    ko, ka = parse(original), parse(actual)
+    if ko is not None and ka is not None:
+        delta = ka - ko
+    if (sched_gap.is_unannounced_drift(delta)
+            and m.get("schedule_status_evidence") != sched_gap.EVIDENCE_POSTPONED):
+        return False
+    keys = set(row.keys())
+    announced = m.get("postponed_announced_at")
+    if not announced and "postponed_announced_at" in keys:
+        announced = row["postponed_announced_at"]
+    void_check = cs.postpone_void_check(ko, ka) if ko is not None and ka is not None else None
+    evidence = json.dumps({
+        "evidence": m.get("schedule_status_evidence"),
+        "kickoff_original": original,
+        "kickoff_actual": actual,
+        "postpone_void_hours": POSTPONE_VOID_HOURS,
+        "postpone_void_src": POSTPONE_VOID_SRC,
+        "note": "发现时刻不是推迟公告时刻。推迟作废仍按澳门第 67/2018 号行政命令第十一条的 24 小时。",
+    }, ensure_ascii=False, sort_keys=True)
+    conn.execute(
+        "UPDATE matches SET kickoff_original=?, kickoff_actual=?, kickoff_at=?, "
+        "postponed_announced_at=?, postpone_ts_unknown=?, postpone_void_check=?, "
+        "postpone_evidence=?, kickoff_rev=? WHERE id=?",
+        (original, actual, actual, announced, 0 if announced else 1, void_check, evidence,
+         int(m.get("kickoff_rev") or 0), row["id"]),
+    )
+    return True
+
+
+def _sync_listed_kickoff(conn, row, m: dict) -> bool:
+    """开赛时刻变了就更新 kickoff_at 和 kickoff_rev。不改 kickoff_hour，原竞彩日编号顺序不受开赛小时牵动。
+    疑似 12:00 占位不覆盖库里已有的开赛时刻。"""
+    if m.get("kickoff_placeholder_suspect"):
+        return False
+    listed = m.get("kickoff_at")
+    keys = set(row.keys())
+    sets: list[str] = []
+    args: list = []
+    if listed and row["kickoff_at"] != listed and m.get("schedule_status") != sched_gap.STATUS_POSTPONED:
+        # 推迟场的 kickoff_at 已由推迟列写入实际开赛。这里只处理漂移和其他状态。
+        sets.append("kickoff_at=?")
+        args.append(listed)
+    rev = int(m.get("kickoff_rev") or 0)
+    if "kickoff_rev" in keys and int(row["kickoff_rev"] or 0) != rev:
+        sets.append("kickoff_rev=?")
+        args.append(rev)
+    if not sets:
+        return False
+    args.append(row["id"])
+    conn.execute(f"UPDATE matches SET {', '.join(sets)} WHERE id=?", args)
+    return True
 
 
 def ensure_kickoff_rev_column(conn) -> bool:

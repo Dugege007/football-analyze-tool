@@ -219,6 +219,8 @@ export interface SettleItem {
 
 export interface Row {
   match_id: string
+  /** 同一场按新开赛时间再列一行时，用这个键区分。原行可以不给。 */
+  row_id?: string
   match: {
     jc_id: string | null
     jingcai_date: string
@@ -240,6 +242,16 @@ export interface Row {
     home_team: string | null
     away_team: string | null
     status: MatchStatus | null
+    /** 推迟、取消，或其他。空表示没有已分类的赛程缺口。 */
+    schedule_status?: 'postponed' | 'cancelled' | 'other' | null
+    /** 开赛格和缺盘格悬停用的一句中文。 */
+    schedule_note?: string | null
+    kickoff_actual?: string | null
+    kickoff_rev?: number | null
+    /** ticket 留在原竞彩日；kickoff 是按新开赛时间再列的一行。 */
+    listing_role?: 'ticket' | 'kickoff' | null
+    list_date?: string | null
+    list_seq?: number | null
   }
   prediction: { direction: string | null; line?: number | null } | null
   ah: Partial<Record<Book, Phased<AhCell>>>

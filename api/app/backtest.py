@@ -25,6 +25,7 @@ import math
 from datetime import date
 from typing import Any
 
+from app.schedule_status import effective_kickoff_day, effective_kickoff_iso
 from app.settle_book import DEFAULT_SETTLE_BOOK, SETTLEMENT_BOOK_VERSION, SETTLE_BOOK_PRIORITY
 
 SETTLEMENT_VERSION = "ah_v4_water_midpoint"  # 默认水位：macau 固定 0.95（日用 / V3 对照）
@@ -224,8 +225,16 @@ def simulate(
                 e["units"] = 0
                 e["reasons"].append("water_censored_excluded")
         entries.append(e)
-    entries.sort(key=lambda e: (e.get("jingcai_date") or "", e.get("order_key") or 0,
-                                e.get("match_id") or 0, s_idx.get(e["strategy_key"], 99)))
+    # 已发布结算按竞彩日加编号。walk=kickoff 只给按实际开赛时间往前走的模拟用，不改默认顺序。
+    walk = rules.get("walk") or "jingcai"
+    if walk not in ("jingcai", "kickoff"):
+        walk = "jingcai"
+    if walk == "kickoff":
+        entries.sort(key=lambda e: (effective_kickoff_iso(e), e.get("match_id") or 0,
+                                    s_idx.get(e["strategy_key"], 99)))
+    else:
+        entries.sort(key=lambda e: (e.get("jingcai_date") or "", e.get("order_key") or 0,
+                                    e.get("match_id") or 0, s_idx.get(e["strategy_key"], 99)))
 
     per_match = int(rules["per_match"])
     per_day = int(rules["per_day"])
@@ -238,7 +247,11 @@ def simulate(
 
     by_day: dict[str, list[dict]] = {}
     for e in entries:
-        by_day.setdefault(e.get("jingcai_date") or "_undated", []).append(e)
+        if walk == "kickoff":
+            day_key = effective_kickoff_day(e)
+        else:
+            day_key = e.get("jingcai_date") or "_undated"
+        by_day.setdefault(day_key, []).append(e)
 
     current_week = None
     unit_amount = round(equity * frac, 2)
