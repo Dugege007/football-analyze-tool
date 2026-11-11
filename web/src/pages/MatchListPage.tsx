@@ -32,6 +32,7 @@ import {
 } from '../api/dailyMessageTemplate'
 import { HelpTip, LabelWithHelp } from '../components/HelpTip'
 import { DisplayLeague, DisplayTeam } from '../components/DisplayName'
+import { TeamNameWithRedCard } from '../components/RedCardBadge'
 import { matchLabels } from '../names/matchLabels'
 
 const PICK_TIPS: Record<string, string> = {
@@ -170,7 +171,11 @@ export default function MatchListPage() {
     {
       title: '主队',
       align: 'right',
-      render: (_, row) => <DisplayTeam label={matchLabels(row.match).home} strong />,
+      render: (_, row) => (
+        <TeamNameWithRedCard side="home" result={row.result}>
+          <DisplayTeam label={matchLabels(row.match).home} strong />
+        </TeamNameWithRedCard>
+      ),
     },
     {
       title: '',
@@ -184,7 +189,11 @@ export default function MatchListPage() {
     },
     {
       title: '客队',
-      render: (_, row) => <DisplayTeam label={matchLabels(row.match).away} strong />,
+      render: (_, row) => (
+        <TeamNameWithRedCard side="away" result={row.result}>
+          <DisplayTeam label={matchLabels(row.match).away} strong />
+        </TeamNameWithRedCard>
+      ),
     },
     {
       title: <LabelWithHelp label="开赛时间" tip="北京时间。分钟未知时只显示到小时。" />,

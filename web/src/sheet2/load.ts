@@ -3,6 +3,7 @@
  * 不请求 live 快照（include_live=none），不读手工澳门列（ah.macau 已指向 5DollarFootballAPI 来源）。
  */
 import { apiBase } from '../api/dataSource'
+import { passthroughRedCardCount } from '../components/redCardBadge'
 import { mockRows } from './mock'
 import type { AhCell, OuCell, CellStatus, JcHhadCell, MatchStatus, Phase, Phased, Row, X1x2Cell } from './types'
 import { mapFundStats } from './fundamentals'
@@ -175,6 +176,9 @@ export function mapApiRow(it: Raw): Row {
           away_goals: r.away_goals ?? null,
           total_goals: r.total_goals ?? null,
           outcome_1x2: r.outcome_1x2 ?? null,
+          // 红牌数原样保留：缺字段仍是 undefined，null 仍是 null，0 不改成空，也不把空补成 0。
+          home_red_cards: passthroughRedCardCount(r.home_red_cards),
+          away_red_cards: passthroughRedCardCount(r.away_red_cards),
           // 机构赛果整段照接口原样保留。整段为空时页面显示「-」，这里不改成无法获取，也不用临盘重算。
           by_book: r.by_book ?? null,
           jc: mapJcResult(r.jc),

@@ -32,6 +32,51 @@ a {
 }
 
 /*
+ * 红牌角标贴在队名上沿外侧：主队在左，客队在右。
+ * 尺寸接近待确认星号，避免在 32 像素行高里被裁掉，也不盖住星号和队名。
+ */
+.team-name-with-card {
+  white-space: nowrap;
+}
+
+.red-card-badge {
+  display: inline-block;
+  box-sizing: border-box;
+  min-width: 14px;
+  height: 14px;
+  margin: 0;
+  padding: 0 3px;
+  border-radius: 2px;
+  background: #cf1322;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  vertical-align: super;
+  cursor: help;
+}
+
+.red-card-badge-home {
+  margin-right: 2px;
+}
+
+.red-card-badge-away {
+  margin-left: 2px;
+}
+
+h1 .red-card-badge,
+h2 .red-card-badge,
+h3 .red-card-badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/*
  * 当月没有比赛的竞彩日：文字比普通当月日期淡，数字下方加虚线，仍然可以点。
  * 只作用在当月格子上。上月、下月露出的格子继续用组件自带的更淡灰色，两种灰不要画成一样。
  * 已经选中的起止日保持组件自己的实色，避免虚线盖住选中状态。

@@ -81,6 +81,10 @@ export interface Result {
   away_goals: number
   total_goals: number
   wdl: '胜' | '平' | '负'
+  /** 主队红牌。null 为没取到，0 为确认没有，大于等于 1 为确认张数。旧响应可能没有这个字段。 */
+  home_red_cards?: number | null
+  /** 客队红牌。含义与 home_red_cards 相同。 */
+  away_red_cards?: number | null
 }
 
 export interface AsianLineFull {
