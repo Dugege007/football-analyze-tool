@@ -8,16 +8,24 @@
   所以本程序只尝试直连一次，失败就读本地缓存目录。缓存由大陆本机刷新后放入。大陆本机取数时优先使用 YPC（即 YuePC）。YPC 不在线或取不到时，才使用 MSI。
 - 5DollarFootballAPI 的中国体彩清单 /chinasportslottery（自带完赛比分和状态），密钥只从环境变量
   FIVEDOLLAR_FOOTBALL_API_KEY 读取，不打印、不落盘。
-- Football-Data.co.uk 公开 CSV（只在两个来源都没有比分时作兜底核对，由 fd_crosscheck 子命令执行）。
+- Football-Data.co.uk 公开 CSV。比分只在两个来源都没有时作兜底核对（crosscheck 子命令）。
+  红牌只在 5DF 没有可用数字时，用主联赛 CSV 的 HR/AR 补齐。
 
 写库规则：
-- 只插入 results 里缺失的行，不覆盖已有的行。
+- 只插入 results 里缺失的行，不覆盖已有比分。
+- 新插入的赛果同时写入 home_red_cards、away_red_cards。未取得保持 NULL，不用 0 代替。
+  只有完赛且来源给出了主客两个数字才写入；5DF 未开赛清单里的 0 不记为确认值。
+  只有竞彩网赛果时两列保持 NULL。Football-Data.co.uk 的 HR/AR 只在 5DF 没有可用红牌时补齐；
+  两边都有数字但不一致时两列留空，并记 red_card_conflict。黄牌不写。
+- 已有赛果行的红牌仍是 NULL 时，后续 tick 或 red_cards 子命令只补这两列，不改比分。
+  red_cards 默认只预览，必须同时给出 --apply 和显式 --db，并且拒绝正式库路径。
 - 新插入的完场比分提交前，用与 backfill_market_settle 相同的单场重算写入 market_settle。只写当前这个库，不打开双写，不计算竞彩赛果。
 - 同一事务里把新完赛场次放进预期进球队列 xg_fetch_queue。tick 在本轮赛果处理之后，如果环境里有 BSD 令牌，就按队列拉取一次；没有令牌则保持未填写。第二次拉取排在三小时之后，仍由这个 tick 带走，不另起守护进程。这个队列与盘口补数无关。
 - 两个来源都有比分且不一致：不写，标记 score_conflict。
 - 竞彩退款：标记 refund；5DF 推迟、取消、腰斩：标记 postponed、cancelled、abandoned；这些都不进可结算赛果。
 - 每次有内容要写之前，先用 sqlite backup 备份到 /workspace/backups/v2d3-before-result-ingest-<时间戳>/app.db。
-- 新增两张表（只追加，不改已有表）：result_ingest_log 记录每场赛果的来源，result_ingest_flags 记录特殊场次标记。
+- 新增两张表（只追加）：result_ingest_log 记录每场赛果的来源，result_ingest_flags 记录特殊场次标记。
+  results 只追加 home_red_cards、away_red_cards 两列，不改已有比分列。
 - 子命令 sporttery_crosscheck（竞彩网二次核对）只处理已经写入、来源仍是 5df_csl、并且单一来源标记尚未解决的场次。
   默认只列出清单。显式加上 --apply 时，仅在竞彩网比分与已经入库的比分完全一致时，把来源改为 sporttery+5df_csl 并解除该标记。
   赛果表里的比分不做任何修改。写入前先整库备份，并写出可以据此回滚的审计文件。
@@ -71,6 +79,7 @@ CREATE TABLE IF NOT EXISTS result_ingest_flags (
   match_id INTEGER NOT NULL REFERENCES matches(id),
   flag TEXT NOT NULL,              -- score_conflict | refund | postponed | cancelled | abandoned | no_result_after_cutoff
                                    -- | single_source（只有 5DF 一个来源，Football-Data.co.uk 也没有）| fd_score_mismatch
+                                   -- | red_card_conflict（5DF 与 Football-Data.co.uk 红牌数不一致，两列都不写）
   detail_json TEXT,
   first_seen_at TEXT NOT NULL,
   last_seen_at TEXT NOT NULL,
@@ -177,6 +186,134 @@ def csl_score(it: dict):
     if it.get("status") == "finished" and g.get("home") is not None and g.get("away") is not None:
         return (int(g["home"]), int(g["away"]))
     return None
+
+
+RED_CARD_CONFLICT_FLAG = "red_card_conflict"
+
+
+def parse_card_count(value):
+    """把红牌格解析成大于等于 0 的整数。缺数、空串、负数和小数都返回 None，不用 0 顶上。"""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        if value < 0 or value != int(value):
+            return None
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if text == "":
+            return None
+        try:
+            number = float(text)
+        except ValueError:
+            return None
+        if number < 0 or number != int(number):
+            return None
+        return int(number)
+    return None
+
+
+def csl_red_cards(it: dict | None):
+    """5DF 中国体彩清单的主客红牌。只有 status 为 finished 且两侧 red 都是数字时才返回。
+
+    未开赛、进行中清单里常见的 0/0 不是确认值，返回 None。黄牌不读取。
+    """
+    if not isinstance(it, dict) or it.get("status") != "finished":
+        return None
+    cards = it.get("cards")
+    if not isinstance(cards, dict):
+        return None
+    home = cards.get("home")
+    away = cards.get("away")
+    if not isinstance(home, dict) or not isinstance(away, dict):
+        return None
+    if "red" not in home or "red" not in away:
+        return None
+    home_red = parse_card_count(home.get("red"))
+    away_red = parse_card_count(away.get("red"))
+    if home_red is None or away_red is None:
+        return None
+    return home_red, away_red
+
+
+def resolve_red_cards(csl_cards, fd_cards) -> dict:
+    """合并两个来源的红牌。两边都有数字且不一致时不选边，两列都留空。"""
+    if csl_cards is not None and fd_cards is not None and tuple(csl_cards) != tuple(fd_cards):
+        return {
+            "cards": None,
+            "conflict": True,
+            "source": None,
+            "detail": {
+                "5df": [int(csl_cards[0]), int(csl_cards[1])],
+                "football_data": [int(fd_cards[0]), int(fd_cards[1])],
+                "reason": "5DF 与 Football-Data.co.uk 的红牌数不一致，两侧都不写入。",
+            },
+        }
+    if csl_cards is not None:
+        return {"cards": (int(csl_cards[0]), int(csl_cards[1])), "conflict": False,
+                "source": "5df_csl", "detail": None}
+    if fd_cards is not None:
+        return {"cards": (int(fd_cards[0]), int(fd_cards[1])), "conflict": False,
+                "source": "football_data_co_uk", "detail": None}
+    return {"cards": None, "conflict": False, "source": None, "detail": None}
+
+
+def usable_fd_red_cards(fd_row: dict | None, score):
+    """Football-Data 红牌只在该行比分与要写入或已入库的比分一致、且 HR/AR 都是数字时可用。"""
+    if not fd_row or fd_row.get("red_cards") is None or score is None:
+        return None
+    if tuple(fd_row.get("score") or ()) != tuple(score):
+        return None
+    return tuple(fd_row["red_cards"])
+
+
+def annotate_red_cards(decision: dict, csl_item, fd_row) -> dict:
+    """给即将写入的赛果附上红牌。不改比分判定。竞彩网单独来源没有红牌字段，保持空。"""
+    if decision.get("action") != "write":
+        return decision
+    score = decision.get("score")
+    csl_cards = csl_red_cards(csl_item)
+    # 五元足球的比分不是这次写入的比分时，不拿它的红牌当确认值。
+    if csl_cards is not None and decision.get("fivedf_score") != score:
+        csl_cards = None
+    resolved = resolve_red_cards(csl_cards, usable_fd_red_cards(fd_row, score))
+    out = dict(decision)
+    flags = list(out.get("flags") or [])
+    if resolved["conflict"]:
+        flags.append((RED_CARD_CONFLICT_FLAG, resolved["detail"]))
+        out["red_cards"] = None
+    else:
+        out["red_cards"] = resolved["cards"]
+    if resolved["cards"] is not None and resolved["source"]:
+        detail = dict(out.get("detail") or {})
+        detail["red_cards"] = {
+            "home": resolved["cards"][0],
+            "away": resolved["cards"][1],
+            "source": resolved["source"],
+        }
+        out["detail"] = detail
+    out["flags"] = flags
+    out["red_card_source"] = resolved["source"]
+    return out
+
+
+def ensure_results_red_card_columns(con: sqlite3.Connection) -> None:
+    """给已有 results 表补上两列可空红牌。列已存在时不改数据。"""
+    names = {row[1] for row in con.execute("pragma table_info(results)")}
+    for column in ("home_red_cards", "away_red_cards"):
+        if column not in names:
+            con.execute(f"alter table results add column {column} integer")
+
+
+def is_formal_db_path(db: str) -> bool:
+    """正式库路径。研究副本 v2d3/app.db 不算正式库。"""
+    real = os.path.realpath(db)
+    if real == os.path.realpath(PROD_DB):
+        return True
+    formal_suffix = os.path.join("match-analysis-api", "data", "app.db")
+    return real.endswith(formal_suffix)
 
 
 def decide(sp: dict | None, lv: dict | None) -> dict:
@@ -366,6 +503,9 @@ def apply(db: str, decisions: list[tuple[dict, dict]], backup_root: Path, batch_
     con = sqlite3.connect(db, timeout=60)
     try:
         ensure_schema(con)
+        if writes:
+            ensure_results_red_card_columns(con)
+            con.commit()
         with con:
             cur = con.execute("insert into import_batches(source_file, month, row_count, status) values (?, ?, ?, 'ok')",
                               (batch_label, now.strftime("%y%m"), len(writes)))
@@ -374,8 +514,15 @@ def apply(db: str, decisions: list[tuple[dict, dict]], backup_root: Path, batch_
             inserted_ids = []
             for m, d in writes:
                 h, a = d["score"]
-                c = con.execute("insert or ignore into results(match_id, home_goals, away_goals, total_goals, wdl) "
-                                "values (?, ?, ?, ?, ?)", (m["id"], h, a, h + a, wdl(h, a)))
+                red = d.get("red_cards")
+                if red is None:
+                    home_red, away_red = None, None
+                else:
+                    home_red, away_red = int(red[0]), int(red[1])
+                c = con.execute(
+                    "insert or ignore into results(match_id, home_goals, away_goals, total_goals, wdl, "
+                    "home_red_cards, away_red_cards) values (?, ?, ?, ?, ?, ?, ?)",
+                    (m["id"], h, a, h + a, wdl(h, a), home_red, away_red))
                 if c.rowcount:
                     res["inserted"] += 1
                     inserted_ids.append(m["id"])
@@ -486,12 +633,14 @@ def tick(args, st: State, cl: FiveDF | None, now: dt.datetime, log) -> dict:
     ro.close()
     todo = [m for m in cand if due(m, st.d["last_pull"].get(str(m["id"])), now)]
     out = {"due": len(todo), "inserted": 0, "flagged": 0}
+    fetched_days: set[str] = set()
     if todo:
         days = sorted({m["jingcai_date"] for m in todo})
         if cl:
             for D in days:
                 try:
                     fetch_csl_day(cl, D, Path(args.csl_dir))
+                    fetched_days.add(D)
                 except Exception as e:
                     log(f"5DF 清单 {D} 拉取失败：{e}")
         b = (dt.date.fromisoformat(days[0]) - dt.timedelta(days=1)).isoformat()
@@ -500,10 +649,12 @@ def tick(args, st: State, cl: FiveDF | None, now: dt.datetime, log) -> dict:
             log("竞彩网直连被拦，改读本地缓存。")
         sp = load_sporttery([args.sporttery_dir] + args.extra_sporttery_dir)
         lv = load_csl([args.csl_dir])
+        fd_rows_list, fd_names = _load_local_fd(db, Path(getattr(args, "out_dir", "") or "."))
         decs = []
         for m in todo:
             k = (m["jingcai_date"], short_code(m["jc_id"]))
-            decs.append((m, decide(sporttery_lookup(sp, m["jingcai_date"], k[1], m["home"], m["away"]), lv.get(k))))
+            raw = decide(sporttery_lookup(sp, m["jingcai_date"], k[1], m["home"], m["away"]), lv.get(k))
+            decs.append((m, annotate_red_cards(raw, lv.get(k), _fd_row_for_match(fd_rows_list, fd_names, m))))
             st.d["last_pull"][str(m["id"])] = iso(now)
         r = apply(db, decs, Path(args.backup_root), "result-ingest-scheduler (sporttery + 5df_csl)", now)
         out.update(inserted=r["inserted"], flagged=r["flagged"], backup=r["backup"])
@@ -520,6 +671,11 @@ def tick(args, st: State, cl: FiveDF | None, now: dt.datetime, log) -> dict:
             st.d["cutoff_flagged"][str(m["id"])] = iso(now)
         if r["backup"]:
             prune_backups(Path(args.backup_root))
+    try:
+        out["red_cards"] = fill_due_red_cards(args, cl, now, log, already_days=fetched_days)
+    except Exception as exc:
+        out["red_cards"] = {"error": f"{type(exc).__name__}: {exc}"}
+        log(f"红牌补数没有完成：{type(exc).__name__}: {exc}")
     try:
         out["xg"] = pull_xg_after_tick(db, now)
     except Exception as exc:
@@ -797,6 +953,9 @@ def fd_rows(fd_dir: Path) -> list[dict]:
     for f in sorted(glob.glob(str(fd_dir / "*.csv"))):
         try:
             rd = csv.DictReader(open(f, encoding="utf-8-sig", errors="replace"))
+            fieldnames = rd.fieldnames or []
+            # new_*.csv 国家文件通常没有 HR/AR。缺列时不把空格当成 0。
+            use_red = (not os.path.basename(f).startswith("new_")) and "HR" in fieldnames and "AR" in fieldnames
             for r in rd:
                 h, a = r.get("HomeTeam") or r.get("Home"), r.get("AwayTeam") or r.get("Away")
                 hg, ag = r.get("FTHG") or r.get("HG"), r.get("FTAG") or r.get("AG")
@@ -805,8 +964,15 @@ def fd_rows(fd_dir: Path) -> list[dict]:
                 except Exception:
                     continue
                 if h and a and hg not in (None, "") and ag not in (None, ""):
+                    red = None
+                    if use_red:
+                        home_red = parse_card_count(r.get("HR"))
+                        away_red = parse_card_count(r.get("AR"))
+                        if home_red is not None and away_red is not None:
+                            red = (home_red, away_red)
                     out.append({"date": d, "home": _norm(h), "away": _norm(a), "home_raw": h, "away_raw": a,
-                                "score": (int(float(hg)), int(float(ag))), "file": os.path.basename(f)})
+                                "score": (int(float(hg)), int(float(ag))), "red_cards": red,
+                                "file": os.path.basename(f)})
         except Exception:
             continue
     return out
@@ -854,6 +1020,202 @@ def fd_lookup(rows: list[dict], kickoff_at: str, home_en: set[str], away_en: set
         return both[0]
     one = [r for r in cand if (home_en and r["home"] in home_en) or (away_en and r["away"] in away_en)]
     return one[0] if len(one) == 1 else None
+
+
+def _red_card_columns_present(con: sqlite3.Connection) -> bool:
+    names = {row[1] for row in con.execute("pragma table_info(results)")}
+    return "home_red_cards" in names and "away_red_cards" in names
+
+
+def _load_local_fd(db: str, out_dir: Path, fd_dir: Path | None = None, team_map: Path | None = None):
+    """只读本地 CSV 和队名对照。不下载，也不读取接口密钥。"""
+    directory = fd_dir if fd_dir is not None else out_dir / "fd_raw"
+    rows = fd_rows(directory) if directory and directory.exists() else []
+    ro = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=60)
+    try:
+        names = english_names(ro, team_map if team_map is not None else out_dir / "fd_team_map.csv")
+    finally:
+        ro.close()
+    return rows, names
+
+
+def _fd_row_for_match(rows: list[dict], names: dict, match: dict):
+    if not rows:
+        return None
+    return fd_lookup(rows, match["kickoff_at"], names.get(match.get("home"), set()), names.get(match.get("away"), set()))
+
+
+def load_null_red_card_matches(con: sqlite3.Connection, *, since: str | None, now: dt.datetime | None,
+                               windowed: bool) -> list[dict]:
+    """已有完场比分、但主客红牌都还是空的场次。列还没加时，视为全部未取得。"""
+    present = _red_card_columns_present(con)
+    q = ("select m.id, m.jingcai_date, m.jc_id, m.kickoff_at, m.home_team, m.away_team, "
+         "r.home_goals, r.away_goals, r.total_goals, r.wdl "
+         "from matches m join results r on r.match_id = m.id "
+         "where r.home_goals is not null and r.away_goals is not null")
+    if present:
+        q += " and r.home_red_cards is null and r.away_red_cards is null"
+    args: list = []
+    if since:
+        q += " and m.kickoff_at >= ?"
+        args.append(since)
+    out = []
+    for row in con.execute(q, args):
+        item = {"id": row[0], "jingcai_date": row[1], "jc_id": row[2], "kickoff_at": row[3],
+                "home": row[4], "away": row[5], "home_goals": int(row[6]), "away_goals": int(row[7]),
+                "total_goals": row[8], "wdl": row[9]}
+        if windowed:
+            if now is None:
+                continue
+            age = now - dt.datetime.fromisoformat(item["kickoff_at"])
+            if age < dt.timedelta(hours=MAIN_PULL_H) or age > dt.timedelta(hours=CUTOFF_H):
+                continue
+        out.append(item)
+    return out
+
+
+def unresolved_red_card_conflicts(con: sqlite3.Connection) -> set[int]:
+    try:
+        return {row[0] for row in con.execute(
+            "select match_id from result_ingest_flags where flag = ? and resolved_at is null",
+            (RED_CARD_CONFLICT_FLAG,))}
+    except sqlite3.Error:
+        return set()
+
+
+def plan_red_card_fills(matches: list[dict], csl: dict, rows: list[dict], names: dict,
+                        conflict_ids: set[int]) -> list[dict]:
+    """只计划补空着的红牌。比分对不上的来源不算可用数字。已有冲突时，不改用单侧数字。"""
+    plans = []
+    for match in matches:
+        code = short_code(match.get("jc_id"))
+        item = csl.get((match.get("jingcai_date"), code)) if code else None
+        stored = (match["home_goals"], match["away_goals"])
+        csl_cards = csl_red_cards(item)
+        if csl_cards is not None and csl_score(item) != stored:
+            csl_cards = None
+        fd_cards = usable_fd_red_cards(_fd_row_for_match(rows, names, match), stored)
+        resolved = resolve_red_cards(csl_cards, fd_cards)
+        agreed = csl_cards is not None and fd_cards is not None and tuple(csl_cards) == tuple(fd_cards)
+        if resolved["conflict"]:
+            plans.append({"match": match, "action": "conflict", "detail": resolved["detail"], "cards": None,
+                          "source": None})
+            continue
+        if resolved["cards"] is None:
+            continue
+        if match["id"] in conflict_ids and not agreed:
+            continue
+        plans.append({"match": match, "action": "fill", "cards": resolved["cards"], "source": resolved["source"],
+                      "detail": None, "resolve_conflict": match["id"] in conflict_ids})
+    return plans
+
+
+def apply_red_card_fills(db: str, plans: list[dict], backup_root: Path, now: dt.datetime, *, dry_run: bool) -> dict:
+    """只更新仍为 NULL 的两列红牌。SET 子句不包含比分。不计算竞彩赛果，也不打开双写。"""
+    fills = [p for p in plans if p["action"] == "fill"]
+    conflicts = [p for p in plans if p["action"] == "conflict"]
+    result = {
+        "dry_run": dry_run,
+        "checked": len(plans),
+        "would_update": len(fills),
+        "updated": 0,
+        "conflicts": len(conflicts),
+        "backup": None,
+        "matches": [{"match_id": p["match"]["id"], "action": p["action"], "source": p.get("source"),
+                     "red_cards": None if p.get("cards") is None else [p["cards"][0], p["cards"][1]],
+                     "home_goals": p["match"]["home_goals"], "away_goals": p["match"]["away_goals"]}
+                    for p in plans],
+    }
+    if dry_run or (not fills and not conflicts):
+        return result
+    result["backup"] = backup(db, backup_root, tag="red-cards")
+    con = sqlite3.connect(db, timeout=60)
+    try:
+        ensure_schema(con)
+        ensure_results_red_card_columns(con)
+        con.commit()
+        with con:
+            for plan in fills:
+                match = plan["match"]
+                home_red, away_red = plan["cards"]
+                changed = con.execute(
+                    "update results set home_red_cards = ?, away_red_cards = ? "
+                    "where match_id = ? and home_red_cards is null and away_red_cards is null "
+                    "and home_goals is ? and away_goals is ? and total_goals is ? and wdl is ?",
+                    (home_red, away_red, match["id"], match["home_goals"], match["away_goals"],
+                     match["total_goals"], match["wdl"]))
+                if changed.rowcount:
+                    result["updated"] += 1
+                    if plan.get("resolve_conflict"):
+                        con.execute(
+                            "update result_ingest_flags set resolved_at = ? "
+                            "where match_id = ? and flag = ? and resolved_at is null",
+                            (iso(now), match["id"], RED_CARD_CONFLICT_FLAG))
+            for plan in conflicts:
+                match = plan["match"]
+                con.execute(
+                    "insert into result_ingest_flags(match_id, flag, detail_json, first_seen_at, last_seen_at) "
+                    "values (?, ?, ?, ?, ?) on conflict(match_id, flag) do update set "
+                    "detail_json = excluded.detail_json, last_seen_at = excluded.last_seen_at",
+                    (match["id"], RED_CARD_CONFLICT_FLAG, json.dumps(plan["detail"], ensure_ascii=False),
+                     iso(now), iso(now)))
+    finally:
+        con.close()
+    return result
+
+
+def fill_due_red_cards(args, cl: FiveDF | None, now: dt.datetime, log, already_days: set[str] | None = None) -> dict:
+    """开赛后 3 到 6 小时内、红牌仍为空的已入库赛果，用本轮缓存补两列。不改比分。"""
+    db = check_db_path(args.db)
+    ro = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=60)
+    try:
+        todo = load_null_red_card_matches(ro, since=getattr(args, "since", None), now=now, windowed=True)
+        conflict_ids = unresolved_red_card_conflicts(ro) if todo else set()
+    finally:
+        ro.close()
+    if not todo:
+        return {"checked": 0, "updated": 0, "conflicts": 0, "dry_run": False}
+    days = sorted({m["jingcai_date"] for m in todo if m.get("jingcai_date")})
+    seen = already_days or set()
+    if cl:
+        for day in days:
+            if day in seen:
+                continue
+            try:
+                fetch_csl_day(cl, day, Path(args.csl_dir))
+            except Exception as exc:
+                log(f"红牌补数的 5DF 清单 {day} 拉取失败：{exc}")
+    csl = load_csl([args.csl_dir]) if getattr(args, "csl_dir", None) else {}
+    rows, names = _load_local_fd(db, Path(getattr(args, "out_dir", "") or "."))
+    plans = plan_red_card_fills(todo, csl, rows, names, conflict_ids)
+    result = apply_red_card_fills(db, plans, Path(args.backup_root), now, dry_run=False)
+    if result.get("backup"):
+        prune_backups(Path(args.backup_root), tag="red-cards")
+        log(f"红牌补数：写入 {result['updated']} 场，冲突 {result['conflicts']} 场，备份 {result['backup']}")
+    return result
+
+
+def run_red_card_backfill(db: str, csl_dirs: list[str], fd_dir: Path | None, team_map: Path | None,
+                          backup_root: Path, now: dt.datetime, *, since: str | None, apply: bool) -> dict:
+    """历史回填：只填 results 里仍为 NULL 的红牌列。默认由调用方按 dry-run 调用。不拉接口。"""
+    if is_formal_db_path(db):
+        raise SystemExit("红牌回填拒绝使用正式库路径。")
+    real = os.path.realpath(db)
+    if not os.path.isfile(real):
+        raise SystemExit(f"红牌回填找不到数据库文件：{db}")
+    ro = sqlite3.connect(f"file:{real}?mode=ro", uri=True, timeout=60)
+    try:
+        matches = load_null_red_card_matches(ro, since=since, now=None, windowed=False)
+        conflict_ids = unresolved_red_card_conflicts(ro)
+    finally:
+        ro.close()
+    if fd_dir is None:
+        rows, names = [], {}
+    else:
+        rows, names = _load_local_fd(real, fd_dir, fd_dir=fd_dir, team_map=team_map)
+    csl = load_csl(csl_dirs) if csl_dirs else {}
+    plans = plan_red_card_fills(matches, csl, rows, names, conflict_ids)
+    return apply_red_card_fills(real, plans, backup_root, now, dry_run=not apply)
 
 
 def crosscheck_single_source(db: str, out_dir: Path, backup_root: Path, now: dt.datetime, *, since: str | None = None,
@@ -1424,6 +1786,35 @@ def rollback_sporttery_crosscheck(db: str, audit_path: Path, backup_root: Path, 
     return _finish_report(result, out_dir, now, "sporttery_crosscheck_rollback_result.json")
 
 
+def _flag_present(argv, flag: str) -> bool:
+    items = list(sys.argv[1:] if argv is None else argv)
+    return any(item == flag or item.startswith(flag + "=") for item in items)
+
+
+def _red_cards_cli(args, argv) -> None:
+    """红牌历史回填入口。缺 --db 或指向正式库时直接退出，不打开数据库。"""
+    if args.rollback:
+        raise SystemExit("--rollback 只用于子命令 sporttery_crosscheck（竞彩网二次核对）。")
+    if not args.db:
+        raise SystemExit("红牌回填必须显式传入 --db，不能默认到正式库。")
+    if is_formal_db_path(args.db):
+        raise SystemExit("红牌回填拒绝使用正式库路径。")
+    if args.apply and args.dry_run:
+        raise SystemExit("红牌回填不能同时指定 --apply 和 --dry-run。不带 --apply 时只预览，不写数据库。")
+    since = args.since if _flag_present(argv, "--since") else None
+    result = run_red_card_backfill(
+        args.db,
+        list(args.red_csl_dir or []),
+        Path(args.red_fd_dir) if args.red_fd_dir else None,
+        Path(args.fd_team_map) if args.fd_team_map else None,
+        Path(args.backup_root),
+        now_cn(),
+        since=since,
+        apply=bool(args.apply),
+    )
+    print(json.dumps(result, ensure_ascii=False))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(
         description="赛果定时入库（只写研究副本 v2d3）。子命令 sporttery_crosscheck 是竞彩网二次核对。",
@@ -1435,20 +1826,31 @@ def main(argv=None):
             "加上 --apply 之后，才会在整库备份之后，把比分完全一致的场次来源改为 sporttery+5df_csl，并解除单一来源未解决标记。赛果表里的比分不会改写。\n"
             "预览回退：python scripts/live/result_ingest.py sporttery_crosscheck --rollback 审计文件.json\n"
             "确认回退：python scripts/live/result_ingest.py sporttery_crosscheck --rollback 审计文件.json --apply\n"
-            "回退前会再做一次整库备份。只有当前数值仍与审计文件中的升级后数值一致时，该场才会回到升级前。"
+            "回退前会再做一次整库备份。只有当前数值仍与审计文件中的升级后数值一致时，该场才会回到升级前。\n"
+            "\n"
+            "子命令 red_cards 只补 results 里仍为 NULL 的 home_red_cards 与 away_red_cards，不改比分。\n"
+            "默认只预览，不写数据库。必须同时显式传入 --db 和 --apply 才会写入。\n"
+            "不带 --db 会直接拒绝，不会默认到正式库。正式库路径即使写出来也会拒绝。\n"
+            "红牌来源只用本地 --red-csl-dir 与 --red-fd-dir，不调用接口，不计算竞彩赛果。"
         ),
     )
     p.add_argument("cmd", choices=["daemon", "once", "backfill", "summary", "sporttery_import", "crosscheck",
-                                   "sporttery_crosscheck"])
+                                   "sporttery_crosscheck", "red_cards"])
     p.add_argument("--bundle", default=None, help="sporttery_import：大陆本机（YPC 优先，失败再用 MSI）刷新得到的 latest_bundle.json 在本机上的路径")
     p.add_argument("--note", default=None, help="sporttery_import：没拿到文件时写进汇总的原因")
     p.add_argument("--apply", action="store_true",
-                   help="只用于竞彩网二次核对：确认写入数据库。不带这个参数时只列出清单，不修改数据库。")
+                   help="竞彩网二次核对或红牌历史回填：确认写入数据库。不带这个参数时只列出清单，不修改数据库。")
     p.add_argument("--rollback", default=None,
                    help="只用于竞彩网二次核对：审计文件路径。按其中的升级前数值回退来源和单一来源标记。不带 --apply 时只列出将回退的场次。")
     p.add_argument("--sporttery-cache", default=SPORTTERY_CACHE)
     p.add_argument("--fd-refresh", action="store_true", help="crosscheck：先下载 Football-Data.co.uk 公开 CSV")
-    p.add_argument("--db", default=os.environ.get("V2D3_DB_PATH") or (PROD_DB if FORMAL_MERGED else "/workspace/match-analysis-api/data/v2d3/app.db"))
+    p.add_argument("--red-csl-dir", action="append", default=None,
+                   help="red_cards：本地 5DF 中国体彩清单目录，可重复。不传则不用 5DF。")
+    p.add_argument("--red-fd-dir", default=None,
+                   help="red_cards：本地 Football-Data.co.uk CSV 目录。不传则不用该来源。")
+    p.add_argument("--fd-team-map", default=None,
+                   help="red_cards：中文队名到英文队名的补充对照 CSV。")
+    p.add_argument("--db", default=None)
     p.add_argument("--out-dir", default="/workspace/odds-data/backfill/result-ingest-2026-10-14")
     p.add_argument("--backup-root", default="/workspace/backups")
     p.add_argument("--csl-dir", default=None)
@@ -1460,10 +1862,18 @@ def main(argv=None):
     p.add_argument("--no-sporttery-fetch", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args(argv)
-    if (a.apply or a.rollback) and a.cmd != "sporttery_crosscheck":
-        raise SystemExit("--apply 和 --rollback 只用于子命令 sporttery_crosscheck（竞彩网二次核对）。")
+    if a.cmd == "red_cards":
+        _red_cards_cli(a, argv)
+        return
+    if a.rollback and a.cmd != "sporttery_crosscheck":
+        raise SystemExit("--rollback 只用于子命令 sporttery_crosscheck（竞彩网二次核对）。")
+    if a.apply and a.cmd != "sporttery_crosscheck":
+        raise SystemExit("--apply 只用于竞彩网二次核对或红牌历史回填。红牌回填不带 --apply 时只预览，不修改数据库。")
     if a.cmd == "sporttery_crosscheck" and a.apply and a.dry_run:
         raise SystemExit("竞彩网二次核对不能同时指定 --apply 和 --dry-run。不带 --apply 时已经是只读预览。")
+    if not a.db:
+        a.db = os.environ.get("V2D3_DB_PATH") or (
+            PROD_DB if FORMAL_MERGED else "/workspace/match-analysis-api/data/v2d3/app.db")
     od = Path(a.out_dir)
     a.csl_dir = a.csl_dir or str(od / "csl_raw")
     a.sporttery_dir = a.sporttery_dir or str(od / "sporttery_raw")
@@ -1504,8 +1914,12 @@ def main(argv=None):
         ro.close()
         sp = load_sporttery([a.sporttery_dir] + a.extra_sporttery_dir)
         lv = load_csl([a.csl_dir])
-        decs = [(m, decide(sporttery_lookup(sp, m["jingcai_date"], short_code(m["jc_id"]), m["home"], m["away"]),
-                           lv.get((m["jingcai_date"], short_code(m["jc_id"]))))) for m in ms]
+        fd_rows_list, fd_names = _load_local_fd(db, od)
+        decs = []
+        for m in ms:
+            key = (m["jingcai_date"], short_code(m["jc_id"]))
+            raw = decide(sporttery_lookup(sp, m["jingcai_date"], key[1], m["home"], m["away"]), lv.get(key))
+            decs.append((m, annotate_red_cards(raw, lv.get(key), _fd_row_for_match(fd_rows_list, fd_names, m))))
         r = apply(db, decs, Path(a.backup_root), "result-ingest-backfill-20261014 (sporttery + 5df_csl)", now, a.dry_run)
         rep = [{"match_id": m["id"], "jingcai_date": m["jingcai_date"], "jc_id": m["jc_id"], "match": f"{m['home']} 对 {m['away']}",
                 "kickoff_at": m["kickoff_at"], "scope": m["scope"], "action": d["action"], "score": _s(d.get("score")),

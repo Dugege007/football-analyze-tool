@@ -97,7 +97,7 @@ item
 ├─ prediction_hidden_reason       no_prediction | produced_after_as_of | null
 ├─ produced_at                     = prediction.produced_at（冻结只读）
 ├─ as_of                           本次截止时刻
-├─ result | null                   {home_goals, away_goals, total_goals, score:"1-0", wdl}
+├─ result | null                   {home_goals, away_goals, total_goals, score:"1-0", wdl, home_red_cards, away_red_cards}
 ├─ result_hidden_reason           before_kickoff | not_visible_yet(开赛后 3h 内) | no_result | kickoff_unknown | null
 ├─ hidden_reason                   = result_hidden_reason（前端名）
 ├─ settlement | null               §7
@@ -372,6 +372,8 @@ item
 | `result_total_goals` | 赛果：total_goals |
 | `result_score` | 赛果：score |
 | `result_wdl` | 赛果：wdl |
+| `result_home_red_cards` | 赛果：主队红牌。null 为未取得，0 为确认没有红牌，大于等于 1 才显示角标 |
+| `result_away_red_cards` | 赛果：客队红牌。语义同 result_home_red_cards |
 | `result_hidden_reason` | 赛果：hidden_reason |
 | `hidden_reason` | 赛果/结算为空原因 |
 | `settlement_settlement_version` | 结算：settlement_version |
@@ -1535,7 +1537,9 @@ N5 快照强制 `rho_global` / `rho_league` / `rho_league_se` + 指纹 `rho=glob
   "away_goals": 0,
   "total_goals": 1,
   "score": "1-0",
-  "wdl": "胜"
+  "wdl": "胜",
+  "home_red_cards": null,
+  "away_red_cards": null
  },
  "result_hidden_reason": null,
  "hidden_reason": null,

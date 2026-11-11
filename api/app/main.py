@@ -322,6 +322,9 @@ def build_result(conn: sqlite3.Connection, match_pk: int) -> dict | None:
         "away_goals": r["away_goals"],
         "total_goals": r["total_goals"],
         "wdl": r["wdl"],
+        # 未迁移或未取得时为 null。0 表示完赛来源明确没有红牌，不能把缺数写成 0。
+        "home_red_cards": row_get(r, "home_red_cards"),
+        "away_red_cards": row_get(r, "away_red_cards"),
     }
 
 

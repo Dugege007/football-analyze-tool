@@ -12,7 +12,9 @@
 
 - 只写研究副本 `…/v2d3/app.db`，路径是正式库 `data/app.db` 或不以 `v2d3/app.db` 结尾时直接拒绝运行。
 - 每次有内容要写之前，先用 sqlite backup 备份到 `/workspace/backups/v2d3-before-result-ingest-<时间戳>/app.db`。程序只清理自己的备份目录，保留最近 24 份，外加每天第一份。
-- `results` 只插入缺失的行，已有的行一律不覆盖。
+- `results` 只插入缺失的行，已有比分一律不覆盖。
+- 新插入的行同时写 `home_red_cards`、`away_red_cards`。未取得为 NULL，不用 0 代替。只有完赛且来源给出主客两个数字才写入。5DF 未开赛清单里的 0 不记为确认值。只有竞彩网赛果时两列保持 NULL。Football-Data.co.uk 主联赛 CSV 的 `HR`/`AR` 只在 5DF 没有可用红牌时补齐；`new_*.csv` 没有这两列时跳过，不补 0。两边数字不一致时两列留空，并记 `red_card_conflict`。黄牌不写。
+- 已有赛果但红牌仍为 NULL 时，后续 tick 或子命令 `red_cards` 只补这两列。`red_cards` 默认只预览；必须同时显式传入 `--db` 和 `--apply` 才写入，且拒绝正式库路径。不计算竞彩赛果，不打开双写。
 - 竞彩网与 5DF 两个来源都有比分且不一致时，不写入，记 `score_conflict`。只有一个来源有比分时按该来源写入，并在来源表里记明。
 - 竞彩网与 5DF 的对齐方式：5DF 按「竞彩日加编号」对齐；竞彩网的 `matchDate` 是开赛的自然日，所以按「竞彩日或次日加编号」对齐，主客两队与库里队名一个相同的字都没有时视为没对上。
 

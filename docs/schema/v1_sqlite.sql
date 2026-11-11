@@ -47,11 +47,13 @@ CREATE INDEX IF NOT EXISTS idx_matches_jc
 
 -- ---------- result（无赛果时整行可缺或字段为 NULL）----------
 CREATE TABLE IF NOT EXISTS results (
-  match_id     INTEGER PRIMARY KEY REFERENCES matches(id) ON DELETE CASCADE,
-  home_goals   INTEGER,
-  away_goals   INTEGER,
-  total_goals  INTEGER,
-  wdl          TEXT                  -- 胜/平/负
+  match_id       INTEGER PRIMARY KEY REFERENCES matches(id) ON DELETE CASCADE,
+  home_goals     INTEGER,
+  away_goals     INTEGER,
+  total_goals    INTEGER,
+  wdl            TEXT,                 -- 胜/平/负
+  home_red_cards INTEGER,              -- 主队红牌。NULL=未取得；0=完赛来源明确为零；正整数=确认张数
+  away_red_cards INTEGER               -- 客队红牌。语义同 home_red_cards。黄牌不入库
 );
 
 -- ---------- stats（嵌套结构 v1 用 JSON 存，避免过早打散）----------
