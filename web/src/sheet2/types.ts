@@ -266,6 +266,10 @@ export interface Row {
     away_goals: number | null
     total_goals: number | null
     outcome_1x2: 'home' | 'draw' | 'away' | null
+    /** 主队红牌。缺字段或 null 都不是 0；只有大于等于 1 的整数才显示角标。 */
+    home_red_cards?: number | null
+    /** 客队红牌。含义与 home_red_cards 相同。 */
+    away_red_cards?: number | null
     by_book: Partial<Record<Book, ByBookResult>> | null
     jc: {
       had: ({ side: 'home' | 'draw' | 'away' | null; odds: number | null; cell_status?: CellStatus } & ResultReason) | null

@@ -30,6 +30,7 @@ import { DEFAULT_STRATEGY, STRATEGY_WHITELIST } from '../api/strategies'
 import OddsWaterTimelineChart from '../components/OddsWaterTimelineChart'
 import { HelpTip, LabelWithHelp } from '../components/HelpTip'
 import { DisplayLeague, DisplayTeam } from '../components/DisplayName'
+import { TeamNameWithRedCard } from '../components/RedCardBadge'
 import { matchLabels } from '../names/matchLabels'
 import { isCollectorEmpty } from '../sheet/types'
 import { apiBase } from '../api/dataSource'
@@ -207,7 +208,13 @@ export default function MatchDetailPage() {
           <Tag>{match.scope === 'jingcai' ? '竞彩' : '扩展'}</Tag>
         </Space>
         <Title level={3} style={{ marginTop: 8, marginBottom: 4 }}>
-          <DisplayTeam label={labels.home} /> vs <DisplayTeam label={labels.away} />
+          <TeamNameWithRedCard side="home" result={detail.result}>
+            <DisplayTeam label={labels.home} />
+          </TeamNameWithRedCard>
+          {' vs '}
+          <TeamNameWithRedCard side="away" result={detail.result}>
+            <DisplayTeam label={labels.away} />
+          </TeamNameWithRedCard>
         </Title>
         <Text type="secondary">
           竞彩日 {match.date}

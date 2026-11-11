@@ -1,5 +1,6 @@
 import { labelsForTableMatch } from '../names/matchLabels'
 import { NameHover } from '../components/DisplayName'
+import { TeamNameWithRedCard } from '../components/RedCardBadge'
 import type { ColDef, ColGroupDef, ICellRendererParams } from 'ag-grid-community'
 import { Tag, Tooltip } from 'antd'
 import type { ReactNode } from 'react'
@@ -161,25 +162,29 @@ function baseChildren(): Col[] {
         )
       } },
     { colId: 'home', headerName: '主队', width: w('base.home'), pinned: 'left', valueGetter: (p) => (p.data ? labelsForTableMatch(p.data.match).home.text : null) ?? '-',
-      // 格子里是常用名。悬停列出别名，一行一个，不加前缀。
+      // 格子里是常用名。悬停列出别名，一行一个，不加前缀。红牌角标在队名和星号外侧。
       cellRenderer: (p: P) => {
         const labels = p.data ? labelsForTableMatch(p.data.match) : null
         return (
-          <span>
-            <NameHover tip={labels?.home.tip}>{p.value}</NameHover>
-            {labels?.home.pending && <TeamPendingMark />}
-          </span>
+          <TeamNameWithRedCard side="home" result={p.data?.result}>
+            <span>
+              <NameHover tip={labels?.home.tip}>{p.value}</NameHover>
+              {labels?.home.pending && <TeamPendingMark />}
+            </span>
+          </TeamNameWithRedCard>
         )
       } },
     { colId: 'away', headerName: '客队', width: w('base.away'), pinned: 'left', valueGetter: (p) => (p.data ? labelsForTableMatch(p.data.match).away.text : null) ?? '-',
-      // 格子里是常用名。悬停列出别名，一行一个，不加前缀。
+      // 格子里是常用名。悬停列出别名，一行一个，不加前缀。红牌角标在队名和星号外侧。
       cellRenderer: (p: P) => {
         const labels = p.data ? labelsForTableMatch(p.data.match) : null
         return (
-          <span>
-            <NameHover tip={labels?.away.tip}>{p.value}</NameHover>
-            {labels?.away.pending && <TeamPendingMark />}
-          </span>
+          <TeamNameWithRedCard side="away" result={p.data?.result}>
+            <span>
+              <NameHover tip={labels?.away.tip}>{p.value}</NameHover>
+              {labels?.away.pending && <TeamPendingMark />}
+            </span>
+          </TeamNameWithRedCard>
         )
       } },
     {
