@@ -305,7 +305,8 @@ components:
           nullable: true
           description: >
             v0.3.2：与详情 GET /matches/{id} 的 result 同结构（build_result）；
-            无赛果为 null。至少含 home_goals/away_goals；另有 total_goals/wdl。
+            无赛果为 null。至少含 home_goals/away_goals；另有 total_goals/wdl，
+            以及可空的 home_red_cards/away_red_cards（null=未取得，0=完赛来源明确为零）。
           oneOf:
             - $ref: "#/components/schemas/Result"
 
@@ -400,6 +401,14 @@ components:
         away_goals: { type: integer }
         total_goals: { type: integer }
         wdl: { type: string, enum: [胜, 平, 负] }
+        home_red_cards:
+          type: integer
+          nullable: true
+          description: 主队红牌。null 表示未取得，0 表示完赛来源明确为零，正整数为确认张数。黄牌不在本字段。
+        away_red_cards:
+          type: integer
+          nullable: true
+          description: 客队红牌。语义同 home_red_cards。
 
     Stats:
       type: object

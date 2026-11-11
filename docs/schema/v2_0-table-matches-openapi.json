@@ -1901,6 +1901,30 @@
               }
             ],
             "title": "Wdl"
+          },
+          "home_red_cards": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Red Cards",
+            "description": "主队红牌。null 表示未取得，0 表示完赛来源明确为零，正整数为确认张数。"
+          },
+          "away_red_cards": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Away Red Cards",
+            "description": "客队红牌。语义同 home_red_cards。"
           }
         },
         "additionalProperties": true,

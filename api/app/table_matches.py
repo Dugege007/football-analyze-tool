@@ -2162,6 +2162,9 @@ class Result(_M_):
     total_goals: Optional[int] = None
     score: Optional[str] = None
     wdl: Optional[str] = None
+    # 主客红牌。null=未取得；0=完赛来源明确为零；正整数=确认张数。前端只在整数大于等于 1 时显示角标。
+    home_red_cards: Optional[int] = None
+    away_red_cards: Optional[int] = None
     outcome_1x2: Optional[str] = None  # 完场胜平负：home | draw | away。未完赛为空。
     by_book: Optional[dict] = None  # 五家机构与多家平均的机构赛果。未完赛整段为空，不写成各格都无法获取。
     jc: Optional["JcResult"] = None  # 2026-10-14：竞彩胜平负（had）与让球胜平负（hhad）的赛果和临盘赔率
@@ -2735,6 +2738,17 @@ def build_jc_result(result, res_hidden, jc_1x2: Optional[dict], jc_hhad: Optiona
             "hhad": _jc_result_cell(result, res_hidden, (jc_hhad or {}).get("close"), True)}
 
 
+def stored_red_cards(row) -> tuple[int | None, int | None]:
+    """读取赛果行上的主客红牌。列不存在或值为空时返回 None，不用 0 代替未取得。"""
+    def one(key: str):
+        if row is None or key not in getattr(row, "keys", lambda: [])():
+            return None
+        value = row[key]
+        return None if value is None else int(value)
+
+    return one("home_red_cards"), one("away_red_cards")
+
+
 def attach_market_result(result: dict | None, res_hidden: str | None, jc_1x2: Optional[dict],
                          jc_hhad: Optional[dict], *, finished: bool, outcome: str | None,
                          by_book: dict | None) -> dict | None:
@@ -3157,9 +3171,11 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             res_hidden = "no_result"
         else:
             hg, ag = int(res_row["home_goals"]), int(res_row["away_goals"])
+            home_red, away_red = stored_red_cards(res_row)
             result = {"status": "finished", "home_goals": hg, "away_goals": ag,
                       "total_goals": res_row["total_goals"] if res_row["total_goals"] is not None else hg + ag,
-                      "score": f"{hg}-{ag}", "wdl": res_row["wdl"]}
+                      "score": f"{hg}-{ag}", "wdl": res_row["wdl"],
+                      "home_red_cards": home_red, "away_red_cards": away_red}
         if result is not None:  # 欧赔 api_closing：只在完赛（赛果可见）后单独返回
             for b in BOOKS:
                 apc = build_api_closing(d, mpk, b)
@@ -3169,7 +3185,8 @@ def build_table(conn: sqlite3.Connection, *, date_from: str | None, date_to: str
             settlement, set_hidden = None, ("no_prediction" if pr is None else res_hidden)
             if res_hidden in RESULT_SPECIAL_STATUSES:
                 result = {"status": res_hidden, "home_goals": None, "away_goals": None,
-                          "total_goals": None, "score": None, "wdl": None}
+                          "total_goals": None, "score": None, "wdl": None,
+                          "home_red_cards": None, "away_red_cards": None}
         else:
             settlement, set_hidden = _settle(pr if prediction is not None else None, result, d, mpk, s_ver)
             # 0.3.19：人工复核 / 推迟待核 → 不结算（validate 同口径单独计数）；void_postponed 钩子（时限未定 = 不生效）
