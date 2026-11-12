@@ -7,7 +7,7 @@ import {
   visibleRedCardCount,
   type RedCardResult,
   type RedCardSide,
-} from './redCardBadge'
+} from './redCardBadgeLogic'
 
 /**
  * 队名上的红牌角标。
