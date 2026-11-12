@@ -14,7 +14,7 @@ import {
   redCardCountOf,
   redCardCountTip,
   visibleRedCardCount,
-} from '../src/components/redCardBadge'
+} from '../src/components/redCardBadgeLogic'
 import { mapApiRow } from '../src/sheet2/load'
 
 const baseMatch = {

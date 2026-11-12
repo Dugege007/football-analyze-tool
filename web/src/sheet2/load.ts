@@ -3,7 +3,7 @@
  * 不请求 live 快照（include_live=none），不读手工澳门列（ah.macau 已指向 5DollarFootballAPI 来源）。
  */
 import { apiBase } from '../api/dataSource'
-import { passthroughRedCardCount } from '../components/redCardBadge'
+import { passthroughRedCardCount } from '../components/redCardBadgeLogic'
 import { mockRows } from './mock'
 import type { AhCell, OuCell, CellStatus, JcHhadCell, MatchStatus, Phase, Phased, Row, X1x2Cell } from './types'
 import { mapFundStats } from './fundamentals'
