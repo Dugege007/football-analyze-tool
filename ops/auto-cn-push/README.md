@@ -39,7 +39,20 @@
 
 现网脚本在 db 哈希相同就删掉 ready 并退出。仓库里的推送入口没有 SSH 目标就直接失败，不会改在本机执行；测试要显式设置 `FAT_CN_ALLOW_TEST_LOCAL=1`。准备快照前必须已有可信 `push_base.json`。文件缺失、损坏或没有提交身份时，不发布 staging，也不写 pending。初始基线只能从维护脚本的 MSI 基线导入一次。确认真实 `COMMIT_JSON` 后，在和 prepare 同一把锁里把 `push_base` 推进到该提交。Windows 入口先按包内绑定授权，再提交。
 
-同库但 gz 不同时，仍要先有维护基线，再授权这个 gz，然后由事务校验并提交新回执。基线只能由 `init_server_baseline.sh` 生成：MSI 原回执、对应快照和服务器库文件的 db 哈希必须一致。它不把现场查到的远端哈希塞进前驱，也不写 YuePC 回执。
+同库但 gz 不同时，仍要先有维护基线，再授权这个 gz，然后由事务校验并提交新回执。基线只能由 `init_server_baseline.sh` 生成：MSI 原回执、对应快照和服务器库文件的 db 哈希必须一致。它不把现场查到的远端哈希塞进前驱，也不写 YuePC 回执。回执 JSON 里已经有 `source=msi` 时仍走这个脚本。
+
+没有 `source` 字段的原回执走 `migrate_legacy_msi_baseline.sh`。`--evidence-source msi` 只是操作者声明，不是机器认证这份文件来自 MSI。脚本用 `--receipt-sha256` 绑定原文件字节，并核对快照和服务器库与回执里的 `db_sha256` 一致。`commit_id` 仍由声明的 `msi`、竞彩日、db 哈希和 gz 哈希算出，不手填。它与正式推送共用 `FAT_CN_LOCK`：证据读取、现库核验、审计和基线发布都在这把锁里，并在锁内重查状态。先把 `legacy_msi_baseline_audit.json` 落盘并校验，基线是最后的提交点。审计冲突或已有不同 commit 时拒绝，不覆盖。YuePC 回执、声明不是 `msi`、原文件哈希不符、或快照与服务器不一致，都不写基线。
+
+2026-11-20 的 MSI 原 `LAST_PUSHED` 是 334 字节，sha256 为 `eddd8ca744cf5a6411a876071c2064e436de93f1cdd35b7086fe88e4004fe1e8`。字段只有 `jc_day`、`pushed_at`、`db_sha256`、`gz_sha256`、`backup`。db 哈希 `dd20c0e18359a388d752a6d72ef97c22e92745954b345ad631abd7b8d757fb30` 已与现服务器和 MSI 保留快照核对过。迁移时把这份原文件原样交给脚本，`--receipt-sha256` 就填上面这个文件哈希。不要先改文件再算哈希。
+
+2026-11-21 22:45 的旧循环已经写出 11-21 的旧格式 pending 和 staging，22 场齐套，尚未投递。处理顺序是：
+
+- 先停掉旧循环，避免它在归档期间再写 pending 或 staging。
+- 持有和 `--prepare` 相同的 `logs/prepare.lock`。锁内把 `pending_push.json` 和整个 `staging/` 按原字节复制到审计目录，再把活跃路径上的这两份移出。不要在锁外边复制边让旧循环继续写。
+- 不要删掉审计副本，也不要把它们标成已推。不要把新的 `expected_commit_id` 倒填进旧包的 `meta.json` 或 gz 注释。旧包不能拿去授权。
+- 释放 prepare 锁并导入这次维护基线之后，再 `--prepare`。新包在准备时写入冻结前驱。留着活跃 pending 时准备会停在 `pending_exists`。11-21 在新回执写出之前仍是未推。
+
+box 上没有 crontab 安装器时，安装器正常停止。不要为了让它退出 0 去写一份假的 cron。调度另查可安装的方式。YuePC 旧任务已停，原回执仍是 11-11。MSI 代码已与 main 对齐。API 和激活钩子还没有上线。
 
 换库使用目标目录里的临时文件再 `os.replace`。随后必须运行生产激活钩子。钩子要报告正在运行的 API 指纹，`fingerprint_source` 必须是 `running_api`。只对磁盘文件做 sha256 不能当成服务已经在跑。事务不把预期哈希放进环境变量。钩子没配置就失败，不换库。激活对不上时先恢复文件，再跑回滚钩子。回滚对不上就写 `CN_PUSH_ALERT.json`，不发成功回执。YuePC 仍优先，MSI 仍是备用。
 
