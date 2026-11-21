@@ -2041,6 +2041,102 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("# fat-auto-cn-push-watchdog", final)
         self.assertNotIn("GONE", final)
 
+    def test_legacy_msi_receipt_migrates_without_rewriting_source(self):
+        raw = b"legacy-msi-snapshot"
+        db_sha = hashlib.sha256(raw).hexdigest()
+        gz_sha = "cd" * 32
+        receipt = {
+            "jc_day": "2026-11-20",
+            "pushed_at": "2026-11-21T03:40:00+08:00",
+            "db_sha256": db_sha,
+            "gz_sha256": gz_sha,
+            "backup": "kept-backup-name",
+        }
+        path = self.tmp / "LAST_PUSHED.json"
+        path.write_text(json.dumps(receipt, ensure_ascii=False) + "\n", encoding="utf-8")
+        original = path.read_bytes()
+        file_sha = hashlib.sha256(original).hexdigest()
+        server = self.tmp / "legacy-server"
+        server.mkdir()
+        db_path = server / "app_latest.db"
+        db_path.write_bytes(raw)
+        env = service_env(self.tmp / "legacy-env", server)
+        script = ["bash", str(ROOT / "migrate_legacy_msi_baseline.sh")]
+
+        def migrate(receipt_path=path, sha=file_sha, evidence="msi", snapshot=db_path):
+            return subprocess.run(
+                script + [
+                    "--receipt", str(receipt_path),
+                    "--snapshot", str(snapshot),
+                    "--evidence-source", evidence,
+                    "--receipt-sha256", sha,
+                ],
+                env=env, text=True, capture_output=True, check=False,
+            )
+
+        yue = self.tmp / "yuepc-old.json"
+        yue_body = dict(receipt)
+        yue_body["source"] = "yuepc"
+        yue.write_text(json.dumps(yue_body, ensure_ascii=False) + "\n", encoding="utf-8")
+        yue_sha = hashlib.sha256(yue.read_bytes()).hexdigest()
+        refused = migrate(yue, yue_sha)
+        self.assertEqual(refused.returncode, 19, refused.stdout + refused.stderr)
+        self.assertIn("NOT_MSI_RECEIPT", refused.stderr)
+        self.assertFalse((server / "LAST_COMMIT.json").exists())
+        bad_evidence = migrate(evidence="yuepc")
+        self.assertEqual(bad_evidence.returncode, 19, bad_evidence.stderr)
+        self.assertIn("EVIDENCE_SOURCE_REFUSED", bad_evidence.stderr)
+        bad_file = migrate(sha="ab" * 32)
+        self.assertEqual(bad_file.returncode, 19, bad_file.stderr)
+        self.assertIn("RECEIPT_BYTES_MISMATCH", bad_file.stderr)
+        other = self.tmp / "other-snap.db"
+        other.write_bytes(b"different-db")
+        bad_snap = migrate(snapshot=other)
+        self.assertEqual(bad_snap.returncode, 19, bad_snap.stderr)
+        self.assertIn("BASELINE_HASH_MISMATCH", bad_snap.stderr)
+        self.assertFalse((server / "LAST_COMMIT.json").exists())
+        self.assertEqual(path.read_bytes(), original)
+        init = subprocess.run(
+            ["bash", str(ROOT / "init_server_baseline.sh"), "--receipt", str(path), "--snapshot", str(db_path)],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertIn("NOT_MSI_RECEIPT", init.stderr)
+        self.assertEqual(path.read_bytes(), original)
+        migrated = migrate()
+        self.assertEqual(migrated.returncode, 0, migrated.stdout + migrated.stderr)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertNotIn("source", json.loads(path.read_text(encoding="utf-8")))
+        record = json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))
+        audit = json.loads((server / "legacy_msi_baseline_audit.json").read_text(encoding="utf-8"))
+        commit_id = runner._baseline_commit_id("2026-11-20", db_sha, gz_sha)
+        self.assertEqual(record["commit_id"], commit_id)
+        self.assertTrue(record["legacy_migration"])
+        self.assertFalse(record["receipt_had_source"])
+        self.assertEqual(record["evidence_source"], "msi")
+        self.assertEqual(record["receipt_file_sha256"], file_sha)
+        self.assertEqual(record["original_fields"], ["backup", "db_sha256", "gz_sha256", "jc_day", "pushed_at"])
+        self.assertEqual(audit["kind"], "legacy_msi_baseline_audit")
+        self.assertEqual(audit["receipt_file_sha256"], file_sha)
+        self.assertNotIn("source", audit["original_fields"])
+        home = self.tmp / "legacy-home"
+        (home / "markers").mkdir(parents=True)
+        imported = runner.import_push_base(home, record)
+        self.assertTrue(imported["ok"], imported)
+        base = json.loads((home / "markers" / "push_base.json").read_text(encoding="utf-8"))
+        self.assertEqual(base["commit_id"], commit_id)
+        self.assertFalse(base["receipt_had_source"])
+        self.assertEqual(base["receipt_file_sha256"], file_sha)
+        self.assertFalse(list((home / "markers").glob("pushed_*.json")))
+        again = migrate()
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual(path.read_bytes(), original)
+        stripped = dict(record)
+        stripped["receipt_file_sha256"] = ""
+        rejected = runner.import_push_base(self.tmp / "stripped-home", stripped)
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(rejected["reason"], "baseline_untrusted")
+        self.assertFalse((self.tmp / "stripped-home" / "markers" / "push_base.json").exists())
+
     def test_content_identity_preserves_types_and_middle_rows(self):
         same_edge = ("HEAD", "TAIL")
         old = self._middle_db("OLD!")

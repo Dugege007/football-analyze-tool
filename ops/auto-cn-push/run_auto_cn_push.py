@@ -739,6 +739,16 @@ def _valid_maintenance_baseline(record: dict | None) -> bool:
         return False
     if norm_hash(record.get("remote_db_sha256")) not in ("", db_sha):
         return False
+    if record.get("legacy_migration") is True:
+        file_sha = norm_hash(record.get("receipt_file_sha256"))
+        if (
+            record.get("receipt_had_source") is not False
+            or record.get("evidence_source") != "msi"
+            or len(file_sha) != 64
+        ):
+            return False
+    elif record.get("legacy_migration") not in (None, False):
+        return False
     return record.get("commit_id") == _baseline_commit_id(jc_day, db_sha, gz_sha)
 
 
@@ -771,6 +781,12 @@ def import_push_base(home: Path, record: dict) -> dict:
             "gz_sha256": norm_hash(record.get("gz_sha256")),
             "initialized_from": "maintenance_baseline",
         }
+        if record.get("legacy_migration") is True:
+            payload["legacy_migration"] = True
+            payload["receipt_had_source"] = False
+            payload["evidence_source"] = "msi"
+            payload["receipt_file_sha256"] = norm_hash(record.get("receipt_file_sha256"))
+            payload["original_fields"] = list(record.get("original_fields") or [])
         write_json(path, payload)
         return {"ok": True, "already": False, "commit_id": payload["commit_id"]}
     finally:
