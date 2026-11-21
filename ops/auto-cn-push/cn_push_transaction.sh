@@ -177,6 +177,9 @@ def hook(role: str, expect: str) -> dict | None:
         return None
     if not isinstance(proof, dict) or proof.get("ok") is not True or proof.get("read_only") is not True:
         return None
+    if proof.get("fingerprint_source") != "running_api":
+        sys.stderr.write("fingerprint is not from the running api\n")
+        return None
     if str(proof.get("db_sha256") or "").lower() != expect:
         return proof
     return proof

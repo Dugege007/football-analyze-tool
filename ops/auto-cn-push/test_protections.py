@@ -867,16 +867,18 @@ def write_service_hook(path: Path) -> None:
         "    handle.write(role + '\\n')\n"
         "if mode == 'old_connection' and role == 'activate':\n"
         "    previous = served.read_text(encoding='utf-8').strip() if served.is_file() else actual\n"
-        "    print(json.dumps({'ok': True, 'db_sha256': previous, 'read_only': True}))\n"
+        "    print(json.dumps({'ok': True, 'db_sha256': previous, 'read_only': True, 'fingerprint_source': 'disk'}))\n"
+        "elif mode == 'disk_only':\n"
+        "    print(json.dumps({'ok': True, 'db_sha256': actual, 'read_only': True, 'fingerprint_source': 'disk'}))\n"
         "elif mode == 'rollback_lies' and role == 'activate':\n"
         "    previous = served.read_text(encoding='utf-8').strip() if served.is_file() else ''\n"
-        "    print(json.dumps({'ok': True, 'db_sha256': previous, 'read_only': True}))\n"
+        "    print(json.dumps({'ok': True, 'db_sha256': previous, 'read_only': True, 'fingerprint_source': 'disk'}))\n"
         "elif mode == 'rollback_lies' and role == 'rollback':\n"
-        "    print(json.dumps({'ok': True, 'db_sha256': '0' * 64, 'read_only': True}))\n"
+        "    print(json.dumps({'ok': True, 'db_sha256': '0' * 64, 'read_only': True, 'fingerprint_source': 'running_api'}))\n"
         "else:\n"
         "    served.parent.mkdir(parents=True, exist_ok=True)\n"
         "    served.write_text(actual + '\\n', encoding='utf-8')\n"
-        "    print(json.dumps({'ok': True, 'db_sha256': actual, 'read_only': True}))\n"
+        "    print(json.dumps({'ok': True, 'db_sha256': actual, 'read_only': True, 'fingerprint_source': 'running_api'}))\n"
         "PY\n",
         encoding="utf-8",
     )
@@ -1724,6 +1726,40 @@ class ReviewRegressionTests(unittest.TestCase):
             holder.wait(timeout=5)
             holder.stdout.close()
             holder.stderr.close()
+
+    def test_missing_flock_is_dependency_not_lock(self):
+        partial = self.tmp / "partial-bin"
+        partial.mkdir()
+        os.symlink("/bin/mkdir", partial / "mkdir")
+        drop = self.tmp / "drop-no-flock"
+        env = os.environ.copy()
+        env["PATH"] = str(partial)
+        failed = subprocess.run(
+            ["/bin/bash", str(ROOT / "hold_drop_lock.sh"), str(drop)],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(failed.returncode, 20, failed.stdout + failed.stderr)
+        self.assertIn("DEPENDENCY_MISSING", failed.stderr)
+        self.assertNotIn("DROP_LOCK_HELD", failed.stderr)
+
+    def test_disk_hash_is_not_a_running_api_fingerprint(self):
+        _server, db_path, env, drop = self._initialized_package(
+            "disk-fingerprint", b"current-db", b"replacement-db", "disk_only",
+        )
+        authorized = subprocess.run(
+            ["bash", str(ROOT / "authorize_push_baseline.sh"), "--dir", str(drop), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(authorized.returncode, 0, authorized.stdout + authorized.stderr)
+        failed = subprocess.run(
+            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
+        self.assertIn("running api", failed.stderr)
+        self.assertNotIn("COMMIT_JSON", failed.stdout)
+        self.assertEqual(db_path.read_bytes(), b"current-db")
+        self.assertFalse((drop / "LAST_PUSHED.json").exists())
 
     def test_receipt_migration_does_not_fabricate_middle_days(self):
         make_db(self.db, {

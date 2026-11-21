@@ -41,9 +41,17 @@
 
 同库但 gz 不同时，仍要先有维护基线，再授权这个 gz，然后由事务校验并提交新回执。基线只能由 `init_server_baseline.sh` 生成：MSI 原回执、对应快照和服务器库文件的 db 哈希必须一致。它不把现场查到的远端哈希塞进前驱，也不写 YuePC 回执。
 
-换库使用目标目录里的临时文件再 `os.replace`。随后必须运行生产激活钩子。钩子自己读正在运行的库并报告指纹，事务不把预期哈希放进环境变量供它回显。钩子没配置就失败，不换库。激活对不上时先恢复文件，再跑回滚钩子核对服务已经回到原库。回滚对不上就写 `CN_PUSH_ALERT.json`，不发成功回执。YuePC 仍优先，MSI 仍是备用。
+换库使用目标目录里的临时文件再 `os.replace`。随后必须运行生产激活钩子。钩子要报告正在运行的 API 指纹，`fingerprint_source` 必须是 `running_api`。只对磁盘文件做 sha256 不能当成服务已经在跑。事务不把预期哈希放进环境变量。钩子没配置就失败，不换库。激活对不上时先恢复文件，再跑回滚钩子。回滚对不上就写 `CN_PUSH_ALERT.json`，不发成功回执。YuePC 仍优先，MSI 仍是备用。
 
-这些只在换上仓库副本后才会在 YuePC / MSI 执行。旧脚本不调用这条事务，维护窗口里必须停掉旧入口。没有在 Windows 上执行过 PowerShell。`FAT_CN_BASH` 要能提供 `flock`、`python3` 和 `sha256sum`。Git Bash 收到的必须是 `/c/...` 这种路径，PowerShell 的 `C:\...` 要先转换。`install_package_atomic.ps1` 把脚本路径拼进 `ProcessStartInfo.Arguments`，目录名含空格时可能被拆开。这些都要在一台 Windows 上用带空格的投放目录验收：安装器持有的 `drop.operation.lock` 和推送打开的是同一个文件，推送在安装期间得到 `DROP_LOCK_HELD`。本环境没有这项验收，不能算通过。
+Windows 本机安装和推送使用同一把 `FileShare.None` 文件锁，不要求本机有 `flock`、Git Bash 或 PATH 上的 `python3`。推送用 `ssh.exe` 把原始字节送进远端已有的 bash/flock 事务。缺少 `ssh.exe` 或明确的 Python 时退出码 20，输出 `DEPENDENCY_MISSING`，不会报成锁冲突。不要安装 OpenSSH Server，不要开端口，也不要安装未知的 `flock.exe`。WSL 不是两台机器的默认路径。
+
+本环境没有 PowerShell，下面这条验收命令还没有在 YuePC / MSI 上跑过：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\fat-tools\windows_isolation_check.ps1" -DropDir "C:\Program Files\fat drop" -Python "C:\Python314\python.exe"
+```
+
+YuePC 把 `-Python` 换成那台机器上真实的 Python 3.12.10 可执行文件，不要用 `python3`，也不要落到 `WindowsApps` 存根。MSI 使用 `C:\Python314\python.exe`。最小依赖是 Windows PowerShell、OpenSSH 客户端 `ssh.exe`（不是 Server），以及上面这个明确的 `python.exe`。远端 Linux 仍使用已有的 bash、flock、python3 和 base64，不新增监听服务。
 
 11-20 的回执不能给 11-12 至 11-19 补造已推标记。没有与回执哈希一致的历史快照时，`migrate_receipt.py` 不写已推标记，也不清掉已有缺口。历史判断不使用调用方传来的 live 撤场目录。`--as-current` 只写 `evidence_current_*.json`，不写 `pushed_*.json`。已有不同证据的标记会停住，不覆盖。
 
@@ -80,7 +88,7 @@ bash ops/auto-cn-push/rollback_watchdog.sh
 - 服务器事务锁、投放目录锁，以及“同库不同 gz 由服务器提交新回执”。旧入口不调用 `invoke_cn_push.sh`，维护时必须停掉旧入口。
 - YuePC 仍优先，MSI 仍是备用。两边的仓库副本都进同一条事务；线上副本换掉之前，这条链不生效。
 - 11-12 至 11-19 若没有与 11-20 回执哈希一致的历史快照，不能标成当时已推。`--as-current` 只写 `evidence_current_*.json`，不写已推标记。
-- 本环境没有 PowerShell，没有执行 `install_package_atomic.ps1` 或 `push-formal-db.ps1`。安装器要先跑 `hold_drop_lock.sh` 再读包；这一点只在 bash 锁进程上做过交错测试。`FAT_CN_BASH` 的路径转换和带空格的 Windows 路径还没有验收。
+- 本环境没有 PowerShell，没有执行 `install_package_atomic.ps1`、`push-formal-db.ps1` 或 `windows_isolation_check.ps1`。Windows 本机锁还没有在 YuePC / MSI 上实测。
 
 ## 测试
 
