@@ -25,7 +25,7 @@ import protect  # noqa: E402
 import run_auto_cn_push as runner  # noqa: E402
 import watchdog  # noqa: E402
 from check_close_complete import evaluate  # noqa: E402
-from prepare_formal_package import build_package  # noqa: E402
+from prepare_formal_package import build_package, gzip_commit_id, write_db_gzip  # noqa: E402
 
 TODAY = date(2026, 11, 21)
 PROD = "/workspace/football-analyze-tool-ops/auto-cn-push-after-close-20261020"
@@ -800,19 +800,19 @@ class InstallTests(unittest.TestCase):
         self.assertIn("REFUSING_LEGACY_PREPARE_CRON", legacy.stdout)
 
 
-def stage_drop(directory: Path, raw: bytes, mtime: int, jc_day: str = "2026-11-20") -> str:
-    import io
-    blob_file = io.BytesIO()
-    with gzip.GzipFile(fileobj=blob_file, mode="wb", mtime=mtime) as handle:
-        handle.write(raw)
-    blob = blob_file.getvalue()
+def stage_drop(directory: Path, raw: bytes, mtime: int, jc_day: str = "2026-11-20", expected_commit_id: str | None = None) -> str:
     directory.mkdir(parents=True, exist_ok=True)
+    gz_path = directory / "app_latest.db.gz"
+    write_db_gzip(raw, gz_path, expected_commit_id, mtime=mtime)
+    blob = gz_path.read_bytes()
     db_sha = hashlib.sha256(raw).hexdigest()
     gz_sha = hashlib.sha256(blob).hexdigest()
-    (directory / "app_latest.db.gz").write_bytes(blob)
     (directory / "app_latest.db.sha256").write_text(db_sha + "\n", encoding="ascii")
     (directory / "app_latest.db.gz.sha256").write_text(gz_sha + "\n", encoding="ascii")
-    (directory / "meta.json").write_text(json.dumps({"jc_day": jc_day}), encoding="utf-8")
+    meta = {"jc_day": jc_day, "db_sha256": db_sha, "gz_sha256": gz_sha}
+    if expected_commit_id:
+        meta["expected_commit_id"] = expected_commit_id
+    (directory / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
     (directory / "app_latest.ready").write_text(json.dumps({
         "db_sha256": db_sha,
         "gz_sha256": gz_sha,
@@ -1108,22 +1108,18 @@ class ReviewRegressionTests(unittest.TestCase):
     def test_transaction_same_db_new_gz_and_stale_predecessor(self):
         make_db(self.db, historical_days())
         write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
-        prepared = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
-        pending = prepared["prepared"][0]
-        staging = self.home / "staging"
-        new_blob = (staging / "app_latest.db.gz").read_bytes()
-        raw = gzip.decompress(new_blob)
-        self.assertEqual(hashlib.sha256(new_blob).hexdigest(), pending["gz_sha256"])
+        probe = build_package(self.db, self.tmp / "probe", "2026-11-20", None)
+        raw = gzip.decompress((self.tmp / "probe" / "app_latest.db.gz").read_bytes())
+        self.assertEqual(gzip_commit_id((self.tmp / "probe" / "app_latest.db.gz").read_bytes()), "")
         old_file = io.BytesIO()
         with gzip.GzipFile(fileobj=old_file, mode="wb", mtime=11) as handle:
             handle.write(raw)
         old_blob = old_file.getvalue()
         old_gz = hashlib.sha256(old_blob).hexdigest()
-        self.assertNotEqual(old_gz, pending["gz_sha256"])
         old_body = json.dumps({
             "source": "msi",
-            "jc_day": pending["jc_day"],
-            "db_sha256": pending["db_sha256"],
+            "jc_day": "2026-11-20",
+            "db_sha256": probe["db_sha256"],
             "gz_sha256": old_gz,
         }).encode()
         server = self.tmp / "srv dir"
@@ -1136,7 +1132,7 @@ class ReviewRegressionTests(unittest.TestCase):
         forged.write_text(json.dumps({
             "source": "yuepc",
             "jc_day": "2026-11-20",
-            "db_sha256": pending["db_sha256"],
+            "db_sha256": probe["db_sha256"],
             "gz_sha256": old_gz,
         }), encoding="utf-8")
         forged_run = subprocess.run(
@@ -1157,7 +1153,20 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual(baseline["receipt_source"], "msi")
         self.assertEqual(baseline["source"], "msi_receipt")
         self.assertNotIn("yuepc", json.dumps(baseline))
-        self.assertEqual(baseline["remote_db_sha256"], pending["db_sha256"])
+        write_json(self.home / "markers" / "push_base.json", {"commit_id": baseline["commit_id"]})
+        prepared = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        pending = prepared["prepared"][0]
+        self.assertEqual(pending["expected_commit_id"], baseline["commit_id"])
+        staging = self.home / "staging"
+        new_blob = (staging / "app_latest.db.gz").read_bytes()
+        self.assertEqual(gzip.decompress(new_blob), raw)
+        self.assertEqual(gzip_commit_id(new_blob), baseline["commit_id"])
+        self.assertEqual(hashlib.sha256(new_blob).hexdigest(), pending["gz_sha256"])
+        self.assertNotEqual(old_gz, pending["gz_sha256"])
+        delivered_meta = json.loads((staging / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(delivered_meta["expected_commit_id"], baseline["commit_id"])
+        self.assertEqual(delivered_meta["db_sha256"], pending["db_sha256"])
+        self.assertEqual(delivered_meta["gz_sha256"], pending["gz_sha256"])
         drop = self.tmp / "drop-new-gz"
         drop.mkdir()
         for name in ("app_latest.db.gz", "app_latest.db.sha256", "app_latest.db.gz.sha256", "meta.json"):
@@ -1175,8 +1184,8 @@ class ReviewRegressionTests(unittest.TestCase):
         frozen = json.loads((drop / "push_baseline.json").read_text(encoding="utf-8"))
         self.assertEqual(frozen["expected_commit_id"], baseline["commit_id"])
         drop_a = self.tmp / "drop-a"
-        gz_a = stage_drop(drop_a, raw, 11, pending["jc_day"])
-        self.assertEqual(gz_a, old_gz)
+        gz_a = stage_drop(drop_a, raw, 11, pending["jc_day"], baseline["commit_id"])
+        self.assertEqual(gzip_commit_id((drop_a / "app_latest.db.gz").read_bytes()), baseline["commit_id"])
         authorized_a = subprocess.run(
             ["bash", str(ROOT / "authorize_push_baseline.sh"), "--dir", str(drop_a), "--ssh-target", "local"],
             env=env, text=True, capture_output=True, check=False,
@@ -1208,7 +1217,8 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertTrue((self.home / "markers" / "pushed_2026-11-12.json").is_file())
         newer = b"formal-db-bytes-v2"
         drop_b = self.tmp / "drop-b"
-        stage_drop(drop_b, newer, 5)
+        stage_drop(drop_b, newer, 5, expected_commit_id=committed["commit_id"])
+        self.assertEqual(gzip_commit_id((drop_b / "app_latest.db.gz").read_bytes()), committed["commit_id"])
         authorized_b = subprocess.run(
             ["bash", str(ROOT / "authorize_push_baseline.sh"), "--dir", str(drop_b), "--ssh-target", "local"],
             env=env, text=True, capture_output=True, check=False,
@@ -1250,9 +1260,9 @@ class ReviewRegressionTests(unittest.TestCase):
             ["bash", str(ROOT / "authorize_push_baseline.sh"), "--dir", str(drop_a), "--ssh-target", "local"],
             env=env, text=True, capture_output=True, check=False,
         )
-        self.assertEqual(rebound.returncode, 17, rebound.stdout + rebound.stderr)
-        self.assertIn("BASELINE_FROZEN", rebound.stderr)
-        stored = json.loads((server / "authorized" / f"{old_gz}.json").read_text(encoding="utf-8"))
+        self.assertEqual(rebound.returncode, 12, rebound.stdout + rebound.stderr)
+        self.assertIn("STALE_BASELINE", rebound.stderr)
+        stored = json.loads((server / "authorized" / f"{gz_a}.json").read_text(encoding="utf-8"))
         self.assertEqual(stored["expected_commit_id"], baseline["commit_id"])
         still = subprocess.run(
             ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop_a), "--ssh-target", "local"],
@@ -1328,8 +1338,9 @@ class ReviewRegressionTests(unittest.TestCase):
             env=env, text=True, capture_output=True, check=False,
         )
         self.assertEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
+        commit_id = json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))["commit_id"]
         drop = self.tmp / name / "drop"
-        stage_drop(drop, replacement, 0)
+        stage_drop(drop, replacement, 0, expected_commit_id=commit_id)
         (Path(env["FAT_CN_SERVED"])).write_text(current_sha + "\n", encoding="utf-8")
         return server, db_path, env, drop
 
@@ -1403,6 +1414,64 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("SSH_TARGET_REQUIRED", failed.stderr)
         self.assertFalse(drop.exists())
 
+
+    def test_unbound_old_package_is_not_authorized_after_successor(self):
+        server, db_path, env, _bound = self._initialized_package(
+            "late-auth", b"db-b-live", b"db-a-old", "match_file",
+        )
+        live = json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))
+        old = self.tmp / "late-auth" / "old-a"
+        stage_drop(old, b"db-a-old", 11)
+        (old / "push_baseline.json").write_text(json.dumps({
+            "db_sha256": hashlib.sha256(b"db-a-old").hexdigest(),
+            "gz_sha256": hashlib.sha256((old / "app_latest.db.gz").read_bytes()).hexdigest(),
+            "expected_commit_id": live["commit_id"],
+            "expected_db_sha256": live["db_sha256"],
+        }), encoding="utf-8")
+        failed = subprocess.run(
+            ["bash", str(ROOT / "authorize_push_baseline.sh"), "--dir", str(old), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(failed.returncode, 18, failed.stdout + failed.stderr)
+        self.assertIn("PACKAGE_UNBOUND", failed.stderr)
+        self.assertNotIn("COMMIT_JSON", failed.stdout)
+        self.assertNotIn("BASELINE_JSON", failed.stdout)
+        self.assertEqual(db_path.read_bytes(), b"db-b-live")
+        self.assertFalse((old / "LAST_PUSHED.json").exists())
+        self.assertFalse((server / "authorized").exists())
+        self.assertEqual(
+            json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))["commit_id"],
+            live["commit_id"],
+        )
+
+    def test_activate_hook_must_read_the_running_db(self):
+        _server, db_path, env, drop = self._initialized_package(
+            "echo-hook", b"current-db", b"replacement-db", "match_file",
+        )
+        echo = Path(env["FAT_CN_ACTIVATE_CMD"]).with_name("echo.sh")
+        echo.write_text(
+            "#!/bin/sh\n"
+            "python3 - <<'PY'\n"
+            "import json, os\n"
+            "print(json.dumps({'ok': True, 'db_sha256': os.environ.get('FAT_CN_EXPECT_DB_SHA', ''), 'read_only': True}))\n"
+            "PY\n",
+            encoding="utf-8",
+        )
+        echo.chmod(0o755)
+        env["FAT_CN_ACTIVATE_CMD"] = str(echo)
+        authorized = subprocess.run(
+            ["bash", str(ROOT / "authorize_push_baseline.sh"), "--dir", str(drop), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(authorized.returncode, 0, authorized.stdout + authorized.stderr)
+        failed = subprocess.run(
+            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
+        self.assertNotIn("COMMIT_JSON", failed.stdout)
+        self.assertEqual(db_path.read_bytes(), b"current-db")
+        self.assertFalse((drop / "LAST_PUSHED.json").exists())
 
     def test_install_lock_is_held_before_push_reads(self):
         drop = self.tmp / "drop-install"

@@ -15,7 +15,29 @@ if [[ -n "${FAT_CN_PAUSE_SEC:-}" ]]; then
   sleep "$FAT_CN_PAUSE_SEC"
 fi
 python3 - "$WORK" "$ROOT" "$DB" <<'PY'
-import gzip, hashlib, json, os, pathlib, shutil, stat, subprocess, sys, time
+import gzip, hashlib, json, os, pathlib, shutil, stat, struct, subprocess, sys, time
+
+def gzip_commit_id(blob: bytes) -> str:
+    if len(blob) < 10 or blob[0] != 0x1F or blob[1] != 0x8B:
+        return ""
+    flag = blob[3]
+    pos = 10
+    if flag & 4:
+        if pos + 2 > len(blob):
+            return ""
+        extra = struct.unpack_from("<H", blob, pos)[0]
+        pos += 2 + extra
+    if flag & 8:
+        end = blob.find(b"\0", pos)
+        if end < 0:
+            return ""
+        pos = end + 1
+    if flag & 16:
+        end = blob.find(b"\0", pos)
+        if end < 0:
+            return ""
+        return blob[pos:end].decode("ascii")
+    return ""
 
 work = pathlib.Path(sys.argv[1])
 root = pathlib.Path(sys.argv[2])
@@ -67,21 +89,29 @@ if current != str(last.get("db_sha256") or "").lower():
 auth_path = root / "authorized" / f"{gz_sha}.json"
 stored = load_json(auth_path)
 op = str(header.get("op") or "commit")
+bound = gzip_commit_id(gz_bytes)
+claimed = str(header.get("expected_commit_id") or "")
+if not bound or claimed != bound:
+    sys.stderr.write("PACKAGE_UNBOUND\n")
+    sys.exit(18)
+if bound != last["commit_id"] or str(last.get("db_sha256") or "").lower() != current:
+    sys.stderr.write(f"STALE_BASELINE bound={bound} current={last['commit_id']}\n")
+    sys.exit(12)
 
 if op == "authorize":
     record = {
         "gz_sha256": gz_sha,
         "db_sha256": db_sha,
-        "expected_commit_id": last["commit_id"],
-        "expected_db_sha256": str(last["db_sha256"]).lower(),
+        "expected_commit_id": bound,
+        "expected_db_sha256": current,
         "frozen": True,
     }
     if stored:
         if (
             stored.get("gz_sha256") != gz_sha
             or stored.get("db_sha256") != db_sha
-            or stored.get("expected_commit_id") != last["commit_id"]
-            or stored.get("expected_db_sha256") != record["expected_db_sha256"]
+            or stored.get("expected_commit_id") != bound
+            or stored.get("expected_db_sha256") != current
         ):
             sys.stderr.write("BASELINE_FROZEN\n")
             sys.exit(17)
@@ -138,7 +168,6 @@ def hook(role: str, expect: str) -> dict | None:
     cmd = activate_cmd if role == "activate" else rollback_cmd
     env = os.environ.copy()
     env["FAT_CN_DB"] = str(db_path)
-    env["FAT_CN_EXPECT_DB_SHA"] = expect
     env["FAT_CN_HOOK_ROLE"] = role
     try:
         raw_out = subprocess.check_output(cmd, shell=True, text=True, env=env)
@@ -191,8 +220,8 @@ commit = {
     "jc_day": header.get("jc_day"),
     "db_sha256": db_sha,
     "gz_sha256": gz_sha,
-    "predecessor_commit_id": last["commit_id"],
-    "expected_commit_id": last["commit_id"],
+    "predecessor_commit_id": bound,
+    "expected_commit_id": bound,
     "served_db_sha256": db_sha,
     "read_only": True,
     "activated": True,

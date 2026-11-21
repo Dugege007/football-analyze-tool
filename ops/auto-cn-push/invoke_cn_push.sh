@@ -73,27 +73,40 @@ JC="unknown"
 if [[ -f "$META" ]]; then
   JC="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8-sig")).get("jc_day") or "unknown")' "$META")"
 fi
-EXPECTED=""
-if [[ "$AUTHORIZE" -ne 1 ]]; then
-  if [[ ! -f "$BASELINE" ]]; then
-    echo "BASELINE_NOT_FROZEN" >&2
-    exit 18
-  fi
-  EXPECTED="$(python3 - "$BASELINE" "$DB_SHA" "$GZ_SHA" <<'PY'
-import json, sys
-base = json.loads(open(sys.argv[1], encoding="utf-8-sig").read())
-db, gz = sys.argv[2], sys.argv[3]
-if str(base.get("db_sha256") or "").lower() != db or str(base.get("gz_sha256") or "").lower() != gz:
-    sys.stderr.write("baseline package mismatch\n")
-    sys.exit(4)
-commit_id = str(base.get("expected_commit_id") or "")
-if not commit_id:
-    sys.stderr.write("BASELINE_NOT_FROZEN\n")
+EXPECTED="$(python3 - "$GZ" "$META" "$DB_SHA" "$GZ_SHA" <<'PY'
+import json, struct, sys
+blob = open(sys.argv[1], "rb").read()
+meta_path, db, gz = sys.argv[2], sys.argv[3], sys.argv[4]
+
+def gzip_commit_id(data: bytes) -> str:
+    if len(data) < 10 or data[0] != 0x1F or data[1] != 0x8B:
+        return ""
+    flag = data[3]
+    pos = 10
+    if flag & 4:
+        extra = struct.unpack_from("<H", data, pos)[0]
+        pos += 2 + extra
+    if flag & 8:
+        end = data.find(b"\0", pos)
+        pos = end + 1
+    if flag & 16:
+        end = data.find(b"\0", pos)
+        return data[pos:end].decode("ascii")
+    return ""
+
+bound = gzip_commit_id(blob)
+meta = {}
+if meta_path and meta_path != "-" and __import__("pathlib").Path(meta_path).is_file():
+    meta = json.loads(open(meta_path, encoding="utf-8-sig").read())
+meta_id = str(meta.get("expected_commit_id") or "")
+meta_db = str(meta.get("db_sha256") or "").lower()
+meta_gz = str(meta.get("gz_sha256") or "").lower()
+if meta_id != bound or (meta_db and meta_db != db) or (meta_gz and meta_gz != gz):
+    sys.stderr.write("PACKAGE_UNBOUND\n")
     sys.exit(18)
-print(commit_id)
+print(bound)
 PY
 )"
-fi
 OP="commit"
 if [[ "$AUTHORIZE" -eq 1 ]]; then
   OP="authorize"

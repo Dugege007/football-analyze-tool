@@ -474,7 +474,18 @@ def prepare_unpushed(
             shutil.rmtree(work)
         work.mkdir(parents=True, exist_ok=True)
         jc_day = claimed[-1]
-        builder = prepare_fn or (lambda day, cov, out_dir: build_package(db, out_dir, day, cov))
+        base_commit = ""
+        base_file = paths["markers"] / "push_base.json"
+        if base_file.is_file():
+            try:
+                base_commit = str((load_json(base_file, {}) or {}).get("commit_id") or "")
+            except CorruptRecord:
+                base_commit = ""
+
+        def default_builder(day, cov, out_dir):
+            return build_package(db, out_dir, day, cov, expected_commit_id=base_commit or None)
+
+        builder = prepare_fn or default_builder
         try:
             meta = builder(jc_day, coverage, work)
         except Exception as exc:
@@ -501,6 +512,7 @@ def prepare_unpushed(
             "gz": str(paths["staging"] / "app_latest.db.gz"),
             "db_sha256": meta["db_sha256"],
             "gz_sha256": meta["gz_sha256"],
+            "expected_commit_id": meta.get("expected_commit_id") or "",
             "completeness": coverage["claimed_evidence"][-1],
             "coverage": coverage,
             "drop_hint": {
