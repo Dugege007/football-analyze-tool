@@ -1,0 +1,230 @@
+"""历史齐套未推的覆盖选择，以及回执 / ready 门闩。
+
+齐套与否只使用 check_close_complete.evaluate 的结果，本模块不重新定义
+平博 rule/close，也不把澳门盘当作齐套。
+"""
+from __future__ import annotations
+
+from datetime import date, timedelta
+
+
+def parse_day(value: str) -> date | None:
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def norm_hash(value) -> str:
+    return str(value or "").strip().lower()
+
+
+def contiguous_boundary(pushed: set[str]) -> str | None:
+    """从最早已推日连续向后，停在第一个没有 pushed 标记的日期之前。
+
+    不能用最大已推日：中间缺口会被跳过。
+    """
+    days = [item for item in (parse_day(day) for day in pushed) if item is not None]
+    if not days:
+        return None
+    pushed_dates = set(days)
+    day = min(pushed_dates)
+    last: date | None = None
+    while day in pushed_dates:
+        last = day
+        day += timedelta(days=1)
+    return last.isoformat() if last else None
+
+
+def scan_days(boundary: str | None, today: date, lookback_days: int) -> list[str]:
+    """已推边界的次日到今天；尚无标记时只回看 lookback_days。"""
+    if lookback_days < 0:
+        raise ValueError("lookback_days must be >= 0")
+    if boundary:
+        start = date.fromisoformat(boundary) + timedelta(days=1)
+    else:
+        start = today - timedelta(days=lookback_days)
+    if start > today:
+        return []
+    out: list[str] = []
+    day = start
+    while day <= today:
+        out.append(day.isoformat())
+        day += timedelta(days=1)
+    return out
+
+
+def _evidence(row: dict) -> dict:
+    return {
+        "jc_day": row.get("jc_day"),
+        "complete": bool(row.get("complete")),
+        "reason": row.get("reason"),
+        "n_matches": row.get("n_matches"),
+        "n_matches_in_db": row.get("n_matches_in_db"),
+        "pin_close_ok": row.get("pin_close_ok"),
+        "missing_match_uids": list(row.get("missing_match_uids") or []),
+        "excluded_dropped_from_csl": list(row.get("excluded_dropped_from_csl") or []),
+    }
+
+
+def _is_no_matches(row: dict) -> bool:
+    if row.get("reason") == "no_matches":
+        return True
+    return row.get("n_matches") == 0 and not row.get("complete")
+
+
+def select_coverage(
+    reports: list[dict],
+    *,
+    pushed: set[str],
+    today: date,
+    boundary: str | None,
+) -> dict:
+    """选择本次整库包可以声明覆盖的竞彩日。
+
+    声明范围是边界之后、第一处过去未齐套日之前的连续齐套日。
+    无场次日不声明、也不打断。今天未齐套不打断更早的齐套日。
+    缺口之后即使再齐套也不声明，避免用更晚的已推标记把缺口吞掉。
+    未来日期即使出现在报告里也不声明。
+    """
+    claimed: list[str] = []
+    claimed_evidence: list[dict] = []
+    no_matches: list[str] = []
+    blocking: dict | None = None
+    withheld: list[dict] = []
+    in_progress: list[dict] = []
+    ignored_pushed: list[str] = []
+    future: list[dict] = []
+
+    ordered = sorted(reports, key=lambda row: str(row.get("jc_day") or ""))
+    for row in ordered:
+        day = str(row.get("jc_day") or "")
+        current = parse_day(day)
+        if current is None:
+            continue
+        if day in pushed:
+            ignored_pushed.append(day)
+            continue
+        if current > today:
+            future.append(_evidence(row))
+            continue
+        if _is_no_matches(row):
+            no_matches.append(day)
+            continue
+        if not row.get("complete"):
+            item = _evidence(row)
+            if current == today:
+                in_progress.append(item)
+                continue
+            if blocking is None:
+                blocking = item
+            else:
+                withheld.append(item)
+            continue
+        item = _evidence(row)
+        if blocking is not None or current > today:
+            withheld.append(item)
+            continue
+        claimed.append(day)
+        claimed_evidence.append(item)
+
+    scan_from = ordered[0]["jc_day"] if ordered else None
+    scan_through = today.isoformat()
+    return {
+        "boundary": boundary,
+        "scan_from": scan_from,
+        "scan_through": scan_through,
+        "claimed_jc_days": claimed,
+        "claimed_evidence": claimed_evidence,
+        "no_matches": no_matches,
+        "blocking_gap": blocking,
+        "withheld_after_gap": withheld,
+        "in_progress": in_progress,
+        "already_pushed_ignored": ignored_pushed,
+        "future_not_claimed": future,
+        "note": "整库快照可以含未声明的赛程；未列入 claimed_jc_days 的日期不会标成已推",
+    }
+
+
+def delivery_decision(
+    pending: dict | None,
+    ready: dict | None,
+    receipts: list[dict],
+    package: dict | None = None,
+) -> dict:
+    """根据 pending、投放 ready 和各机器 LAST_PUSHED 决定能否推、能否标记。
+
+    任一回执的 db/gz 与 pending 一致即可标记，另一台机器的旧回执不触发重推。
+    ready 或包与 pending 不一致时拒绝，避免把旧 ready / 旧包投出去。
+    """
+    result = {
+        "allow_push": False,
+        "allow_mark": False,
+        "push_again": False,
+        "needs_push": False,
+        "matched_receipt": None,
+        "stale_receipts": [],
+        "reason": "",
+    }
+    if not pending:
+        result["reason"] = "no_pending"
+        return result
+    pend_db = norm_hash(pending.get("db_sha256"))
+    pend_gz = norm_hash(pending.get("gz_sha256"))
+    if not pend_db or not pend_gz:
+        result["reason"] = "pending_hash_missing"
+        return result
+    package = package or pending
+    pkg_db = norm_hash(package.get("db_sha256"))
+    pkg_gz = norm_hash(package.get("gz_sha256"))
+    if pkg_db != pend_db or pkg_gz != pend_gz:
+        result["reason"] = "package_hash_mismatch"
+        return result
+
+    def _ready_ok(item: dict | None) -> bool:
+        if not item:
+            return False
+        return norm_hash(item.get("db_sha256")) == pend_db and norm_hash(item.get("gz_sha256")) == pend_gz
+
+    ready_ok = _ready_ok(ready)
+    ready_mismatch = ready is not None and not ready_ok
+    matched = None
+    stale: list[dict] = []
+    for rec in receipts:
+        source = str(rec.get("source") or rec.get("name") or "receipt")
+        db = norm_hash(rec.get("db_sha256"))
+        gz = norm_hash(rec.get("gz_sha256"))
+        if db == pend_db and gz == pend_gz:
+            if matched is None:
+                matched = source
+            continue
+        if db or gz:
+            stale.append({"source": source, "db_sha256": db, "gz_sha256": gz})
+    result["stale_receipts"] = stale
+    if matched:
+        # 已有一台机器的回执与 pending 一致。旧 ready 不能再投，也不需要重推。
+        result["allow_mark"] = True
+        result["allow_push"] = False
+        result["push_again"] = False
+        result["needs_push"] = False
+        result["matched_receipt"] = matched
+        result["reason"] = "receipt_match"
+        if ready_mismatch:
+            result["ready_ignored"] = "old_ready"
+        return result
+    if ready_mismatch:
+        result["reason"] = "old_ready"
+        result["allow_push"] = False
+        result["push_again"] = False
+        return result
+    if ready_ok:
+        result["allow_push"] = True
+        result["allow_mark"] = False
+        result["push_again"] = False
+        result["needs_push"] = True
+        result["reason"] = "await_receipt"
+        return result
+    result["reason"] = "receipt_mismatch" if receipts else "no_receipt"
+    result["push_again"] = False
+    result["needs_push"] = False
+    return result

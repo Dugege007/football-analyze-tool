@@ -35,6 +35,10 @@
 │   ├── model/              Dixon-Coles 泊松模型（N5）及其单测
 │   ├── tools/              小工具（文本规范化 dry-run 等）
 │   └── sync_formal_db.ps1  启动前按 SHA256 同步正式库（未变化则跳过解压）
+├── ops/
+│   ├── ensure_result_ingest.sh
+│   ├── ensure_jc_match_rows_watch.sh
+│   └── auto-cn-push/       临盘齐套打包脚本、循环看门狗与历史漏推补打（见该目录 README）
 ├── integrations/5dollar/   5DF 接入说明、实时采集说明、补救队列格式、响应样例（schema_example，合成数据）
 ├── docs/
 │   ├── schema/             口径卡、DDL、OpenAPI 草案、补救/采集/消歧/赛果入库等文档

@@ -136,3 +136,12 @@
 | 测试用回归库（`api/tests/fixtures/regress_db/*.db`）与基于真实库的基线 JSON | 由私人库导出；相关回归测试在公开版中会自动跳过 |
 | 私人消息推送节奏/收件人、供应商账单与合同、订阅档位、个人邮箱 | 个人隐私 |
 | 前端 WebUI | 计划在 v0.1 发布 |
+| 大陆站推送密钥与 SSH 目标 | 现网脚本自带参数默认值；仓库副本只留空的 `FAT_CN_SSH_KEY` / `FAT_CN_SSH_TARGET`，见第 12 节 |
+
+## 12. 大陆站齐套推送的 SSH 参数
+
+`ops/auto-cn-push/` 里的 `push-formal-db.ps1` 与 `push-formal-db-msi.ps1` 不包含密钥和主机。附件脱敏时用了 `FAT_CN_SSH_KEY`、`FAT_CN_SSH_TARGET` 这两个新名字；现网 YuePC / MSI 上的脚本并不读它们，而是使用脚本里原有的参数默认值。
+
+- 继续用现网那两份本地脚本时，不需要设置这两个变量，也不要用仓库副本覆盖它们。
+- 若改用仓库副本，只在那台机器的计划任务或不入库的本地文件里注入。值从现网脚本现有默认值抄取，不要写回 Git。
+- 空模板是 `ops/auto-cn-push/env.example`。安装和回滚说明见 `ops/auto-cn-push/README.md`。
