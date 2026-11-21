@@ -45,6 +45,8 @@
 
 Windows 本机安装和推送使用同一把 `FileShare.None` 文件锁，不要求本机有 `flock`、Git Bash 或 PATH 上的 `python3`。推送用 `ssh.exe` 把原始字节送进远端已有的 bash/flock 事务。缺少 `ssh.exe` 或明确的 Python 时退出码 20，输出 `DEPENDENCY_MISSING`，不会报成锁冲突。不要安装 OpenSSH Server，不要开端口，也不要安装未知的 `flock.exe`。WSL 不是两台机器的默认路径。
 
+成功时打印「辅助锁检查通过」。这只说明本机锁、安装/推送入口交错，以及 SSH 失败时不写回执、不删除 ready。它不是远端事务已经跑通。
+
 本环境没有 PowerShell，下面这条验收命令还没有在 YuePC / MSI 上跑过：
 
 ```powershell

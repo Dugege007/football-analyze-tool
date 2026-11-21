@@ -2,8 +2,8 @@
 # 不调用 flock，也不要求 Git Bash。
 function Open-FatDropLock {
   param([Parameter(Mandatory = $true)][string]$Dir)
-  if (-not (Test-Path -LiteralPath $Dir)) {
-    New-Item -ItemType Directory -LiteralPath $Dir | Out-Null
+  if (-not [System.IO.Directory]::Exists($Dir)) {
+    [System.IO.Directory]::CreateDirectory($Dir) | Out-Null
   }
   $path = Join-Path $Dir 'drop.operation.lock'
   try {

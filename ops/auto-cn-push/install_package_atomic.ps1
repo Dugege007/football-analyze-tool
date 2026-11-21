@@ -13,7 +13,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $here 'windows_drop_lock.ps1')
 $dropLock = Open-FatDropLock -Dir $Dir
 if (-not $dropLock) {
-  Write-Error 'DROP_LOCK_HELD'
+  [Console]::Error.WriteLine('DROP_LOCK_HELD')
   exit 11
 }
 

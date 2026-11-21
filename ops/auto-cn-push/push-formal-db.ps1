@@ -149,45 +149,75 @@ exit `$rc
     }
     $header = ($headerObj | ConvertTo-Json -Compress) + "`n"
     $payload = Join-Path $Dir (".payload-" + [guid]::NewGuid().ToString('n'))
-    $outFile = [System.IO.File]::Open($payload, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write)
+    $proc = $null
+    $started = $false
+    $inputStream = $null
+    $stdoutTask = $null
+    $stderrTask = $null
+    $failure = $null
+    $code = 1
+    $out = ''
+    $errText = ''
     try {
-      $headerBytes = New-Object System.Text.UTF8Encoding $false
-      $hb = $headerBytes.GetBytes($header)
-      $outFile.Write($hb, 0, $hb.Length)
-      $outFile.Write($gzBytes, 0, $gzBytes.Length)
-    } finally {
-      $outFile.Dispose()
-    }
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $sshPath
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardInput = $true
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
-    $arg = '-T -o BatchMode=yes -o ConnectTimeout=30'
-    if ($Key) { $arg += ' -i ' + (Quote-Win $Key) }
-    $arg += ' ' + (Quote-Win $SshTarget) + ' ' + (Quote-Win $remote)
-    $psi.Arguments = $arg
-    $proc = New-Object System.Diagnostics.Process
-    $proc.StartInfo = $psi
-    [void]$proc.Start()
-    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
-    $stderrTask = $proc.StandardError.ReadToEndAsync()
-    $inputStream = [System.IO.File]::OpenRead($payload)
-    try {
+      $outFile = [System.IO.File]::Open($payload, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write)
+      try {
+        $headerBytes = New-Object System.Text.UTF8Encoding $false
+        $hb = $headerBytes.GetBytes($header)
+        $outFile.Write($hb, 0, $hb.Length)
+        $outFile.Write($gzBytes, 0, $gzBytes.Length)
+      } finally {
+        $outFile.Dispose()
+      }
+      $psi = New-Object System.Diagnostics.ProcessStartInfo
+      $psi.FileName = $sshPath
+      $psi.UseShellExecute = $false
+      $psi.RedirectStandardInput = $true
+      $psi.RedirectStandardOutput = $true
+      $psi.RedirectStandardError = $true
+      $psi.CreateNoWindow = $true
+      $arg = '-T -o BatchMode=yes -o ConnectTimeout=30'
+      if ($Key) { $arg += ' -i ' + (Quote-Win $Key) }
+      $arg += ' ' + (Quote-Win $SshTarget) + ' ' + (Quote-Win $remote)
+      $psi.Arguments = $arg
+      $proc = New-Object System.Diagnostics.Process
+      $proc.StartInfo = $psi
+      [void]$proc.Start()
+      $started = $true
+      $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+      $stderrTask = $proc.StandardError.ReadToEndAsync()
+      $inputStream = [System.IO.File]::OpenRead($payload)
       $inputStream.CopyTo($proc.StandardInput.BaseStream)
+    } catch {
+      $failure = $_
     } finally {
-      $inputStream.Dispose()
-      $proc.StandardInput.Close()
+      if ($inputStream) {
+        try { $inputStream.Dispose() } catch {}
+      }
+      if ($started -and $proc) {
+        try { $proc.StandardInput.Close() } catch {}
+        if ($failure) {
+          if (-not $proc.HasExited) { try { $proc.Kill() } catch {} }
+          try { [void]$proc.WaitForExit(15000) } catch {}
+        } else {
+          try { [void]$proc.WaitForExit() } catch { if (-not $failure) { $failure = $_ } }
+        }
+        if (-not $proc.HasExited) {
+          try { $proc.Kill() } catch {}
+          try { [void]$proc.WaitForExit(5000) } catch {}
+        }
+        try { $code = $proc.ExitCode } catch {}
+      }
+      if ($stdoutTask) { try { $out = $stdoutTask.Result } catch {} }
+      if ($stderrTask) { try { $errText = $stderrTask.Result } catch {} }
+      if ($proc) {
+        try { $proc.Dispose() } catch {}
+      }
+      if ($payload -and (Test-Path -LiteralPath $payload)) {
+        Remove-Item -LiteralPath $payload -Force -ErrorAction SilentlyContinue
+      }
     }
-    $proc.WaitForExit()
-    Remove-Item -LiteralPath $payload -Force -ErrorAction SilentlyContinue
-    return @{
-      Code = $proc.ExitCode
-      Out = $stdoutTask.Result
-      Err = $stderrTask.Result
-    }
+    if ($failure) { throw $failure }
+    return @{ Code = $code; Out = $out; Err = $errText }
   }
 
   $authorized = Send-FatSsh 'authorize'
