@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
+import io
 import json
 import os
 import shutil
@@ -798,6 +800,95 @@ class InstallTests(unittest.TestCase):
         self.assertIn("REFUSING_LEGACY_PREPARE_CRON", legacy.stdout)
 
 
+def stage_drop(directory: Path, raw: bytes, mtime: int, jc_day: str = "2026-11-20") -> str:
+    import io
+    blob_file = io.BytesIO()
+    with gzip.GzipFile(fileobj=blob_file, mode="wb", mtime=mtime) as handle:
+        handle.write(raw)
+    blob = blob_file.getvalue()
+    directory.mkdir(parents=True, exist_ok=True)
+    db_sha = hashlib.sha256(raw).hexdigest()
+    gz_sha = hashlib.sha256(blob).hexdigest()
+    (directory / "app_latest.db.gz").write_bytes(blob)
+    (directory / "app_latest.db.sha256").write_text(db_sha + "\n", encoding="ascii")
+    (directory / "app_latest.db.gz.sha256").write_text(gz_sha + "\n", encoding="ascii")
+    (directory / "meta.json").write_text(json.dumps({"jc_day": jc_day}), encoding="utf-8")
+    (directory / "app_latest.ready").write_text(json.dumps({
+        "db_sha256": db_sha,
+        "gz_sha256": gz_sha,
+    }), encoding="utf-8")
+    return gz_sha
+
+
+def write_service_hook(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "#!/bin/sh\n"
+        "python3 - <<'PY'\n"
+        "import hashlib, json, os\n"
+        "from pathlib import Path\n"
+        "role = os.environ['FAT_CN_HOOK_ROLE']\n"
+        "db = Path(os.environ['FAT_CN_DB'])\n"
+        "mode = os.environ.get('FAT_CN_HOOK_MODE', 'match_file')\n"
+        "served = Path(os.environ['FAT_CN_SERVED'])\n"
+        "log = Path(os.environ['FAT_CN_HOOK_LOG'])\n"
+        "actual = hashlib.sha256(db.read_bytes()).hexdigest() if db.is_file() else ''\n"
+        "log.parent.mkdir(parents=True, exist_ok=True)\n"
+        "with log.open('a', encoding='utf-8') as handle:\n"
+        "    handle.write(role + '\\n')\n"
+        "if mode == 'old_connection' and role == 'activate':\n"
+        "    previous = served.read_text(encoding='utf-8').strip() if served.is_file() else actual\n"
+        "    print(json.dumps({'ok': True, 'db_sha256': previous, 'read_only': True}))\n"
+        "elif mode == 'rollback_lies' and role == 'activate':\n"
+        "    previous = served.read_text(encoding='utf-8').strip() if served.is_file() else ''\n"
+        "    print(json.dumps({'ok': True, 'db_sha256': previous, 'read_only': True}))\n"
+        "elif mode == 'rollback_lies' and role == 'rollback':\n"
+        "    print(json.dumps({'ok': True, 'db_sha256': '0' * 64, 'read_only': True}))\n"
+        "else:\n"
+        "    served.parent.mkdir(parents=True, exist_ok=True)\n"
+        "    served.write_text(actual + '\\n', encoding='utf-8')\n"
+        "    print(json.dumps({'ok': True, 'db_sha256': actual, 'read_only': True}))\n"
+        "PY\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def local_ssh(tmp: Path) -> Path:
+    ssh_bin = tmp / "bin"
+    ssh_bin.mkdir(exist_ok=True)
+    ssh = ssh_bin / "ssh"
+    ssh.write_text(
+        "#!/bin/bash\nset -euo pipefail\n"
+        "while [[ $# -gt 0 ]]; do\n"
+        "  case \"$1\" in\n"
+        "    -T|-t) shift ;;\n"
+        "    -o|-i) shift 2 ;;\n"
+        "    *) break ;;\n"
+        "  esac\ndone\nshift\nexec bash -c \"$1\"\n",
+        encoding="utf-8",
+    )
+    ssh.chmod(0o755)
+    return ssh_bin
+
+
+def service_env(tmp: Path, server: Path, mode: str = "match_file") -> dict:
+    hook = tmp / "hook-dir" / "service.sh"
+    write_service_hook(hook)
+    env = os.environ.copy()
+    env.update({
+        "PATH": str(local_ssh(tmp)) + os.pathsep + env.get("PATH", ""),
+        "FAT_CN_ROOT": str(server),
+        "FAT_CN_LOCK": str(tmp / "remote.lock"),
+        "FAT_CN_ACTIVATE_CMD": str(hook),
+        "FAT_CN_ROLLBACK_CMD": str(hook),
+        "FAT_CN_SERVED": str(tmp / "served.txt"),
+        "FAT_CN_HOOK_LOG": str(tmp / "hook.log"),
+        "FAT_CN_HOOK_MODE": mode,
+    })
+    return env
+
+
 class ReviewRegressionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="cn-review-"))
@@ -1014,44 +1105,19 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("2026-11-13", calls)
         self.assertTrue((self.home / "markers" / "checked_no_matches_2026-11-13.json").is_file())
         self.assertFalse((self.home / "markers" / "pushed_2026-11-13.json").exists())
-
     def test_transaction_same_db_new_gz_and_stale_predecessor(self):
-        import gzip as gzip_mod
-        import hashlib
-        import io
-
-        def pack(raw: bytes, mtime: int) -> bytes:
-            buf = io.BytesIO()
-            with gzip_mod.GzipFile(fileobj=buf, mode="wb", mtime=mtime) as handle:
-                handle.write(raw)
-            return buf.getvalue()
-
-        def stage(directory: Path, raw: bytes, mtime: int) -> str:
-            blob = pack(raw, mtime)
-            directory.mkdir(parents=True, exist_ok=True)
-            (directory / "app_latest.db.gz").write_bytes(blob)
-            (directory / "app_latest.db.sha256").write_text(hashlib.sha256(raw).hexdigest() + "\n", encoding="ascii")
-            gz_sha = hashlib.sha256(blob).hexdigest()
-            (directory / "app_latest.db.gz.sha256").write_text(gz_sha + "\n", encoding="ascii")
-            (directory / "meta.json").write_text(json.dumps({"jc_day": "2026-11-20"}), encoding="utf-8")
-            (directory / "app_latest.ready").write_text(json.dumps({
-                "db_sha256": hashlib.sha256(raw).hexdigest(),
-                "gz_sha256": gz_sha,
-            }), encoding="utf-8")
-            return gz_sha
-
         make_db(self.db, historical_days())
         write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
         prepared = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
         pending = prepared["prepared"][0]
         staging = self.home / "staging"
         new_blob = (staging / "app_latest.db.gz").read_bytes()
-        raw = gzip_mod.decompress(new_blob)
+        raw = gzip.decompress(new_blob)
         self.assertEqual(hashlib.sha256(new_blob).hexdigest(), pending["gz_sha256"])
-        old_buf = io.BytesIO()
-        with gzip_mod.GzipFile(fileobj=old_buf, mode="wb", mtime=11) as handle:
+        old_file = io.BytesIO()
+        with gzip.GzipFile(fileobj=old_file, mode="wb", mtime=11) as handle:
             handle.write(raw)
-        old_blob = old_buf.getvalue()
+        old_blob = old_file.getvalue()
         old_gz = hashlib.sha256(old_blob).hexdigest()
         self.assertNotEqual(old_gz, pending["gz_sha256"])
         old_body = json.dumps({
@@ -1060,9 +1126,38 @@ class ReviewRegressionTests(unittest.TestCase):
             "db_sha256": pending["db_sha256"],
             "gz_sha256": old_gz,
         }).encode()
-        server = self.tmp / "server"
+        server = self.tmp / "srv dir"
         server.mkdir()
-        (server / "app_latest.db").write_bytes(raw)
+        db_path = server / "app_latest.db"
+        db_path.write_bytes(raw)
+        os.chmod(db_path, 0o640)
+        env = service_env(self.tmp, server)
+        forged = self.tmp / "yuepc.json"
+        forged.write_text(json.dumps({
+            "source": "yuepc",
+            "jc_day": "2026-11-20",
+            "db_sha256": pending["db_sha256"],
+            "gz_sha256": old_gz,
+        }), encoding="utf-8")
+        forged_run = subprocess.run(
+            ["bash", str(ROOT / "init_server_baseline.sh"), "--receipt", str(forged), "--snapshot", str(db_path)],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(forged_run.returncode, 0, forged_run.stdout + forged_run.stderr)
+        self.assertIn("NOT_MSI_RECEIPT", forged_run.stderr)
+        self.assertFalse((server / "LAST_COMMIT.json").exists())
+        receipt = self.tmp / "msi.json"
+        receipt.write_bytes(old_body)
+        baseline_run = subprocess.run(
+            ["bash", str(ROOT / "init_server_baseline.sh"), "--receipt", str(receipt), "--snapshot", str(db_path)],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(baseline_run.returncode, 0, baseline_run.stdout + baseline_run.stderr)
+        baseline = json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))
+        self.assertEqual(baseline["receipt_source"], "msi")
+        self.assertEqual(baseline["source"], "msi_receipt")
+        self.assertNotIn("yuepc", json.dumps(baseline))
+        self.assertEqual(baseline["remote_db_sha256"], pending["db_sha256"])
         drop = self.tmp / "drop-new-gz"
         drop.mkdir()
         for name in ("app_latest.db.gz", "app_latest.db.sha256", "app_latest.db.gz.sha256", "meta.json"):
@@ -1072,49 +1167,38 @@ class ReviewRegressionTests(unittest.TestCase):
             "gz_sha256": pending["gz_sha256"],
         }), encoding="utf-8")
         (drop / "LAST_PUSHED.json").write_bytes(old_body)
-        health = self.tmp / "health.sh"
-        health.write_text("#!/bin/sh\nprintf '%s' '{\"ok\":true}'\n", encoding="utf-8")
-        health.chmod(0o755)
-        ssh_bin = self.tmp / "bin"
-        ssh_bin.mkdir()
-        ssh = ssh_bin / "ssh"
-        ssh.write_text(
-            "#!/bin/bash\nset -euo pipefail\n"
-            "while [[ $# -gt 0 ]]; do\n"
-            "  case \"$1\" in\n"
-            "    -T|-t) shift ;;\n"
-            "    -o|-i) shift 2 ;;\n"
-            "    *) break ;;\n"
-            "  esac\ndone\nshift\nexec bash -c \"$1\"\n",
-            encoding="utf-8",
+        authorized = subprocess.run(
+            ["bash", str(ROOT / "authorize_push_baseline.sh"), "--dir", str(drop), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
         )
-        ssh.chmod(0o755)
-        env = os.environ.copy()
-        env.update({
-            "PATH": str(ssh_bin) + os.pathsep + env.get("PATH", ""),
-            "FAT_CN_ROOT": str(server),
-            "FAT_CN_LOCK": str(self.tmp / "remote.lock"),
-            "FAT_CN_HEALTH_CMD": str(health),
-        })
+        self.assertEqual(authorized.returncode, 0, authorized.stdout + authorized.stderr)
+        frozen = json.loads((drop / "push_baseline.json").read_text(encoding="utf-8"))
+        self.assertEqual(frozen["expected_commit_id"], baseline["commit_id"])
+        drop_a = self.tmp / "drop-a"
+        gz_a = stage_drop(drop_a, raw, 11, pending["jc_day"])
+        self.assertEqual(gz_a, old_gz)
+        authorized_a = subprocess.run(
+            ["bash", str(ROOT / "authorize_push_baseline.sh"), "--dir", str(drop_a), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(authorized_a.returncode, 0, authorized_a.stdout + authorized_a.stderr)
         done = subprocess.run(
             ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop), "--ssh-target", "local"],
             env=env, text=True, capture_output=True, check=False,
         )
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("PUSH_COMMITTED", done.stdout)
-        self.assertIn("fat-cn-push.", done.stderr)
-        self.assertNotIn("fat-finish-replace.sh", done.stderr)
+        self.assertIn("DBTMP=", done.stderr)
+        dbtmp = next(line.split("=", 1)[1] for line in done.stderr.splitlines() if line.startswith("DBTMP="))
+        self.assertEqual(Path(dbtmp).parent, db_path.parent)
+        self.assertNotIn("fat-cn-push.", dbtmp)
         self.assertEqual((drop / "LAST_PUSHED.json.previous").read_bytes(), old_body)
         committed = json.loads((drop / "LAST_PUSHED.json").read_text(encoding="utf-8"))
         self.assertEqual(committed["gz_sha256"], pending["gz_sha256"])
-        self.assertEqual(committed["db_sha256"], pending["db_sha256"])
-        self.assertTrue(committed["health_ok"] is True)
-        self.assertTrue(str(committed["workdir"]).find("/fat-cn-push.") > 0)
-        self.assertFalse(Path(committed["workdir"]).exists())
+        self.assertEqual(committed["predecessor_commit_id"], baseline["commit_id"])
+        self.assertTrue(committed["activated"] is True)
         self.assertEqual((server / "app_latest.db").read_bytes(), raw)
-        self.assertFalse((drop / "app_latest.ready").exists())
-        server_commit = json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))
-        self.assertEqual(server_commit["commit_id"], committed["commit_id"])
+        self.assertEqual((db_path.stat().st_mode & 0o777), 0o640)
         marked = runner.mark_confirmed(
             home=self.home, jc_day=pending["jc_day"], db=self.db, live_root=self.live,
             receipts=[committed],
@@ -1122,21 +1206,68 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertTrue(marked["ok"], marked)
         self.assertFalse((self.home / "markers" / "pending_push.json").exists())
         self.assertTrue((self.home / "markers" / "pushed_2026-11-12.json").is_file())
-        self.assertEqual((drop / "LAST_PUSHED.json.previous").read_bytes(), old_body)
         newer = b"formal-db-bytes-v2"
-        (server / "app_latest.db").write_bytes(newer)
-        late = self.tmp / "drop-late"
-        stage(late, raw, 2)
-        late_run = subprocess.run(
-            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(late), "--ssh-target", "local"],
+        drop_b = self.tmp / "drop-b"
+        stage_drop(drop_b, newer, 5)
+        authorized_b = subprocess.run(
+            ["bash", str(ROOT / "authorize_push_baseline.sh"), "--dir", str(drop_b), "--ssh-target", "local"],
             env=env, text=True, capture_output=True, check=False,
         )
-        self.assertEqual(late_run.returncode, 12, late_run.stdout + late_run.stderr)
-        self.assertIn("STALE_PREDECESSOR", late_run.stderr)
-        self.assertEqual((server / "app_latest.db").read_bytes(), newer)
-        self.assertFalse((late / "LAST_PUSHED.json").exists())
+        self.assertEqual(authorized_b.returncode, 0, authorized_b.stdout + authorized_b.stderr)
+        bound_b = json.loads((drop_b / "push_baseline.json").read_text(encoding="utf-8"))
+        self.assertEqual(bound_b["expected_commit_id"], committed["commit_id"])
+        pushed_b = subprocess.run(
+            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop_b), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(pushed_b.returncode, 0, pushed_b.stdout + pushed_b.stderr)
+        self.assertEqual(db_path.read_bytes(), newer)
+        self.assertEqual((db_path.stat().st_mode & 0o777), 0o640)
+        current_commit = json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))
+        self.assertEqual(current_commit["predecessor_commit_id"], committed["commit_id"])
+        self.assertEqual(Path(env["FAT_CN_SERVED"]).read_text(encoding="utf-8").strip(), hashlib.sha256(newer).hexdigest())
+        (drop_a / "LAST_PUSHED.json").write_bytes((drop_b / "LAST_PUSHED.json").read_bytes())
+        late = subprocess.run(
+            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop_a), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(late.returncode, 12, late.stdout + late.stderr)
+        self.assertIn("STALE_BASELINE", late.stderr)
+        self.assertNotIn("COMMIT_JSON", late.stdout)
+        self.assertEqual(db_path.read_bytes(), newer)
+        self.assertEqual(json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))["commit_id"], current_commit["commit_id"])
+        self.assertEqual((drop_a / "LAST_PUSHED.json").read_bytes(), (drop_b / "LAST_PUSHED.json").read_bytes())
+        refreshed = json.loads((drop_a / "push_baseline.json").read_text(encoding="utf-8"))
+        refreshed["expected_commit_id"] = current_commit["commit_id"]
+        (drop_a / "push_baseline.json").write_text(json.dumps(refreshed), encoding="utf-8")
+        retried = subprocess.run(
+            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop_a), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(retried.returncode, 12, retried.stdout + retried.stderr)
+        self.assertEqual(db_path.read_bytes(), newer)
+        rebound = subprocess.run(
+            ["bash", str(ROOT / "authorize_push_baseline.sh"), "--dir", str(drop_a), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(rebound.returncode, 17, rebound.stdout + rebound.stderr)
+        self.assertIn("BASELINE_FROZEN", rebound.stderr)
+        stored = json.loads((server / "authorized" / f"{old_gz}.json").read_text(encoding="utf-8"))
+        self.assertEqual(stored["expected_commit_id"], baseline["commit_id"])
+        still = subprocess.run(
+            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop_a), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(still.returncode, 12, still.stdout + still.stderr)
+        self.assertEqual(db_path.read_bytes(), newer)
         waiter = self.tmp / "drop-wait"
-        stage(waiter, newer, 3)
+        gz_wait = stage_drop(waiter, newer, 3)
+        (waiter / "push_baseline.json").write_text(json.dumps({
+            "db_sha256": hashlib.sha256(newer).hexdigest(),
+            "gz_sha256": gz_wait,
+            "expected_commit_id": current_commit["commit_id"],
+            "expected_db_sha256": hashlib.sha256(newer).hexdigest(),
+        }), encoding="utf-8")
         env_wait = dict(env)
         env_wait["FAT_CN_PAUSE_SEC"] = "2"
         first = subprocess.Popen(
@@ -1155,7 +1286,8 @@ class ReviewRegressionTests(unittest.TestCase):
                     seen += os.read(fd, 4096)
             self.assertIn(b"WORKDIR=", seen)
             rival = self.tmp / "drop-rival"
-            stage(rival, newer, 4)
+            gz_rival = stage_drop(rival, newer, 4)
+            (rival / "push_baseline.json").write_text((waiter / "push_baseline.json").read_text(encoding="utf-8").replace(gz_wait, gz_rival), encoding="utf-8")
             blocked = subprocess.run(
                 ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(rival), "--ssh-target", "local"],
                 env=env, text=True, capture_output=True, check=False,
@@ -1163,9 +1295,8 @@ class ReviewRegressionTests(unittest.TestCase):
             self.assertEqual(blocked.returncode, 9, blocked.stdout + blocked.stderr)
             self.assertIn("REMOTE_PUSH_LOCK_HELD", blocked.stderr)
             self.assertTrue((rival / "app_latest.ready").is_file())
-            self.assertFalse((rival / "LAST_PUSHED.json").exists())
             same = subprocess.run(
-                ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(waiter)],
+                ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(waiter), "--ssh-target", "local"],
                 env=env, text=True, capture_output=True, check=False,
             )
             self.assertEqual(same.returncode, 11, same.stdout + same.stderr)
@@ -1177,42 +1308,101 @@ class ReviewRegressionTests(unittest.TestCase):
             first.stdout.close()
             first.stderr.close()
 
-    def test_health_failure_restores_db(self):
-        import hashlib
-        server = self.tmp / "server-health"
-        server.mkdir()
-        (server / "app_latest.db").write_bytes(b"current-db")
-        drop = self.tmp / "drop-health"
-        blob = gzip.compress(b"replacement-db", mtime=0)
-        drop.mkdir()
-        (drop / "app_latest.db.gz").write_bytes(blob)
-        (drop / "app_latest.db.sha256").write_text(hashlib.sha256(b"replacement-db").hexdigest() + "\n", encoding="ascii")
-        gz_sha = hashlib.sha256(blob).hexdigest()
-        (drop / "app_latest.db.gz.sha256").write_text(gz_sha + "\n", encoding="ascii")
-        (drop / "meta.json").write_text(json.dumps({"jc_day": "2026-11-20"}), encoding="utf-8")
-        (drop / "app_latest.ready").write_text(json.dumps({
-            "db_sha256": hashlib.sha256(b"replacement-db").hexdigest(),
-            "gz_sha256": gz_sha,
+    def _initialized_package(self, name: str, current: bytes, replacement: bytes, mode: str):
+        server = self.tmp / name / "server"
+        server.mkdir(parents=True)
+        db_path = server / "app_latest.db"
+        db_path.write_bytes(current)
+        env = service_env(self.tmp / name, server, mode)
+        current_sha = hashlib.sha256(current).hexdigest()
+        receipt = self.tmp / name / "msi.json"
+        receipt.parent.mkdir(exist_ok=True)
+        receipt.write_text(json.dumps({
+            "source": "msi",
+            "jc_day": "2026-11-20",
+            "db_sha256": current_sha,
+            "gz_sha256": "ab" * 32,
         }), encoding="utf-8")
-        (drop / "LAST_PUSHED.json").write_text(json.dumps({
-            "db_sha256": hashlib.sha256(b"current-db").hexdigest(),
-            "gz_sha256": "c" * 64,
-        }), encoding="utf-8")
-        health = self.tmp / "nested-ok.sh"
-        health.write_text("#!/bin/sh\nprintf '%s' '{\"meta\":{\"ok\":true}}'\n", encoding="utf-8")
-        health.chmod(0o755)
-        env = os.environ.copy()
-        env.update({"FAT_CN_ROOT": str(server), "FAT_CN_LOCK": str(self.tmp / "health.lock"), "FAT_CN_HEALTH_CMD": str(health)})
+        baseline = subprocess.run(
+            ["bash", str(ROOT / "init_server_baseline.sh"), "--receipt", str(receipt), "--snapshot", str(db_path)],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
+        drop = self.tmp / name / "drop"
+        stage_drop(drop, replacement, 0)
+        (Path(env["FAT_CN_SERVED"])).write_text(current_sha + "\n", encoding="utf-8")
+        return server, db_path, env, drop
+
+    def test_old_connection_restores_service(self):
+        server, db_path, env, drop = self._initialized_package("old-conn", b"current-db", b"replacement-db", "old_connection")
+        authorized = subprocess.run(
+            ["bash", str(ROOT / "authorize_push_baseline.sh"), "--dir", str(drop), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(authorized.returncode, 0, authorized.stdout + authorized.stderr)
+        before = json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))["commit_id"]
         failed = subprocess.run(
-            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop)],
+            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop), "--ssh-target", "local"],
             env=env, text=True, capture_output=True, check=False,
         )
         self.assertEqual(failed.returncode, 13, failed.stdout + failed.stderr)
-        self.assertIn("remote health failed", failed.stderr)
-        self.assertEqual((server / "app_latest.db").read_bytes(), b"current-db")
-        self.assertFalse((server / "LAST_COMMIT.json").exists())
-        self.assertTrue((drop / "app_latest.ready").is_file())
-        self.assertIn('"gz_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"', (drop / "LAST_PUSHED.json").read_text(encoding="utf-8"))
+        self.assertIn("activate proof failed", failed.stderr)
+        self.assertNotIn("COMMIT_JSON", failed.stdout)
+        self.assertEqual(db_path.read_bytes(), b"current-db")
+        self.assertEqual(Path(env["FAT_CN_SERVED"]).read_text(encoding="utf-8").strip(), hashlib.sha256(b"current-db").hexdigest())
+        self.assertEqual(json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))["commit_id"], before)
+        log = Path(env["FAT_CN_HOOK_LOG"]).read_text(encoding="utf-8").splitlines()
+        self.assertEqual(log, ["activate", "rollback"])
+        self.assertFalse((server / "CN_PUSH_ALERT.json").exists())
+
+    def test_rollback_failure_leaves_alert_without_receipt(self):
+        server, db_path, env, drop = self._initialized_package("bad-rollback", b"current-db", b"replacement-db", "rollback_lies")
+        authorized = subprocess.run(
+            ["bash", str(ROOT / "authorize_push_baseline.sh"), "--dir", str(drop), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(authorized.returncode, 0, authorized.stdout + authorized.stderr)
+        failed = subprocess.run(
+            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(failed.returncode, 16, failed.stdout + failed.stderr)
+        self.assertIn("CN_PUSH_ALERT", failed.stderr)
+        self.assertNotIn("COMMIT_JSON", failed.stdout)
+        self.assertEqual(db_path.read_bytes(), b"current-db")
+        alert = json.loads((server / "CN_PUSH_ALERT.json").read_text(encoding="utf-8"))
+        self.assertEqual(alert["severity"], "critical")
+        self.assertFalse(alert["receipt_issued"])
+        self.assertEqual(alert["reason"], "service_rollback_unverified")
+
+    def test_missing_activate_hook_does_not_replace(self):
+        server, db_path, env, drop = self._initialized_package("no-hook", b"current-db", b"replacement-db", "match_file")
+        env.pop("FAT_CN_ACTIVATE_CMD")
+        env.pop("FAT_CN_ROLLBACK_CMD")
+        authorized = subprocess.run(
+            ["bash", str(ROOT / "authorize_push_baseline.sh"), "--dir", str(drop), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(authorized.returncode, 0, authorized.stdout + authorized.stderr)
+        failed = subprocess.run(
+            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(failed.returncode, 14, failed.stdout + failed.stderr)
+        self.assertIn("ACTIVATE_HOOK_MISSING", failed.stderr)
+        self.assertEqual(db_path.read_bytes(), b"current-db")
+        self.assertFalse((drop / "LAST_PUSHED.json").exists())
+
+    def test_missing_ssh_target_does_not_run_locally(self):
+        drop = self.tmp / "no-ssh"
+        failed = subprocess.run(
+            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop)],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(failed.returncode, 2, failed.stdout + failed.stderr)
+        self.assertIn("SSH_TARGET_REQUIRED", failed.stderr)
+        self.assertFalse(drop.exists())
+
 
     def test_install_lock_is_held_before_push_reads(self):
         drop = self.tmp / "drop-install"
@@ -1228,6 +1418,7 @@ class ReviewRegressionTests(unittest.TestCase):
             ready.write_text("B-READY", encoding="utf-8")
             blocked = subprocess.run(
                 ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop)],
+                env={**os.environ, "FAT_CN_ALLOW_TEST_LOCAL": "1"},
                 text=True, capture_output=True, check=False,
             )
             self.assertEqual(blocked.returncode, 11, blocked.stdout + blocked.stderr)

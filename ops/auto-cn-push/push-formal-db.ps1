@@ -7,6 +7,10 @@ param(
   [switch]$SkipReadyCheck
 )
 $ErrorActionPreference = 'Stop'
+if (-not $SshTarget -and $env:FAT_CN_ALLOW_TEST_LOCAL -ne '1') {
+  Write-Error 'SSH_TARGET_REQUIRED'
+  exit 2
+}
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $bash = if ($env:FAT_CN_BASH) { $env:FAT_CN_BASH } else { 'bash' }
 $args = @((Join-Path $here 'invoke_cn_push.sh'), '--dir', $Dir)

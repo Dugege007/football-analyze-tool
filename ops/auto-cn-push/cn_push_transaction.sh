@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 在已持有的 flock 下完成一次提交。调用方必须在整个进程期间持锁。
+# 在已持有的 flock 下完成一次授权或提交。调用方必须在整个进程期间持锁。
 # 标准输入：第一行是 JSON，其余字节是本次 gz。
-# 成功时向标准输出打印一行 COMMIT_JSON {...}。工作目录是唯一临时目录。
+# 授权成功打印 BASELINE_JSON。提交成功打印 COMMIT_JSON。工作目录是唯一临时目录。
 set -euo pipefail
 ROOT="${FAT_CN_ROOT:-/opt/football-data}"
 DB="${FAT_CN_DB:-$ROOT/app_latest.db}"
@@ -15,7 +15,8 @@ if [[ -n "${FAT_CN_PAUSE_SEC:-}" ]]; then
   sleep "$FAT_CN_PAUSE_SEC"
 fi
 python3 - "$WORK" "$ROOT" "$DB" <<'PY'
-import gzip, hashlib, json, os, pathlib, shutil, sys, time, urllib.request
+import gzip, hashlib, json, os, pathlib, shutil, stat, subprocess, sys, time
+
 work = pathlib.Path(sys.argv[1])
 root = pathlib.Path(sys.argv[2])
 db_path = pathlib.Path(sys.argv[3])
@@ -34,67 +35,173 @@ db_sha = hashlib.sha256(raw).hexdigest()
 if db_sha != str(header.get("db_sha256") or "").lower():
     sys.stderr.write("db hash mismatch\n")
     sys.exit(4)
-current = ""
-if db_path.is_file():
-    current = hashlib.sha256(db_path.read_bytes()).hexdigest()
-pred = str(header.get("predecessor_db_sha256") or "").lower()
-if current and current != db_sha and current != pred:
-    sys.stderr.write(f"STALE_PREDECESSOR current={current}\n")
+
+def file_sha(path: pathlib.Path) -> str:
+    if not path.is_file():
+        return ""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def load_json(path: pathlib.Path):
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+def atomic_write(path: pathlib.Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f".{path.name}.{os.getpid()}.tmp"
+    with tmp.open("w", encoding="utf-8") as handle:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+
+last = load_json(root / "LAST_COMMIT.json")
+if not isinstance(last, dict) or not last.get("commit_id") or not last.get("db_sha256"):
+    sys.stderr.write("BASELINE_NOT_FROZEN\n")
+    sys.exit(18)
+current = file_sha(db_path)
+if current != str(last.get("db_sha256") or "").lower():
+    sys.stderr.write(f"STALE_BASELINE disk={current} commit={last.get('db_sha256')}\n")
     sys.exit(12)
-backup = ""
-replaced = current != db_sha
-if replaced:
-    backup_dir = root / "backups" / f"db-{time.time_ns()}"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    if db_path.is_file():
-        shutil.copy2(db_path, backup_dir / "app_latest.db")
-        backup = str(backup_dir)
-    incoming = work / "app_latest.db.incoming"
-    incoming.write_bytes(raw)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(incoming, db_path)
-health_cmd = os.environ.get("FAT_CN_HEALTH_CMD", "").strip()
-health = None
-try:
-    if health_cmd:
-        import subprocess
-        health_raw = subprocess.check_output(health_cmd, shell=True, text=True)
+
+auth_path = root / "authorized" / f"{gz_sha}.json"
+stored = load_json(auth_path)
+op = str(header.get("op") or "commit")
+
+if op == "authorize":
+    record = {
+        "gz_sha256": gz_sha,
+        "db_sha256": db_sha,
+        "expected_commit_id": last["commit_id"],
+        "expected_db_sha256": str(last["db_sha256"]).lower(),
+        "frozen": True,
+    }
+    if stored:
+        if (
+            stored.get("gz_sha256") != gz_sha
+            or stored.get("db_sha256") != db_sha
+            or stored.get("expected_commit_id") != last["commit_id"]
+            or stored.get("expected_db_sha256") != record["expected_db_sha256"]
+        ):
+            sys.stderr.write("BASELINE_FROZEN\n")
+            sys.exit(17)
+        record = stored
     else:
-        with urllib.request.urlopen("http://127.0.0.1:8787/health", timeout=10) as resp:
-            health_raw = resp.read().decode("utf-8")
-    health = json.loads(health_raw)
-except Exception:
-    health = None
-if not isinstance(health, dict) or health.get("ok") is not True:
-    if backup:
-        saved = pathlib.Path(backup) / "app_latest.db"
-        if saved.is_file():
-            os.replace(saved, db_path)
-    elif replaced and db_path.is_file():
-        db_path.unlink()
-    sys.stderr.write("remote health failed\n")
+        atomic_write(auth_path, json.dumps(record, ensure_ascii=False) + "\n")
+    sys.stdout.write("BASELINE_JSON " + json.dumps(record, ensure_ascii=False) + "\n")
+    sys.exit(0)
+
+if not stored:
+    sys.stderr.write("BASELINE_NOT_FROZEN\n")
+    sys.exit(18)
+claimed = str(header.get("expected_commit_id") or "")
+if (
+    stored.get("gz_sha256") != gz_sha
+    or stored.get("db_sha256") != db_sha
+    or stored.get("expected_commit_id") != last["commit_id"]
+    or stored.get("expected_db_sha256") != str(last["db_sha256"]).lower()
+    or claimed != stored.get("expected_commit_id")
+):
+    sys.stderr.write(
+        f"STALE_BASELINE stored={stored.get('expected_commit_id')} current={last['commit_id']} claimed={claimed}\n"
+    )
+    sys.exit(12)
+
+activate_cmd = os.environ.get("FAT_CN_ACTIVATE_CMD", "").strip()
+rollback_cmd = os.environ.get("FAT_CN_ROLLBACK_CMD", "").strip()
+if not activate_cmd or not rollback_cmd:
+    sys.stderr.write("ACTIVATE_HOOK_MISSING\n")
+    sys.exit(14)
+
+def publish(data: bytes, mode: int | None, owner) -> str:
+    parent = db_path.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    tmp = parent / f".app_latest.db.{os.getpid()}.tmp"
+    with tmp.open("wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    if mode is not None:
+        os.chmod(tmp, mode)
+    if owner is not None:
+        try:
+            os.chown(tmp, owner[0], owner[1])
+        except PermissionError:
+            tmp.unlink(missing_ok=True)
+            sys.stderr.write("OWNER_INHERIT_FAILED\n")
+            sys.exit(21)
+    sys.stderr.write(f"DBTMP={tmp}\n")
+    os.replace(tmp, db_path)
+    return str(tmp)
+
+def hook(role: str, expect: str) -> dict | None:
+    cmd = activate_cmd if role == "activate" else rollback_cmd
+    env = os.environ.copy()
+    env["FAT_CN_DB"] = str(db_path)
+    env["FAT_CN_EXPECT_DB_SHA"] = expect
+    env["FAT_CN_HOOK_ROLE"] = role
+    try:
+        raw_out = subprocess.check_output(cmd, shell=True, text=True, env=env)
+        proof = json.loads(raw_out)
+    except Exception as exc:
+        sys.stderr.write(f"hook {role} failed: {exc}\n")
+        return None
+    if not isinstance(proof, dict) or proof.get("ok") is not True or proof.get("read_only") is not True:
+        return None
+    if str(proof.get("db_sha256") or "").lower() != expect:
+        return proof
+    return proof
+
+previous = db_path.read_bytes()
+previous_stat = db_path.stat()
+mode = stat.S_IMODE(previous_stat.st_mode)
+owner = (previous_stat.st_uid, previous_stat.st_gid)
+backup_dir = root / "backups" / f"db-{time.time_ns()}"
+backup_dir.mkdir(parents=True, exist_ok=True)
+shutil.copy2(db_path, backup_dir / "app_latest.db")
+publish(raw, mode, owner)
+
+def restore_file() -> None:
+    publish(previous, mode, owner)
+
+proof = hook("activate", db_sha)
+if proof is None or str(proof.get("db_sha256") or "").lower() != db_sha:
+    restore_file()
+    restored = file_sha(db_path)
+    back = hook("rollback", restored)
+    if back is None or str(back.get("db_sha256") or "").lower() != restored or file_sha(db_path) != current:
+        alert = {
+            "severity": "critical",
+            "ok": False,
+            "reason": "service_rollback_unverified",
+            "db_path": str(db_path),
+            "expected_db_sha256": current,
+            "disk_db_sha256": file_sha(db_path),
+            "receipt_issued": False,
+        }
+        atomic_write(root / "CN_PUSH_ALERT.json", json.dumps(alert, ensure_ascii=False) + "\n")
+        sys.stderr.write("CN_PUSH_ALERT service_rollback_unverified\n")
+        sys.exit(16)
+    sys.stderr.write("activate proof failed\n")
     sys.exit(13)
-commit_id = f"{time.time_ns()}"
+
+commit_id = str(time.time_ns())
 commit = {
     "commit_id": commit_id,
     "jc_day": header.get("jc_day"),
     "db_sha256": db_sha,
     "gz_sha256": gz_sha,
-    "predecessor_db_sha256": current,
+    "predecessor_commit_id": last["commit_id"],
+    "expected_commit_id": last["commit_id"],
+    "served_db_sha256": db_sha,
+    "read_only": True,
+    "activated": True,
     "health_ok": True,
-    "backup": backup,
+    "backup": str(backup_dir),
     "workdir": str(work),
 }
-commit_dir = root / "cn-push-commits"
-commit_dir.mkdir(parents=True, exist_ok=True)
-target = commit_dir / f"{commit_id}.json"
-tmp = commit_dir / f".{commit_id}.tmp"
 text = json.dumps(commit, ensure_ascii=False) + "\n"
-tmp.write_text(text, encoding="utf-8")
-os.replace(tmp, target)
-latest = root / "LAST_COMMIT.json"
-latest_tmp = root / ".LAST_COMMIT.json.tmp"
-latest_tmp.write_text(text, encoding="utf-8")
-os.replace(latest_tmp, latest)
+atomic_write(root / "cn-push-commits" / f"{commit_id}.json", text)
+atomic_write(root / "LAST_COMMIT.json", text)
 sys.stdout.write("COMMIT_JSON " + json.dumps(commit, ensure_ascii=False) + "\n")
 PY

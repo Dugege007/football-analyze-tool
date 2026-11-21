@@ -23,7 +23,7 @@
 历史补打在 `--prepare` 里，扫描规则单独放在 `protect.py`，看门狗在拉起前也会用同一规则写 `markers/ALERT_COMPLETE_UNPUSHED.json`。循环停着的时候，这个告警不依赖循环自己还在跑。
 
 - 已推边界是从最早的已推标记，或已核对的无场次证据，连续走到的最后一天，不是日期最大的已推日。
-- 从这条边界的次日查到今天。无场次日写成 `checked_no_matches_<日>.json`，这不是已推标记；库文件的大小和 mtime 没变时不再重复查询。
+- 从这条边界的次日查到今天。无场次日写成 `checked_no_matches_<日>.json`，这不是已推标记。下次扫描仍会再查库，不用主库文件时间跳过 WAL 里的新比赛。
 - 过去未齐套的日子记入 `markers/gap_ledger.json` 并继续告警，不标已推，也不挡住更晚已经齐套的日子。整库里含有缺口日的行，不表示那个日子齐套。
 - 今天还没齐套不标已推。未来赛程可以留在快照里，不会被标成已推。
 - 已经有 `pending_push.json` 时不重新打包，不改 staging。半截 JSON 会隔离到 `markers/quarantine/`，原字节保留，不当作已覆盖，也不另起一份 pending。
@@ -37,9 +37,13 @@
 
 ## 同库异 gz 与 Windows 脚本
 
-现网脚本在 db 哈希相同就删掉 ready 并退出。仓库里的推送入口先拿投放目录锁，再读包，然后用一次会话把 gz 送进 `remote_push_lock.sh`。这把锁盖住校验、备份、接收、替换、健康检查和服务器提交；客户端回执只采用服务器打印的 `COMMIT_JSON`。旧包如果赶不上当前库的前驱，会被拒绝，不会覆盖新库。同库但 gz 不同时，事务仍接收并校验这次 gz，写出新回执，不改旧回执文件。YuePC 仍优先，MSI 仍是备用，两边都调用这一条入口。健康结果只认 JSON 根上的 `ok`。
+现网脚本在 db 哈希相同就删掉 ready 并退出。仓库里的推送入口没有 SSH 目标就直接失败，不会改在本机执行；测试要显式设置 `FAT_CN_ALLOW_TEST_LOCAL=1`。拿到投放目录锁之后，它只读已经冻结的 `push_baseline.json`，不用当时的 `LAST_PUSHED` 重算前驱。服务器再用 `LAST_COMMIT` 核对这次 gz 在授权时冻结的提交身份。对不上就拒绝，改本地文件或重新授权都不会把旧包改绑到新的提交。
 
-这些服务器锁和“同库提交新 gz”只在换上仓库副本后才会在 YuePC / MSI 执行。旧脚本不调用这条事务，维护窗口里必须停掉旧入口，否则旧入口仍可绕过。没有在 Windows 上执行过 PowerShell。
+同库但 gz 不同时，仍要先有维护基线，再授权这个 gz，然后由事务校验并提交新回执。基线只能由 `init_server_baseline.sh` 生成：MSI 原回执、对应快照和服务器库文件的 db 哈希必须一致。它不把现场查到的远端哈希塞进前驱，也不写 YuePC 回执。
+
+换库使用目标目录里的临时文件再 `os.replace`。随后必须运行生产激活钩子，重启服务并核对只读和库指纹。钩子没配置就失败，不换库。激活对不上时先恢复文件，再跑回滚钩子核对服务已经回到原库。回滚对不上就写 `CN_PUSH_ALERT.json`，不发成功回执。YuePC 仍优先，MSI 仍是备用。
+
+这些只在换上仓库副本后才会在 YuePC / MSI 执行。旧脚本不调用这条事务，维护窗口里必须停掉旧入口。没有在 Windows 上执行过 PowerShell。`FAT_CN_BASH` 要能提供 `flock`、`python3` 和 `sha256sum`。Git Bash 收到的必须是 `/c/...` 这种路径，PowerShell 的 `C:\...` 要先转换。`install_package_atomic.ps1` 把脚本路径拼进 `ProcessStartInfo.Arguments`，目录名含空格时可能被拆开。这些都要在一台 Windows 上用带空格的投放目录验收：安装器持有的 `drop.operation.lock` 和推送打开的是同一个文件，推送在安装期间得到 `DROP_LOCK_HELD`。本环境没有这项验收，不能算通过。
 
 11-20 的回执不能给 11-12 至 11-19 补造已推标记。没有与回执哈希一致的历史快照时，`migrate_receipt.py` 不写已推标记，也不清掉已有缺口。历史判断不使用调用方传来的 live 撤场目录。`--as-current` 只写 `evidence_current_*.json`，不写 `pushed_*.json`。已有不同证据的标记会停住，不覆盖。
 
@@ -76,7 +80,7 @@ bash ops/auto-cn-push/rollback_watchdog.sh
 - 服务器事务锁、投放目录锁，以及“同库不同 gz 由服务器提交新回执”。旧入口不调用 `invoke_cn_push.sh`，维护时必须停掉旧入口。
 - YuePC 仍优先，MSI 仍是备用。两边的仓库副本都进同一条事务；线上副本换掉之前，这条链不生效。
 - 11-12 至 11-19 若没有与 11-20 回执哈希一致的历史快照，不能标成当时已推。`--as-current` 只写 `evidence_current_*.json`，不写已推标记。
-- 本环境没有 PowerShell，没有执行 `install_package_atomic.ps1` 或 `push-formal-db.ps1`。安装器要先跑 `hold_drop_lock.sh` 再读包；这一点只在 bash 锁进程上做过交错测试。
+- 本环境没有 PowerShell，没有执行 `install_package_atomic.ps1` 或 `push-formal-db.ps1`。安装器要先跑 `hold_drop_lock.sh` 再读包；这一点只在 bash 锁进程上做过交错测试。`FAT_CN_BASH` 的路径转换和带空格的 Windows 路径还没有验收。
 
 ## 测试
 
