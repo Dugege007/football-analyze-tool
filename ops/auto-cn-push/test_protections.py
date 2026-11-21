@@ -11,6 +11,7 @@ import shutil
 import signal
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -2038,6 +2039,203 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("OTHER", final)
         self.assertIn("# fat-auto-cn-push-watchdog", final)
         self.assertNotIn("GONE", final)
+
+    def test_health_db_route_reads_the_open_connection(self):
+        main = (ROOT.parents[1] / "api" / "app" / "main.py").read_text(encoding="utf-8")
+        start = main.index("def health_db")
+        chunk = main[start:main.index("\ndef ", start)]
+        self.assertIn("read_identity(conn)", chunk)
+        self.assertIn("connect()", chunk)
+        self.assertNotIn("sha256", chunk)
+        self.assertNotIn("read_bytes", chunk)
+        identity = (ROOT.parents[1] / "api" / "app" / "running_db.py").read_text(encoding="utf-8")
+        self.assertNotIn("read_bytes", identity)
+        hook = (ROOT / "cn_running_api_hook.py").read_text(encoding="utf-8")
+        self.assertNotIn("FAT_CN_EXPECT", hook)
+
+    def test_running_api_hook_fails_closed_without_echoing_expected_hash(self):
+        bait = "expected-hash-must-not-be-echoed"
+        db = self.tmp / "closed.db"
+        db.write_bytes(b"not-opened")
+        env = os.environ.copy()
+        env.update({
+            "FAT_CN_DB": str(db),
+            "FAT_CN_API_URL": "http://127.0.0.1:9/health/db",
+            "FAT_CN_EXPECT_DB_SHA": bait,
+        })
+        completed = subprocess.run(
+            ["python3", str(ROOT / "cn_running_api_hook.py")],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertNotIn(bait, completed.stdout)
+        self.assertNotIn("running_api", completed.stdout)
+        self.assertIn("API_UNREACHABLE", completed.stderr)
+
+    def test_running_process_swap_and_stale_rollback(self):
+        current = self._served_bytes("current-token")
+        replacement = self._served_bytes("replacement-token")
+        self.assertNotEqual(current, replacement)
+        cases = (
+            ("fresh", 0, replacement),
+            ("stale", 13, current),
+            ("disk", 16, current),
+        )
+        for mode, expect, remain in cases:
+            with self.subTest(mode=mode):
+                server, db_path, env, drop = self._initialized_package(
+                    f"live-{mode}", current, replacement, "match_file",
+                )
+                probe = self._start_identity_probe(db_path, mode)
+                try:
+                    command = (
+                        f"FAT_CN_API_URL=http://127.0.0.1:{probe['port']}/health/db "
+                        f"python3 {ROOT / 'cn_running_api_hook.py'}"
+                    )
+                    env["FAT_CN_ACTIVATE_CMD"] = command
+                    env["FAT_CN_ROLLBACK_CMD"] = command
+                    before = json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))["commit_id"]
+                    authorized = subprocess.run(
+                        ["bash", str(ROOT / "authorize_push_baseline.sh"), "--dir", str(drop), "--ssh-target", "local"],
+                        env=env, text=True, capture_output=True, check=False,
+                    )
+                    self.assertEqual(authorized.returncode, 0, authorized.stdout + authorized.stderr)
+                    pushed = subprocess.run(
+                        ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop), "--ssh-target", "local"],
+                        env=env, text=True, capture_output=True, check=False,
+                    )
+                    self.assertEqual(pushed.returncode, expect, pushed.stdout + pushed.stderr)
+                    self.assertEqual(db_path.read_bytes(), remain)
+                    if expect == 0:
+                        self.assertIn("PUSH_COMMITTED", pushed.stdout)
+                        receipt = json.loads((drop / "LAST_PUSHED.json").read_text(encoding="utf-8"))
+                        self.assertEqual(receipt["db_sha256"], hashlib.sha256(replacement).hexdigest())
+                        self.assertTrue(receipt["activated"])
+                        served = self._probe_identity(probe["port"])
+                        self.assertEqual(served["fingerprint_source"], "running_api")
+                        self.assertNotIn("db_sha256", served)
+                        self.assertEqual(served["db_path"], str(db_path))
+                        self.assertEqual(served["fingerprint"], self._file_fingerprint(db_path))
+                    else:
+                        self.assertNotIn("COMMIT_JSON", pushed.stdout)
+                        self.assertNotIn("PUSH_COMMITTED", pushed.stdout)
+                        self.assertEqual(
+                            json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))["commit_id"],
+                            before,
+                        )
+                        self.assertFalse((drop / "LAST_PUSHED.json").exists())
+                        if mode == "stale":
+                            self.assertIn("FINGERPRINT_MISMATCH", pushed.stderr)
+                            self.assertNotIn("CN_PUSH_ALERT", pushed.stderr)
+                            served = self._probe_identity(probe["port"])
+                            self.assertEqual(served["fingerprint"], self._file_fingerprint(db_path))
+                        else:
+                            self.assertIn("FINGERPRINT_MISMATCH", pushed.stderr)
+                            alert = json.loads((server / "CN_PUSH_ALERT.json").read_text(encoding="utf-8"))
+                            self.assertEqual(alert["reason"], "service_rollback_unverified")
+                            self.assertFalse(alert["receipt_issued"])
+                finally:
+                    self._stop_probe(probe)
+
+    def _served_bytes(self, token: str) -> bytes:
+        path = self.tmp / f"served-{token}.db"
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE served (token TEXT)")
+        conn.execute("INSERT INTO served (token) VALUES (?)", (token,))
+        conn.commit()
+        conn.close()
+        return path.read_bytes()
+
+    def _file_fingerprint(self, path: Path) -> str:
+        sys_path = str(ROOT.parents[1] / "api")
+        if sys_path not in sys.path:
+            sys.path.insert(0, sys_path)
+        from app.running_db import read_identity
+        uri = path.resolve().as_uri() + "?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        try:
+            return read_identity(conn)["fingerprint"]
+        finally:
+            conn.close()
+
+    def _start_identity_probe(self, db_path: Path, mode: str) -> dict:
+        script = self.tmp / f"probe-{mode}-{db_path.parent.name}.py"
+        script.write_text(
+            "import hashlib, json, os, sqlite3, sys\n"
+            "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+            "os.environ['FAT_DISABLE_DOTENV'] = '1'\n"
+            "os.environ['APP_DB_PATH'] = sys.argv[1]\n"
+            "sys.path.insert(0, sys.argv[2])\n"
+            "mode = sys.argv[3]\n"
+            "from app.running_db import read_identity\n"
+            "if mode == 'fresh':\n"
+            "    from app.db import connect\n"
+            "    def current():\n"
+            "        conn = connect()\n"
+            "        try:\n"
+            "            return read_identity(conn)\n"
+            "        finally:\n"
+            "            conn.close()\n"
+            "elif mode == 'stale':\n"
+            "    held = sqlite3.connect(sys.argv[1])\n"
+            "    def current():\n"
+            "        return read_identity(held)\n"
+            "else:\n"
+            "    def current():\n"
+            "        raw = open(sys.argv[1], 'rb').read()\n"
+            "        return {\n"
+            "            'ok': True, 'read_only': True, 'fingerprint_source': 'running_api',\n"
+            "            'fingerprint': hashlib.sha256(raw).hexdigest(),\n"
+            "            'db_sha256': hashlib.sha256(raw).hexdigest(),\n"
+            "            'db_path': sys.argv[1], 'journal_mode': 'delete',\n"
+            "        }\n"
+            "class Handler(BaseHTTPRequestHandler):\n"
+            "    def do_GET(self):\n"
+            "        if self.path.split('?', 1)[0] != '/health/db':\n"
+            "            self.send_error(404); return\n"
+            "        body = json.dumps(current()).encode()\n"
+            "        self.send_response(200)\n"
+            "        self.send_header('Content-Type', 'application/json')\n"
+            "        self.send_header('Content-Length', str(len(body)))\n"
+            "        self.end_headers()\n"
+            "        self.wfile.write(body)\n"
+            "    def log_message(self, fmt, *args):\n"
+            "        return\n"
+            "server = HTTPServer(('127.0.0.1', 0), Handler)\n"
+            "sys.stdout.write('PORT %s\\n' % server.server_address[1])\n"
+            "sys.stdout.flush()\n"
+            "server.serve_forever()\n",
+            encoding="utf-8",
+        )
+        proc = subprocess.Popen(
+            ["python3", str(script), str(db_path), str(ROOT.parents[1] / "api"), mode],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        assert proc.stdout is not None
+        line = proc.stdout.readline()
+        if not line.startswith("PORT "):
+            err = proc.stderr.read() if proc.stderr is not None else ""
+            proc.kill()
+            raise AssertionError(line + err)
+        return {"proc": proc, "port": int(line.split()[1])}
+
+    def _probe_identity(self, port: int) -> dict:
+        import urllib.request
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health/db", timeout=3) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def _stop_probe(self, probe: dict) -> None:
+        proc = probe["proc"]
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=3)
+        if proc.stdout is not None:
+            proc.stdout.close()
+        if proc.stderr is not None:
+            proc.stderr.close()
 
     def test_missing_live_dir_fails_closed(self):
         env_file = self.tmp / "bad.env"

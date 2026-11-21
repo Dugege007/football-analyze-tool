@@ -2,7 +2,7 @@
 
 这里纳入原先只放在 box 上、不在 Git 里的 `auto-cn-push` 脚本，并加上两项保护。齐套口径没有改。采集、赛果、预测、双写和 `LIVE_CAPTURE` 都没有动。
 
-本目录现在还没有安装到现网，也没有对大陆站做过推送。
+本目录现在还没有安装到现网，也没有对大陆站做过推送。看门狗还没有上线，不能把保护说成已经交付。2026-11-21 21:57 机器重启后旧循环停止，22:11 的例程是按原脚本拉起的。
 
 ## 根因
 
@@ -42,6 +42,27 @@
 同库但 gz 不同时，仍要先有维护基线，再授权这个 gz，然后由事务校验并提交新回执。基线只能由 `init_server_baseline.sh` 生成：MSI 原回执、对应快照和服务器库文件的 db 哈希必须一致。它不把现场查到的远端哈希塞进前驱，也不写 YuePC 回执。
 
 换库使用目标目录里的临时文件再 `os.replace`。随后必须运行生产激活钩子。钩子要报告正在运行的 API 指纹，`fingerprint_source` 必须是 `running_api`。只对磁盘文件做 sha256 不能当成服务已经在跑。事务不把预期哈希放进环境变量。钩子没配置就失败，不换库。激活对不上时先恢复文件，再跑回滚钩子。回滚对不上就写 `CN_PUSH_ALERT.json`，不发成功回执。YuePC 仍优先，MSI 仍是备用。
+
+生产激活钩子是 `cn_running_api_hook.py`。它请求正在运行的 `GET /health/db`。这个接口用和普通读请求一样的 `connect()` 打开库，只做查询，返回结构、页数和首尾行的摘要，以及连接报告的路径和 `journal_mode`。响应里没有文件 sha256。钩子再用只读连接对 `FAT_CN_DB` 算同一份摘要。两边一致，路径是同一个文件，`journal_mode` 为 `delete`，并且旁边没有 `-wal`/`-shm`，才把文件字节的 sha256 写进证明。连不上、摘要不一致、路径不一致，或仍是 wal，都失败，事务按原逻辑回滚。钩子不读预期哈希。现有 `/health` 仍只返回版本、双写开关和库标签，不证明读到了哪一份文件。
+
+默认地址是操作者给出的本机监听 `http://127.0.0.1:8787/health/db`。要改地址或指明接口代码目录时，写进已有的钩子命令，不要改事务脚本：
+
+```bash
+FAT_CN_ACTIVATE_CMD='FAT_CN_API_URL=http://127.0.0.1:8787/health/db FAT_CN_APP_ROOT=/opt/football-analyze-tool/api python3 /操作者选定的路径/cn_running_api_hook.py'
+FAT_CN_ROLLBACK_CMD="$FAT_CN_ACTIVATE_CMD"
+```
+
+钩子若还放在本仓库的 `ops/auto-cn-push/`，可以不设 `FAT_CN_APP_ROOT`。单独拷走时必须设置，否则 `APP_ROOT_MISSING` 失败。上面的 `/opt/football-analyze-tool` 只是发布文档里的代码同步目录，不是这次读到的 systemd 配置。
+
+这次没有读取现网单元，下面几项必须在服务器上只读确认，不能靠仓库猜测：
+
+- `systemctl cat football-analyze-api` 里的 User、WorkingDirectory、Environment、EnvironmentFile、ExecStart。
+- 进程环境中的 `APP_DB_PATH`。代码不设置时默认是 `api/data/app.db`，不是 `/opt/football-data/app_latest.db`。
+- `APP_READONLY` 和 `APP_DB_LABEL`。
+- 运行中的 `/health/db` 返回的 `journal_mode`，以及 `/opt/football-data/app_latest.db-wal`、`app_latest.db-shm` 是否存在。wal 或这些伴随文件会让钩子失败。
+- Nginx 上 `/api` 是否去掉前缀。钩子打本机 `8787` 的 `/health/db`，不走公网，也不假定 Nginx 路径。
+
+接口代码里的 `/health/db` 还没有装到现网。钩子命令也还没有写进推送环境。这次没有重启 `football-analyze-api`，没有换 `/opt/football-data/app_latest.db`。
 
 Windows 本机安装和推送使用同一把 `FileShare.None` 文件锁，不要求本机有 `flock`、Git Bash 或 PATH 上的 `python3`。推送用 `ssh.exe` 把原始字节送进远端已有的 bash/flock 事务。缺少 `ssh.exe` 或明确的 Python 时退出码 20，输出 `DEPENDENCY_MISSING`，不会报成锁冲突。不要安装 OpenSSH Server，不要开端口，也不要安装未知的 `flock.exe`。WSL 不是两台机器的默认路径。
 
