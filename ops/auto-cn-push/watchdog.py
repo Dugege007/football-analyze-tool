@@ -384,7 +384,9 @@ def maybe_scan_alert(home: Path) -> None:
     import run_auto_cn_push
 
     live = os.environ.get("ODDS_DATA_DIR", "").strip()
-    live_root = Path(live) / "5dollar/live" if live else home / "live"
+    if not live or not Path(live).is_dir():
+        raise RuntimeError("ODDS_DATA_DIR 未设置或不是已有目录，拒绝使用默认 live 目录")
+    live_root = Path(live) / "5dollar" / "live"
     run_auto_cn_push.scan_and_alert(home=home, db=Path(db), live_root=live_root)
 
 
@@ -401,8 +403,7 @@ def apply_runtime_config(home: Path) -> str | None:
         )
         return str(exc)
     os.environ["APP_DB_PATH"] = values["APP_DB_PATH"]
-    if values.get("ODDS_DATA_DIR"):
-        os.environ["ODDS_DATA_DIR"] = values["ODDS_DATA_DIR"]
+    os.environ["ODDS_DATA_DIR"] = values["ODDS_DATA_DIR"]
     alert = home / "markers" / "ALERT_CONFIG.json"
     if alert.is_file():
         alert.unlink()

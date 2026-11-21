@@ -59,14 +59,13 @@ if (Test-Path $ExpectFile) {
   }
 }
 
-# 同 db 不能在读到远端哈希之前跳过，也不能改写 LAST_PUSHED 的 gz。
-$Machine = if ($env:AUTO_CN_PUSH_MACHINE) { $env:AUTO_CN_PUSH_MACHINE } else { '' }
-$ClaimFile = Join-Path $Dir 'push_claim.json'
-if (-not (Test-Path $ClaimFile)) { throw 'missing push_claim.json; refuse unclaimed push' }
-$claim = Get-Content $ClaimFile -Raw -Encoding UTF8 | ConvertFrom-Json
-if (-not $Machine -or [string]$claim.machine -ne $Machine) { throw "push claim machine mismatch" }
-if ($claim.db_sha256 -and $claim.db_sha256.ToString().ToLower() -ne $ExpectedSha) { throw 'push claim db mismatch' }
-if ($claim.gz_sha256 -and $claim.gz_sha256.ToString().ToLower() -ne $gotGz) { throw 'push claim gz mismatch' }
+$dropLockPath = Join-Path $Dir 'drop.operation.lock'
+$dropLock = $null
+try {
+  $dropLock = [System.IO.File]::Open($dropLockPath, 'OpenOrCreate', 'ReadWrite', 'None')
+} catch {
+  throw "drop lock held"
+}
 
 $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $BackupDir = "/root/fat-deploy-backups/db-auto-close-$Stamp"
@@ -90,37 +89,27 @@ function Write-Utf8NoBom([string]$Path, [string]$Text) {
 }
 
 Write-Host '=== pre: remote db sha ==='
-$remoteText = Ssh 'sha256sum /opt/football-data/app_latest.db'
+$remoteText = Ssh "flock -n /run/fat-cn-push.lock -c 'sha256sum /opt/football-data/app_latest.db'"
 $remoteDb = (($remoteText -split '\s+')[0]).ToLower()
 if ($remoteDb -eq $ExpectedSha) {
-  $health = Ssh 'curl -fsS http://127.0.0.1:8787/health'
-  if ($health -notmatch '"ok"\s*:\s*true') { throw "remote health failed: $health" }
+  $health = Ssh "flock -n /run/fat-cn-push.lock -c 'curl -fsS http://127.0.0.1:8787/health'"
+  $healthObj = $health | ConvertFrom-Json
+  if ($healthObj.ok -ne $true) { throw "remote health failed" }
   $prevGz = $null
-  $prevDb = $null
   if (Test-Path $MarkerDone) {
     try {
       $prev = Get-Content $MarkerDone -Raw -Encoding UTF8 | ConvertFrom-Json
       $prevGz = [string]$prev.gz_sha256
-      $prevDb = [string]$prev.db_sha256
     } catch {}
   }
-  $confirm = [ordered]@{
-    kind = 'remote_db_confirm'
-    remote_db_sha256 = $remoteDb
-    pending_db_sha256 = $ExpectedSha
-    pending_gz_sha256 = $gotGz
-    receipt_db_sha256 = $prevDb
-    receipt_gz_sha256 = $prevGz
-    health_ok = $true
-    health_body = $health.Trim()
-    confirmed_at = (Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz')
-    rewrote_receipt_gz = $false
-    note = 'remote db already matches; LAST_PUSHED was not modified'
+  if ($prevGz -and $prevGz.ToLower() -eq $gotGz) {
+    if (Test-Path $ReadyFile) { Remove-Item $ReadyFile -Force }
+    Write-Host "SKIP_SAME_DB_AND_GZ"
+    if ($dropLock) { $dropLock.Dispose() }
+    exit 0
   }
-  Write-Utf8NoBom (Join-Path $Dir 'REMOTE_DB_CONFIRM.json') (($confirm | ConvertTo-Json) + "`n")
-  if (Test-Path $ReadyFile) { Remove-Item $ReadyFile -Force }
-  Write-Host "REUSED_REMOTE_DB remote=$remoteDb receipt_gz_unchanged"
-  exit 0
+  if ($dropLock) { $dropLock.Dispose() }
+  throw "GZ_NOT_THE_DELIVERED_PACKAGE remote db matches but this gz was not the delivered package; LAST_PUSHED was not modified"
 }
 
 Write-Host '=== backup remote ==='
@@ -137,6 +126,8 @@ Ssh ("rm -f " + $RemoteGz + "; ls -la " + $RemoteTmp)
 Write-Host '=== atomic replace + restart ==='
 $remoteScript = @"
 set -e
+exec 8>/run/fat-cn-push.lock
+flock -n 8 || { echo REMOTE_PUSH_LOCK_HELD; exit 9; }
 IN=$RemoteTmp
 FINAL=$RemoteFinal
 EXPECTED=$ExpectedSha
@@ -156,7 +147,8 @@ Ssh 'systemctl restart football-analyze-api'
 Start-Sleep -Seconds 6
 Ssh 'systemctl is-active football-analyze-api'
 $health = Ssh 'curl -fsS http://127.0.0.1:8787/health'
-if ($health -notmatch '"ok"\s*:\s*true') { throw "remote health failed after replace: $health" }
+$healthObj = $health | ConvertFrom-Json
+if ($healthObj.ok -ne $true) { throw "remote health failed after replace" }
 $postText = Ssh 'sha256sum /opt/football-data/app_latest.db'
 $postDb = (($postText -split '\s+')[0]).ToLower()
 if ($postDb -ne $ExpectedSha) { throw "remote db after replace is $postDb" }
@@ -181,3 +173,4 @@ try {
 } catch {
   Write-Host ("LIVE_CAPTURE probe warning: " + $_.Exception.Message)
 }
+if ($dropLock) { $dropLock.Dispose() }

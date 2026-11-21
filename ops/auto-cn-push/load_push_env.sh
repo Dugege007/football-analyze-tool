@@ -20,6 +20,11 @@ load_push_env() {
     echo "CONFIG_DB_MISSING"
     return 5
   fi
+  if [[ -z "${ODDS_DATA_DIR:-}" || ! -d "$ODDS_DATA_DIR" ]]; then
+    printf '%s\n' '{"kind":"config","reason":"config_live_missing","note":"ODDS_DATA_DIR 未设置或不是已有目录"}' > "$alert"
+    echo "CONFIG_LIVE_MISSING"
+    return 5
+  fi
   rm -f "$alert"
   return 0
 }

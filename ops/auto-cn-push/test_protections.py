@@ -434,8 +434,13 @@ class WatchdogTests(unittest.TestCase):
         (self.home / "markers").mkdir()
         self.db = self.tmp / "loop.db"
         self.db.write_bytes(b"x")
+        self.odds = self.tmp / "odds"
+        self.odds.mkdir()
         self.env_file = self.tmp / "push.env"
-        self.env_file.write_text(f'APP_DB_PATH="{self.db}"\n', encoding="utf-8")
+        self.env_file.write_text(
+            f'APP_DB_PATH="{self.db}"\nODDS_DATA_DIR="{self.odds}"\n',
+            encoding="utf-8",
+        )
         self._old_env = os.environ.get("AUTO_CN_PUSH_ENV")
         os.environ["AUTO_CN_PUSH_ENV"] = str(self.env_file)
         self.procs: list[subprocess.Popen] = []
@@ -683,8 +688,10 @@ class WatchdogTests(unittest.TestCase):
         before = db.read_bytes()
         write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
         (self.home / "logs" / "ensure_auto_cn_push.pid").write_text("999999\n", encoding="ascii")
+        odds = self.tmp / "odds"
+        odds.mkdir(exist_ok=True)
         self.env_file.write_text(
-            f'APP_DB_PATH="{db}"\nODDS_DATA_DIR="{self.tmp / "odds"}"\n',
+            f'APP_DB_PATH="{db}"\nODDS_DATA_DIR="{odds}"\n',
             encoding="utf-8",
         )
         env = os.environ.copy()
@@ -722,8 +729,13 @@ class InstallTests(unittest.TestCase):
         self.cron = self.tmp / "cron"
         self.db = self.tmp / "app.db"
         self.db.write_bytes(b"x")
+        self.odds = self.tmp / "odds"
+        self.odds.mkdir()
         self.env_file = self.tmp / "push.env"
-        self.env_file.write_text(f'APP_DB_PATH="{self.db}"\n', encoding="utf-8")
+        self.env_file.write_text(
+            f'APP_DB_PATH="{self.db}"\nODDS_DATA_DIR="{self.odds}"\n',
+            encoding="utf-8",
+        )
         for name in (
             "install_watchdog.sh",
             "rollback_watchdog.sh",
@@ -807,7 +819,7 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual(first["gz_sha256"], second["gz_sha256"])
         self.assertEqual(first["db_sha256"], second["db_sha256"])
 
-    def test_same_db_different_gz_needs_remote_confirm_and_does_not_rewrite(self):
+    def test_same_db_different_gz_is_not_marked(self):
         make_db(self.db, historical_days())
         write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
         prepared = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
@@ -819,48 +831,16 @@ class ReviewRegressionTests(unittest.TestCase):
         with self.assertRaises(json.JSONDecodeError):
             json.loads(receipt_path.read_text(encoding="utf-8"))
         loaded = runner.load_json(receipt_path)
-        self.assertEqual(loaded["gz_sha256"], "a" * 64)
-        bad_health = {
-            "remote_db_sha256": pending["db_sha256"],
-            "pending_db_sha256": pending["db_sha256"],
-            "pending_gz_sha256": pending["gz_sha256"],
-            "receipt_db_sha256": pending["db_sha256"],
-            "receipt_gz_sha256": "a" * 64,
-            "health_ok": False,
-            "health_body": '{"ok": false}',
-            "rewrote_receipt_gz": False,
-        }
         refused = runner.mark_confirmed(
             home=self.home, jc_day=pending["jc_day"], db=self.db, live_root=self.live,
-            receipts=[loaded], remote_confirm=bad_health,
+            receipts=[loaded],
         )
         self.assertFalse(refused["ok"])
-        self.assertEqual(refused["reason"], "remote_health_failed")
+        self.assertEqual(refused["reason"], "gz_not_delivered")
+        self.assertFalse(refused["push_again"])
         self.assertEqual(receipt_path.read_bytes(), original)
-        forged = dict(bad_health)
-        forged["health_ok"] = True
-        forged["health_body"] = '{"ok": true}'
-        forged["receipt_gz_sha256"] = pending["gz_sha256"]
-        forged_result = runner.mark_confirmed(
-            home=self.home, jc_day=pending["jc_day"], db=self.db, live_root=self.live,
-            receipts=[loaded], remote_confirm=forged,
-        )
-        self.assertFalse(forged_result["ok"])
-        self.assertEqual(forged_result["reason"], "receipt_gz_not_cited")
-        self.assertEqual(receipt_path.read_bytes(), original)
-        confirm = dict(forged)
-        confirm["receipt_gz_sha256"] = "a" * 64
-        marked = runner.mark_confirmed(
-            home=self.home, jc_day=pending["jc_day"], db=self.db, live_root=self.live,
-            receipts=[loaded], remote_confirm=confirm,
-        )
-        self.assertTrue(marked["ok"], marked)
-        self.assertEqual(marked["reason"], "remote_db_reused")
-        self.assertFalse(marked["push_again"])
-        self.assertEqual(receipt_path.read_bytes(), original)
-        saved = json.loads((self.home / "markers" / "pushed_2026-11-19.json").read_text(encoding="utf-8"))
-        self.assertEqual(saved["receipt_gz_sha256"], "a" * 64)
-        self.assertNotEqual(saved["gz_sha256"], saved["receipt_gz_sha256"])
+        self.assertFalse((self.home / "markers" / "pushed_2026-11-19.json").exists())
+        self.assertTrue((self.home / "markers" / "pending_push.json").is_file())
 
     def test_clean_env_does_not_start_or_use_default_db(self):
         env = os.environ.copy()
@@ -885,9 +865,11 @@ class ReviewRegressionTests(unittest.TestCase):
         home = root / "ops home"
         db = root / "db dir" / "app.db"
         make_db(db, {})
+        odds = root / "odds dir"
+        odds.mkdir(parents=True)
         env_file = root / "env dir" / "push env"
         env_file.parent.mkdir(parents=True)
-        env_file.write_text(f'APP_DB_PATH="{db}"\n', encoding="utf-8")
+        env_file.write_text(f'APP_DB_PATH="{db}"\nODDS_DATA_DIR="{odds}"\n', encoding="utf-8")
         cron = root / "cron file"
         env = os.environ.copy()
         env.update({
@@ -926,8 +908,10 @@ class ReviewRegressionTests(unittest.TestCase):
     def _install_env(self, crontab: Path) -> dict:
         db = self.tmp / "install.db"
         db.write_bytes(b"x")
+        odds = self.tmp / "install-odds"
+        odds.mkdir(exist_ok=True)
         env_file = self.tmp / "install.env"
-        env_file.write_text(f'APP_DB_PATH="{db}"\n', encoding="utf-8")
+        env_file.write_text(f'APP_DB_PATH="{db}"\nODDS_DATA_DIR="{odds}"\n', encoding="utf-8")
         env = os.environ.copy()
         env.update({
             "AUTO_CN_PUSH_HOME": str(self.home),
@@ -1026,8 +1010,7 @@ class ReviewRegressionTests(unittest.TestCase):
             home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
             today=TODAY, lookback=14, check_fn=checker,
         )
-        self.assertNotIn("2026-11-13", calls)
-        self.assertIn("2026-11-13", second["checked_empty"])
+        self.assertIn("2026-11-13", calls)
         self.assertTrue((self.home / "markers" / "checked_no_matches_2026-11-13.json").is_file())
         self.assertFalse((self.home / "markers" / "pushed_2026-11-13.json").exists())
 
@@ -1058,6 +1041,16 @@ class ReviewRegressionTests(unittest.TestCase):
         )
         self.assertEqual(mismatched["status"], "snapshot_hash_mismatch")
         self.assertEqual(list((self.home / "markers").glob("pushed_*.json")), [])
+        plan = self.live / "plan"
+        plan.mkdir(parents=True)
+        write_json(plan / "2026-11-12.json", {"kickoff_log": [
+            {"event": "dropped_from_csl", "match_uid": "2026-11-12|m0"},
+            {"event": "dropped_from_csl", "match_uid": "2026-11-12|m1"},
+        ]})
+        write_json(self.home / "markers" / "gap_ledger.json", {
+            "kind": "gap_ledger",
+            "days": [{"jc_day": "2026-10-01", "reason": "db_incomplete"}],
+        })
         migrated = migrate_receipt(
             home=self.home, receipt=receipt, snapshot=self.db, live_root=self.live,
             today=TODAY, start=date(2026, 11, 12),
@@ -1071,23 +1064,149 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual(saved["evidence_db_sha256"], digest)
         self.assertTrue(saved["not_a_new_push"])
 
-    def test_two_machines_and_running_task(self):
-        pending = {"db_sha256": "d" * 64, "gz_sha256": "e" * 64}
-        first = protect.acquire_push_claim(None, "ypc", pending, 1_000.0)
-        self.assertTrue(first["ok"])
-        second = protect.acquire_push_claim(first["claim"], "msi", pending, 1_100.0)
-        self.assertFalse(second["ok"])
-        self.assertEqual(second["reason"], "other_machine_holds_claim")
-        self.assertFalse(protect.windows_install_allowed(task_status="Running", lock_held=False)[0])
-        self.assertFalse(protect.windows_install_allowed(task_status="Ready", lock_held=True)[0])
-        self.assertTrue(protect.windows_install_allowed(task_status="Ready", lock_held=False)[0])
-        push = (ROOT / "push-formal-db.ps1").read_text(encoding="utf-8")
-        self.assertIn("REUSED_REMOTE_DB", push)
-        self.assertIn("remote health failed", push)
-        self.assertNotIn("SKIP already pushed", push)
-        self.assertIn("Write-Utf8NoBom", push)
-        install = (ROOT / "install_package_atomic.ps1").read_text(encoding="utf-8")
-        self.assertIn("task still running after disable", install)
+        self.assertEqual(saved["evidence_source"], "historical_snapshot")
+        self.assertEqual(migrated.get("dropped_from_csl_snapshot"), "absent")
+        ledger = json.loads((self.home / "markers" / "gap_ledger.json").read_text(encoding="utf-8"))
+        self.assertIn("2026-10-01", [item["jc_day"] for item in ledger["days"]])
+
+    def test_quarantine_hold_blocks_later_prepare(self):
+        staging = self.home / "staging"
+        staging.mkdir()
+        (staging / "app_latest.db.gz").write_bytes(b"KEEP")
+        (self.home / "markers" / "pending_push.json").write_text('{"jc_day":', encoding="utf-8")
+        make_db(self.db, historical_days())
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
+        first = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        self.assertEqual(first["error"], "pending_corrupt")
+        second = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        self.assertEqual(second["error"], "quarantine_hold")
+        self.assertEqual((staging / "app_latest.db.gz").read_bytes(), b"KEEP")
+        released = runner.release_quarantine(self.home, "审计后确认可以重新打包")
+        self.assertTrue(released["ok"])
+        self.assertTrue((self.home / "markers" / "quarantine_audit.jsonl").is_file())
+        third = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        self.assertTrue(third["ok"], third)
+        self.assertNotEqual((staging / "app_latest.db.gz").read_bytes(), b"KEEP")
+
+    def test_wal_insert_is_not_hidden_by_empty_cache(self):
+        make_db(self.db, {})
+        con = sqlite3.connect(self.db)
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        con.commit()
+        con.close()
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
+        runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=TODAY, lookback=14,
+        )
+        con = sqlite3.connect(self.db)
+        con.execute("INSERT INTO matches (id, match_uid) VALUES (1, '2026-11-13|m0')")
+        con.commit()
+        con.close()
+        stat = self.db.stat()
+        write_json(self.home / "markers" / "checked_no_matches_2026-11-13.json", {
+            "jc_day": "2026-11-13",
+            "reason": "no_matches",
+            "n_matches": 0,
+            "db_mtime_ns": stat.st_mtime_ns,
+            "db_size": stat.st_size,
+        })
+        planned = runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=TODAY, lookback=14,
+        )
+        row = next(item for item in planned["reports"] if item["jc_day"] == "2026-11-13")
+        self.assertEqual(row["n_matches"], 1)
+        self.assertNotEqual(row.get("reason"), "no_matches")
+
+    def test_remote_lock_blocks_second_executor(self):
+        lock = self.tmp / "locks" / "push.lock"
+        holder = subprocess.Popen(
+            ["bash", str(ROOT / "remote_push_lock.sh"), str(lock), "sleep", "20"],
+            start_new_session=True,
+        )
+        try:
+            wait_until(lambda: lock.exists(), timeout=5)
+            second = subprocess.run(
+                ["bash", str(ROOT / "remote_push_lock.sh"), str(lock), "echo", "entered"],
+                text=True, capture_output=True, check=False, timeout=5,
+            )
+            self.assertEqual(second.returncode, 9, second.stdout + second.stderr)
+            self.assertIn("REMOTE_PUSH_LOCK_HELD", second.stdout)
+            self.assertNotIn("entered", second.stdout)
+        finally:
+            os.killpg(holder.pid, signal.SIGTERM)
+            holder.wait(timeout=5)
+
+    def test_crontab_conflict_and_verify_do_not_restore_table(self):
+        binary, state = self._fake_crontab("jobs")
+        # 第二次读取与第一次不同，必须停止且不写。
+        path = binary
+        path.write_text(
+            "#!/bin/bash\n"
+            f"STATE='{state}'\n"
+            'COUNT_FILE="$STATE.count"\n'
+            'N=0; if [[ -f "$COUNT_FILE" ]]; then N=$(cat "$COUNT_FILE"); fi\n'
+            'N=$((N+1)); echo "$N" > "$COUNT_FILE"\n'
+            'if [[ "$1" == "-l" ]]; then\n'
+            '  if [[ "$N" -eq 1 ]]; then printf "%s\\n" "KEEP" "GONE"; exit 0; fi\n'
+            '  printf "%s\\n" "KEEP"; exit 0\n'
+            "fi\n"
+            'cat > "$STATE"\n'
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+        state.write_text("KEEP\nGONE\n", encoding="utf-8")
+        before = state.read_text(encoding="utf-8")
+        failed = subprocess.run(
+            ["bash", str(ROOT / "install_watchdog.sh")],
+            env=self._install_env(path), text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(failed.returncode, 8, failed.stdout + failed.stderr)
+        self.assertEqual(state.read_text(encoding="utf-8"), before)
+        # 写后表被并发改成 OTHER，修复只能基于新表加本行，不能把 KEEP/GONE 整表写回。
+        path.write_text(
+            "#!/bin/bash\n"
+            f"STATE='{state}'\n"
+            'COUNT_FILE="$STATE.writes"\n'
+            'if [[ "$1" == "-l" ]]; then\n'
+            '  if [[ -f "$STATE" ]]; then cat "$STATE"; else printf "%s\\n" "KEEP"; fi\n'
+            "  exit 0\n"
+            "fi\n"
+            'echo x >> "$COUNT_FILE"\n'
+            'N=$(wc -l < "$COUNT_FILE")\n'
+            'if [[ "$N" -eq 1 ]]; then printf "%s\\n" "OTHER" > "$STATE"; else cat > "$STATE"; fi\n'
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+        state.write_text("KEEP\n", encoding="utf-8")
+        retried = subprocess.run(
+            ["bash", str(ROOT / "install_watchdog.sh")],
+            env=self._install_env(path), text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(retried.returncode, 0, retried.stdout + retried.stderr)
+        final = state.read_text(encoding="utf-8")
+        self.assertIn("OTHER", final)
+        self.assertIn("# fat-auto-cn-push-watchdog", final)
+        self.assertNotIn("GONE", final)
+
+    def test_missing_live_dir_fails_closed(self):
+        env_file = self.tmp / "bad.env"
+        env_file.write_text(f'APP_DB_PATH="{self.db}"\n', encoding="utf-8")
+        self.db.write_bytes(b"x")
+        env = os.environ.copy()
+        env["AUTO_CN_PUSH_ENV"] = str(env_file)
+        env["AUTO_CN_PUSH_HOME"] = str(self.home)
+        env.pop("ODDS_DATA_DIR", None)
+        completed = subprocess.run(
+            ["python3", str(ROOT / "run_auto_cn_push.py"), "--home", str(self.home), "--status"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 5, completed.stdout + completed.stderr)
+        self.assertIn("ODDS_DATA_DIR", completed.stdout)
 
 
 if __name__ == "__main__":

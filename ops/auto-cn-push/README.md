@@ -27,7 +27,9 @@
 - 过去未齐套的日子记入 `markers/gap_ledger.json` 并继续告警，不标已推，也不挡住更晚已经齐套的日子。整库里含有缺口日的行，不表示那个日子齐套。
 - 今天还没齐套不标已推。未来赛程可以留在快照里，不会被标成已推。
 - 已经有 `pending_push.json` 时不重新打包，不改 staging。半截 JSON 会隔离到 `markers/quarantine/`，原字节保留，不当作已覆盖，也不另起一份 pending。
-- 打包用固定 gzip 时间，同一库字节重复打包得到同一个 gz。若远端库哈希已经和 pending 的 db 一致、但 gz 不同，不能改写旧回执的 gz。须另有一份 `REMOTE_DB_CONFIRM.json`：远端 `sha256sum` 与 pending 的 db 一致、健康检查为 `"ok": true`，并原样引用旧回执的 gz。这样才允许标记，且 `push_again` 为假。
+- 打包用固定 gzip 时间，同一库字节重复打包得到同一个 gz。db 相同但 gz 不同时不标记，也不改旧回执。要让这次 gz 成为已投递，必须由推送脚本真正上传并写出 db、gz 都一致的 `LAST_PUSHED`。
+- 损坏的 pending 会移入隔离目录，并留下 `QUARANTINE_HOLD.json`。在 `--release-quarantine` 写下原因之前，后面的轮次不会覆盖 staging。
+- 无场次记录只说明上次查到没有比赛，下次仍会再查库，不用主库文件时间跳过 WAL 里的新比赛。
 - MSI 回执的 db 和 gz 都与 pending 一致、而 YuePC 仍是旧回执时，可以标记，不重推。
 - ready 或包的哈希对不上当前 pending 时不推、不标记。
 
@@ -35,13 +37,11 @@
 
 ## 同库异 gz 与 Windows 脚本
 
-现网 `push-formal-db.ps1` 在 db 哈希相同就删掉 ready 并退出，不产生这次 gz 的回执。仓库里的副本已改成：先读远端库哈希；相同则在健康检查通过后写 `REMOTE_DB_CONFIRM.json`，不改 `LAST_PUSHED`；不同才上传，上传后健康失败不写回执。PowerShell 5.1 的 `Set-Content -Encoding UTF8` 会写 BOM，box 读回执时用 `utf-8-sig`。仓库副本写回执时不再加 BOM。
+现网脚本在 db 哈希相同就删掉 ready 并退出。仓库副本改为：远端库哈希和这次 gz 都与 `LAST_PUSHED` 一致才跳过；只是 db 相同而 gz 不同就失败退出，不改回执、不删 ready。健康结果按 JSON 根上的 `ok` 判断。YuePC 仍优先，MSI 仍是备用。新脚本在大陆机上用 `flock` 抢 `/run/fat-cn-push.lock`，本机安装和推送再抢同一个 `drop.operation.lock`。任务是否仍在运行看 `Get-ScheduledTask` 的 `State`，不看英文 Status 文本。PowerShell 5.1 写出的 BOM 回执，box 用 `utf-8-sig` 读取。
 
-这些 Windows 改动，包括 `pending_expect.json`、`push_claim.json` 和「禁用任务后等待运行结束」，都还没有装到 YuePC 或 MSI。在覆盖现网脚本之前，不能把它们说成已经生效的生产防护。
+这些都只在仓库副本里。旧的 YuePC / MSI 脚本没有这些锁，也仍会在 db 相同、gz 不同时删掉 ready。换上副本之前，跨机互斥和“gz 不同不删 ready”都没有生效，旧入口可以绕过。
 
-在此之前，协议靠 box 生效：把远端 `sha256sum` 和健康结果写入 `REMOTE_DB_CONFIRM.json`，不要改旧回执的 gz。`python3 ops/auto-cn-push/run_auto_cn_push.py --mark-pushed <日> --receipt <旧 LAST_PUSHED.json> --remote-confirm <REMOTE_DB_CONFIRM.json>` 只在确认文件引用的 gz 与旧回执一致时标记。同一 pending 的 `push_claim.json` 同时只允许一台机器；这是 box 上的约束，现网推送脚本还不会读它。
-
-11-20 的 MSI 回执不能用来给 11-12 至 11-19 补造已推标记。`migrate_receipt.py` 在没有与回执 db 哈希一致的历史快照时只写 `MIGRATION_NEEDS_EVIDENCE.json`。有那份快照时，按快照上的逐日齐套结果写标记，并注明证据来自历史快照，不是当前库。快照哈希对不上就拒绝。
+11-20 的回执不能给 11-12 至 11-19 补造已推标记。没有与回执哈希一致的历史快照时，`migrate_receipt.py` 不写已推标记，也不清掉已有缺口。历史判断不读今天的 live 撤场目录。当前库只能用 `--as-current` 记成当前证据。已有不同证据的标记会停住，不覆盖。
 
 ## 安全迁移
 
@@ -49,11 +49,11 @@
 
 默认不要用仓库副本覆盖 YuePC / MSI 上的现有推送脚本。若以后改用副本，只在那台机器的计划任务或不入库文件里注入这两个变量，值从现网脚本现有默认值抄取。`env.example` 只说明键名，cron 不会 source 仓库里的这个文件。
 
-循环和看门狗共用仓库外的配置文件，由 `AUTO_CN_PUSH_ENV` 指向。文件里必须有已存在的 `APP_DB_PATH`。没设或路径不对时写 `markers/ALERT_CONFIG.json` 并以非 0 退出，不会去打开脚本里的默认库。`check_close_complete.py` 与现网原件哈希一致：`d22aeb9ff120a8031351a1452d3d482680d0de2a3be5f22e7a33857644200c51`。
+循环和看门狗共用仓库外的配置文件，由 `AUTO_CN_PUSH_ENV` 指向。文件里必须同时有已存在的 `APP_DB_PATH` 和 `ODDS_DATA_DIR`。缺任何一个就写 `markers/ALERT_CONFIG.json` 并以非 0 退出，不会去打开脚本里的默认库或默认 live 目录。`check_close_complete.py` 与现网原件哈希一致：`d22aeb9ff120a8031351a1452d3d482680d0de2a3be5f22e7a33857644200c51`。
 
 ## 安装、核对、回滚
 
-目标如果是现网目录，安装和回滚都会拒绝，除非同时设置 `AUTO_CN_PUSH_ALLOW_PRODUCTION_INSTALL=1`。本次没有设置它。`crontab -l` 失败且不是「没有 crontab」时，安装和回滚都会停止，不会用空表覆盖已有任务。安装前把不含本看门狗行的任务表备份到 `logs/crontab.before-install`，写回后核对原任务还在。
+目标如果是现网目录，安装和回滚都会拒绝，除非同时设置 `AUTO_CN_PUSH_ALLOW_PRODUCTION_INSTALL=1`。本次没有设置它。`crontab -l` 失败且不是「没有 crontab」时停止。写入前如果任务表已经变了，也停止，不整表写回。配置文件必须同时有已存在的 `APP_DB_PATH` 和 `ODDS_DATA_DIR`。
 
 ```bash
 export AUTO_CN_PUSH_HOME=/tmp/auto-cn-push-install-test
@@ -67,13 +67,15 @@ bash ops/auto-cn-push/rollback_watchdog.sh
 
 `verify_watchdog.sh` 会看配置、循环是否真的健康、以及扫描。循环没在跑是 `VERIFY_LOOP` 退出 2，配置缺失是 `VERIFY_CONFIG` 退出 5，扫描失败是 `VERIFY_SCAN` 退出 6，仍有缺口日是 `VERIFY_GAP` 退出 3。只有这些都正常才打印 `VERIFY_OK`。
 
-回滚在备份校验通过后恢复安装前的任务表，不删除 pending、staging 和标记，也不改 Windows 脚本。`logs/ROLLBACK_DONE.json` 记下这些没动过的部分。旧的 `install_box_cron.sh` 默认拒绝。
+回滚只删除带 `# fat-auto-cn-push-watchdog` 的行，不把安装前的整张表写回去，所以不会复活别人已经删掉的任务。写入前如果表已经变了，就停止，不覆盖。不删除 pending、staging 和标记，也不改 Windows 脚本。
 
-## 仍未在生产生效
+## 还没在生产生效
 
-- 仓库里的 Windows 推送、安装锁、`pending_expect` 和 `push_claim` 检查都还没部署。现网脚本仍可能在 db 相同但 gz 不同时删掉 ready 并不写确认文件。
-- 11-12 至 11-19 若没有与 11-20 回执哈希一致的历史快照，不能标成当时已推。可以另做一份新快照，按新协议确认，但那是新证据。
-- 两台 Windows 机器的互斥要等推送脚本升级后才会在投放目录里生效。在此之前只靠 box 上的 claim，现网任务不会读它。
+没有合并，没有部署，没有推大陆站。Windows 上的旧推送和旧安装脚本都还在用。因此下面这些都还不能在现网兑现：
+
+- 大陆机上的 `flock`、本机 `drop.operation.lock`、以及“db 相同但 gz 不同时不删 ready”。旧脚本不抢这些锁，也可以继续按旧逻辑跳过。
+- `pending_expect.json` 只有新安装脚本会写、新推送脚本会读。
+- 11-12 至 11-19 若没有与 11-20 回执哈希一致的历史快照，不能标成当时已推。`--as-current` 只产生当前证据。
 
 ## 测试
 

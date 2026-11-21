@@ -37,9 +37,15 @@ def load_push_env(path: str | Path | None = None) -> dict[str, str]:
         raise ConfigError(f"配置文件不存在: {env_path}")
     values = parse_env_text(env_path.read_text(encoding="utf-8-sig"))
     db = values.get("APP_DB_PATH", "").strip()
+    live = values.get("ODDS_DATA_DIR", "").strip()
     if not db:
         raise ConfigError("配置缺少 APP_DB_PATH")
     if not Path(db).is_file():
         raise ConfigError(f"APP_DB_PATH 不是已有文件: {db}")
+    if not live:
+        raise ConfigError("配置缺少 ODDS_DATA_DIR")
+    if not Path(live).is_dir():
+        raise ConfigError(f"ODDS_DATA_DIR 不是已有目录: {live}")
     values["APP_DB_PATH"] = db
+    values["ODDS_DATA_DIR"] = live
     return values

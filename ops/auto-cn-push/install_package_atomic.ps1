@@ -25,26 +25,30 @@ if (-not (Test-Path -LiteralPath $Dir)) {
 }
 
 $taskWasDisabled = $false
-$installLock = Join-Path $Dir 'install.lock'
-if (Test-Path -LiteralPath $installLock) { throw "install lock held: $installLock" }
-New-Item -ItemType File -Path $installLock | Out-Null
+$dropLockPath = Join-Path $Dir 'drop.operation.lock'
+$dropLock = $null
+try {
+  $dropLock = [System.IO.File]::Open($dropLockPath, 'OpenOrCreate', 'ReadWrite', 'None')
+} catch {
+  throw "drop lock held"
+}
 if ($DisableTaskDuringInstall) {
   try {
-    $info = schtasks /Query /TN $TaskName /FO LIST /V 2>$null
-    if ($LASTEXITCODE -eq 0) {
-      schtasks /Change /TN $TaskName /DISABLE | Out-Null
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($task) {
+      Disable-ScheduledTask -TaskName $TaskName | Out-Null
       $taskWasDisabled = $true
       Write-FatEvent 'task_disable' $TaskName
       $deadline = (Get-Date).AddSeconds(120)
       do {
-        $statusText = schtasks /Query /TN $TaskName /FO LIST /V 2>$null | Out-String
-        if ($statusText -notmatch 'Status:\s*Running') { break }
+        $task = Get-ScheduledTask -TaskName $TaskName
+        if ($task.State -ne 'Running') { break }
         Start-Sleep -Seconds 2
       } while ((Get-Date) -lt $deadline)
-      $statusText = schtasks /Query /TN $TaskName /FO LIST /V 2>$null | Out-String
-      if ($statusText -match 'Status:\s*Running') {
-        schtasks /Change /TN $TaskName /ENABLE | Out-Null
-        Remove-Item -LiteralPath $installLock -Force -ErrorAction SilentlyContinue
+      $task = Get-ScheduledTask -TaskName $TaskName
+      if ($task.State -eq 'Running') {
+        Enable-ScheduledTask -TaskName $TaskName | Out-Null
+        if ($dropLock) { $dropLock.Dispose() }
         throw 'task still running after disable; refused to swap'
       }
     }
@@ -140,7 +144,7 @@ try {
   Write-Host ("ATOMIC_INSTALL_OK jc_day=$jc gz_sha=$wantGz ready=$readyPath")
 }
 finally {
-  if (Test-Path -LiteralPath $installLock) { Remove-Item -LiteralPath $installLock -Force -ErrorAction SilentlyContinue }
+  if ($dropLock) { $dropLock.Dispose() }
   if ($taskWasDisabled) {
     try {
       schtasks /Change /TN $TaskName /ENABLE | Out-Null

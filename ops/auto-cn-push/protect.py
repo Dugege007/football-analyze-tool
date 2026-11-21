@@ -148,42 +148,11 @@ def select_coverage(
     }
 
 
-def health_ok(confirm: dict | None) -> bool:
-    if not confirm or confirm.get("health_ok") is not True:
-        return False
-    body = str(confirm.get("health_body") or "")
-    return '"ok":true' in body.replace(" ", "") or '"ok": true' in body
-
-
-def remote_reuse_ok(pending: dict, receipt: dict, confirm: dict | None) -> tuple[bool, str]:
-    """同 db、不同 gz 时，只接受另纸写下的远端库哈希。不改旧回执。"""
-    if not confirm:
-        return False, "needs_remote_confirm"
-    if not health_ok(confirm):
-        return False, "remote_health_failed"
-    pend_db = norm_hash(pending.get("db_sha256"))
-    pend_gz = norm_hash(pending.get("gz_sha256"))
-    receipt_db = norm_hash(receipt.get("db_sha256"))
-    receipt_gz = norm_hash(receipt.get("gz_sha256"))
-    if norm_hash(confirm.get("remote_db_sha256")) != pend_db or receipt_db != pend_db:
-        return False, "remote_db_mismatch"
-    if not receipt_gz or receipt_gz == pend_gz:
-        return False, "not_a_gz_difference"
-    if norm_hash(confirm.get("receipt_gz_sha256")) != receipt_gz:
-        return False, "receipt_gz_not_cited"
-    if norm_hash(confirm.get("pending_gz_sha256")) != pend_gz:
-        return False, "confirm_gz_mismatch"
-    if confirm.get("rewrote_receipt_gz"):
-        return False, "forged_receipt"
-    return True, "remote_db_reused"
-
-
 def delivery_decision(
     pending: dict | None,
     ready: dict | None,
     receipts: list[dict],
     package: dict | None = None,
-    remote_confirm: dict | None = None,
 ) -> dict:
     """根据 pending、投放 ready 和各机器 LAST_PUSHED 决定能否推、能否标记。
 
@@ -239,19 +208,9 @@ def delivery_decision(
             stale.append({"source": source, "db_sha256": db, "gz_sha256": gz})
     result["stale_receipts"] = stale
     if db_only and not matched:
-        reuse_ok, reuse_reason = remote_reuse_ok(pending, db_only[0], remote_confirm)
+        # 同库不同 gz 说明这份包不是已投递的那一份。不标记，也不另写确认文件。
+        result["reason"] = "gz_not_delivered"
         result["receipt_gz_sha256"] = norm_hash(db_only[0].get("gz_sha256"))
-        if reuse_ok:
-            result["allow_mark"] = True
-            result["allow_push"] = False
-            result["push_again"] = False
-            result["needs_push"] = False
-            result["matched_receipt"] = str(db_only[0].get("source") or "receipt")
-            result["reason"] = "remote_db_reused"
-            result["rewrote_receipt_gz"] = False
-            return result
-        result["reason"] = reuse_reason
-        result["needs_remote_confirm"] = reuse_reason == "needs_remote_confirm"
         result["allow_push"] = False
         result["allow_mark"] = False
         result["push_again"] = False
@@ -283,33 +242,3 @@ def delivery_decision(
     result["push_again"] = False
     result["needs_push"] = False
     return result
-
-
-def acquire_push_claim(existing: dict | None, machine: str, pending: dict, now_epoch: float, ttl_sec: int = 3600) -> dict:
-    """同一 pending 同时只允许一台机器推。另一台持有未过期声明时拒绝。"""
-    pend_db = norm_hash(pending.get("db_sha256"))
-    pend_gz = norm_hash(pending.get("gz_sha256"))
-    if existing and norm_hash(existing.get("db_sha256")) == pend_db and norm_hash(existing.get("gz_sha256")) == pend_gz:
-        age = now_epoch - float(existing.get("claimed_epoch") or 0)
-        holder = str(existing.get("machine") or "")
-        if holder and holder != machine and age < ttl_sec:
-            return {"ok": False, "reason": "other_machine_holds_claim", "holder": holder}
-    return {
-        "ok": True,
-        "reason": "claimed",
-        "claim": {
-            "machine": machine,
-            "db_sha256": pend_db,
-            "gz_sha256": pend_gz,
-            "claimed_epoch": now_epoch,
-        },
-    }
-
-
-def windows_install_allowed(*, task_status: str | None, lock_held: bool) -> tuple[bool, str]:
-    """禁用计划任务不等于等待正在运行的实例结束。仍在跑或已有安装锁时拒绝换包。"""
-    if lock_held:
-        return False, "install_lock_held"
-    if (task_status or "").lower() == "running":
-        return False, "task_still_running"
-    return True, "ok"

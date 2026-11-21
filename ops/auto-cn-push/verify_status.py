@@ -25,8 +25,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "VERIFY_CONFIG", "reason": str(exc)}, ensure_ascii=False))
         return 5
     os.environ["APP_DB_PATH"] = values["APP_DB_PATH"]
-    if values.get("ODDS_DATA_DIR"):
-        os.environ["ODDS_DATA_DIR"] = values["ODDS_DATA_DIR"]
+    os.environ["ODDS_DATA_DIR"] = values["ODDS_DATA_DIR"]
     count = args.cron_text.count(args.marker)
     if count != 1:
         print(json.dumps({"status": "VERIFY_CRON", "cron_count": count}, ensure_ascii=False))
@@ -41,8 +40,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.path.insert(0, str(script_dir))
     import run_auto_cn_push
 
-    live = values.get("ODDS_DATA_DIR", "")
-    live_root = Path(live) / "5dollar/live" if live else home / "live"
+    live_root = Path(values["ODDS_DATA_DIR"]) / "5dollar" / "live"
     try:
         scanned = run_auto_cn_push.scan_and_alert(home=home, db=Path(values["APP_DB_PATH"]), live_root=live_root)
     except Exception as exc:

@@ -31,10 +31,16 @@ if ! read_cron_table; then
   printf '%s\n' "${CRON_READ_ERROR:-}"
   exit 6
 fi
-BACKUP="$RESOLVED/logs/crontab.before-install"
-FILTERED="$(printf '%s\n' "$CRON_TABLE" | grep -v "$MARKER" || true)"
-printf '%s\n' "$FILTERED" > "$BACKUP"
-sha256sum "$BACKUP" > "$BACKUP.sha256"
+BEFORE="$CRON_TABLE"
+if ! read_cron_table; then
+  echo "CRONTAB_READ_FAILED"
+  exit 6
+fi
+if [[ "$CRON_TABLE" != "$BEFORE" ]]; then
+  echo "CRONTAB_CONFLICT"
+  exit 8
+fi
+FILTERED="$(printf '%s\n' "$BEFORE" | grep -v "$MARKER" || true)"
 if [[ -n "$FILTERED" ]]; then
   NEW_TABLE="$(printf '%s\n%s' "$FILTERED" "$LINE")"
 else
@@ -43,32 +49,40 @@ fi
 write_cron_table "$NEW_TABLE"
 if ! read_cron_table; then
   echo "CRONTAB_READ_FAILED_AFTER_WRITE"
-  write_cron_table "$(cat "$BACKUP")"
   exit 6
-fi
-if ! cron_preserved "$FILTERED" "$CRON_TABLE" "$MARKER"; then
-  echo "CRONTAB_VERIFY_FAILED"
-  write_cron_table "$(cat "$BACKUP")"
-  exit 7
 fi
 COUNT="$(printf '%s\n' "$CRON_TABLE" | grep -c "$MARKER" || true)"
 if [[ "$COUNT" != "1" ]]; then
-  echo "CRONTAB_VERIFY_FAILED count=$COUNT"
-  write_cron_table "$(cat "$BACKUP")"
-  exit 7
+  if ! read_cron_table; then
+    echo "CRONTAB_READ_FAILED"
+    exit 6
+  fi
+  FILTERED="$(printf '%s\n' "$CRON_TABLE" | grep -v "$MARKER" || true)"
+  if [[ -n "$FILTERED" ]]; then
+    NEW_TABLE="$(printf '%s\n%s' "$FILTERED" "$LINE")"
+  else
+    NEW_TABLE="$LINE"
+  fi
+  write_cron_table "$NEW_TABLE"
+  if ! read_cron_table; then
+    echo "CRONTAB_READ_FAILED_AFTER_WRITE"
+    exit 6
+  fi
+  COUNT="$(printf '%s\n' "$CRON_TABLE" | grep -c "$MARKER" || true)"
+  if [[ "$COUNT" != "1" ]]; then
+    echo "CRONTAB_VERIFY_FAILED count=$COUNT"
+    exit 7
+  fi
 fi
-AUTO_CN_PUSH_BACKUP="$BACKUP" AUTO_CN_PUSH_ENV_FILE="$ENV_FILE" AUTO_CN_PUSH_STATE="$RESOLVED/logs/deploy_state.json" python3 - <<'PY'
-import hashlib, json, os
+mkdir -p "$RESOLVED/logs"
+AUTO_CN_PUSH_ENV_FILE="$ENV_FILE" AUTO_CN_PUSH_STATE="$RESOLVED/logs/deploy_state.json" python3 - <<'PY'
+import json, os
 from pathlib import Path
-backup = Path(os.environ["AUTO_CN_PUSH_BACKUP"])
-digest = hashlib.sha256(backup.read_bytes()).hexdigest()
 state = {
-    "crontab_backup": str(backup),
-    "crontab_backup_sha256": digest,
     "env_file": os.environ["AUTO_CN_PUSH_ENV_FILE"],
     "windows_scripts_replaced": False,
-    "pending_expect_in_production": False,
-    "note": "回滚恢复这份 crontab 备份。未替换 Windows 脚本，也未删除 pending 或 staging。",
+    "crontab_restore": False,
+    "note": "只增删本工具的 cron 行。不整表恢复，也不替换 Windows 脚本。",
 }
 Path(os.environ["AUTO_CN_PUSH_STATE"]).write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
