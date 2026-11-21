@@ -57,7 +57,7 @@ function Invoke-FrameCheck([string]$Label) {
     Set-FatProcessInputEncoding -StartInfo $psi
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi
-    [void]$proc.Start()
+    Invoke-FatWithNoBomInputEncoding { [void]$proc.Start() }
     $errTask = $proc.StandardError.ReadToEndAsync()
     Copy-FatRawStdin -Process $proc -PayloadPath $payload
     try { $proc.StandardInput.Close() } catch {}

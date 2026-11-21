@@ -46,29 +46,40 @@ function Set-FatProcessInputEncoding {
   }
 }
 
+function Invoke-FatWithNoBomInputEncoding {
+  param([Parameter(Mandatory = $true)][scriptblock]$Action)
+  $saved = $null
+  $changed = $false
+  try {
+    try { $saved = [Console]::InputEncoding } catch {
+      throw 'cannot read Console.InputEncoding'
+    }
+    $noBom = New-Object System.Text.UTF8Encoding $false
+    if ($noBom.GetPreamble().Length -ne 0) {
+      throw 'UTF8Encoding(false) still emits a BOM'
+    }
+    try { [Console]::InputEncoding = $noBom } catch {
+      throw 'cannot set Console.InputEncoding'
+    }
+    $changed = $true
+    $now = [Console]::InputEncoding
+    if ($null -eq $now -or $now.GetPreamble().Length -ne 0) {
+      throw 'Console.InputEncoding still emits a BOM'
+    }
+    & $Action
+  } finally {
+    if ($changed -and $null -ne $saved) {
+      try { [Console]::InputEncoding = $saved } catch {}
+    }
+  }
+}
+
 function Copy-FatRawStdin {
   param(
     [Parameter(Mandatory = $true)]$Process,
     [Parameter(Mandatory = $true)][string]$PayloadPath
   )
-  $writer = $Process.StandardInput
-  $flags = [System.Reflection.BindingFlags]'Instance,NonPublic'
-  $foundPreamble = $false
-  $type = $writer.GetType()
-  while ($null -ne $type) {
-    $preamble = $type.GetField('haveWrittenPreamble', $flags)
-    if ($preamble) {
-      $preamble.SetValue($writer, $true)
-      $foundPreamble = $true
-    }
-    $encoding = $type.GetField('encoding', $flags)
-    if ($encoding) { $encoding.SetValue($writer, (New-Object System.Text.UTF8Encoding $false)) }
-    $type = $type.BaseType
-  }
-  if (-not $foundPreamble) {
-    throw 'stdin writer preamble field missing'
-  }
-  $raw = $writer.BaseStream
+  $raw = $Process.StandardInput.BaseStream
   $input = [System.IO.File]::OpenRead($PayloadPath)
   try {
     $input.CopyTo($raw)

@@ -1769,12 +1769,17 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("ECHO_DROP=", isolation)
         self.assertNotIn("ISOLATION_OK", isolation)
         argv = (ROOT / "windows_argv.ps1").read_text(encoding="utf-8-sig")
-        self.assertIn("haveWrittenPreamble", argv)
+        self.assertIn("Invoke-FatWithNoBomInputEncoding", argv)
         self.assertIn("UTF8Encoding $false", argv)
-        self.assertIn("StandardInputEncoding", argv)
+        self.assertIn("GetPreamble()", argv)
+        self.assertNotIn("haveWrittenPreamble", argv)
         push = (ROOT / "push-formal-db.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn("Invoke-FatWithNoBomInputEncoding", push)
         self.assertIn("Copy-FatRawStdin", push)
-        self.assertNotIn("StandardInput.BaseStream", push)
+        frame = (ROOT / "windows_stdin_frame_check.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn("UTF8Encoding $true", frame)
+        self.assertIn("InputEncoding = $oldIn", frame)
+        self.assertIn("SEPARATE_PROCESS_FRAME_OK", frame)
 
     def test_server_header_accepts_utf8_bom_without_touching_gz(self):
         import io

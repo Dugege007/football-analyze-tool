@@ -181,7 +181,7 @@ exit `$rc
       ))
       $proc = New-Object System.Diagnostics.Process
       $proc.StartInfo = $psi
-      [void]$proc.Start()
+      Invoke-FatWithNoBomInputEncoding { [void]$proc.Start() }
       $started = $true
       $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
       $stderrTask = $proc.StandardError.ReadToEndAsync()
