@@ -172,6 +172,7 @@ exit `$rc
       $psi.RedirectStandardOutput = $true
       $psi.RedirectStandardError = $true
       $psi.CreateNoWindow = $true
+      Set-FatProcessInputEncoding -StartInfo $psi
       $psi.Arguments = Format-FatWinCommandLine -Argument ($(
         $sshArg = @('-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=30')
         if ($Key) { $sshArg += @('-i', $Key) }
@@ -184,14 +185,10 @@ exit `$rc
       $started = $true
       $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
       $stderrTask = $proc.StandardError.ReadToEndAsync()
-      $inputStream = [System.IO.File]::OpenRead($payload)
-      $inputStream.CopyTo($proc.StandardInput.BaseStream)
+      Copy-FatRawStdin -Process $proc -PayloadPath $payload
     } catch {
       $failure = $_
     } finally {
-      if ($inputStream) {
-        try { $inputStream.Dispose() } catch {}
-      }
       if ($started -and $proc) {
         try { $proc.StandardInput.Close() } catch {}
         if ($failure) {

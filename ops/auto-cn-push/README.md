@@ -53,7 +53,11 @@ Windows 本机安装和推送使用同一把 `FileShare.None` 文件锁，不要
 & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\fat-tools\windows_isolation_check.ps1" -DropDir "C:\Program Files\fat drop" -Python "C:\Python314\python.exe"
 ```
 
-通过时会先打印 `PS51_PARSE_OK` 和「参数回显通过」，最后才是「辅助锁检查通过」。云端没有执行这条命令。
+成功时会先打印 `PS51_PARSE_OK` 和「参数回显通过」。stdin 帧检查是另一条命令，分别在当前 UTF-8 宿主和单独的 `powershell.exe -File` 进程里核对载荷首字节、长度和 gz。云端没有执行这些 PowerShell 命令。
+
+```powershell
+& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\fat-tools\windows_stdin_frame_check.ps1" -Python "C:\Python314\python.exe"
+```
 
 YuePC 把 `-Python` 换成那台机器上真实的 Python 3.12.10 可执行文件，不要用 `python3`，也不要落到 `WindowsApps` 存根。MSI 使用 `C:\Python314\python.exe`。最小依赖是 Windows PowerShell、OpenSSH 客户端 `ssh.exe`（不是 Server），以及上面这个明确的 `python.exe`。远端 Linux 仍使用已有的 bash、flock、python3 和 base64，不新增监听服务。
 

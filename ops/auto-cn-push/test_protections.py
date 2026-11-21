@@ -1748,6 +1748,7 @@ class ReviewRegressionTests(unittest.TestCase):
             "windows_drop_lock.ps1",
             "windows_isolation_check.ps1",
             "windows_argv.ps1",
+            "windows_stdin_frame_check.ps1",
             "push-formal-db.ps1",
             "ypc_watch_and_push.ps1",
         }
@@ -1755,8 +1756,7 @@ class ReviewRegressionTests(unittest.TestCase):
         for path in ROOT.glob("*.ps1"):
             raw = path.read_bytes()
             if raw.startswith(bom):
-                text = raw[3:].decode("utf-8")
-                self.assertTrue(any(ord(ch) > 127 for ch in text) or path.name == "windows_argv.ps1")
+                raw[3:].decode("utf-8")
                 seen.add(path.name)
             else:
                 raw.decode("ascii")
@@ -1768,6 +1768,39 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("PS51_PARSE_OK", isolation)
         self.assertIn("ECHO_DROP=", isolation)
         self.assertNotIn("ISOLATION_OK", isolation)
+        argv = (ROOT / "windows_argv.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn("haveWrittenPreamble", argv)
+        self.assertIn("UTF8Encoding $false", argv)
+        self.assertIn("StandardInputEncoding", argv)
+        push = (ROOT / "push-formal-db.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn("Copy-FatRawStdin", push)
+        self.assertNotIn("StandardInput.BaseStream", push)
+
+    def test_server_header_accepts_utf8_bom_without_touching_gz(self):
+        import io
+        raw = b"db-bytes-for-bom-header"
+        blob_path = self.tmp / "bom.db.gz"
+        write_db_gzip(raw, blob_path, "baseline-bom", mtime=0)
+        blob = blob_path.read_bytes()
+        db_sha = hashlib.sha256(raw).hexdigest()
+        gz_sha = hashlib.sha256(blob).hexdigest()
+        header = (
+            '{"op":"authorize","jc_day":"2026-11-20","db_sha256":"%s","gz_sha256":"%s","expected_commit_id":"baseline-bom"}\n'
+            % (db_sha, gz_sha)
+        ).encode("utf-8")
+        payload = b"\xef\xbb\xbf" + header + blob
+        self.assertEqual(payload[:3], b"\xef\xbb\xbf")
+        self.assertEqual(payload[3:5], b"{\"")
+        completed = subprocess.run(
+            ["bash", str(ROOT / "cn_push_transaction.sh")],
+            input=payload,
+            capture_output=True,
+            check=False,
+        )
+        err = completed.stderr.decode("utf-8", "replace")
+        self.assertNotIn("Unexpected UTF-8 BOM", err)
+        self.assertNotIn("json.decoder", err)
+        self.assertIn("BASELINE_NOT_FROZEN", err)
 
     def test_disk_hash_is_not_a_running_api_fingerprint(self):
         _server, db_path, env, drop = self._initialized_package(

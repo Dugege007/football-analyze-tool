@@ -42,7 +42,7 @@ def gzip_commit_id(blob: bytes) -> str:
 work = pathlib.Path(sys.argv[1])
 root = pathlib.Path(sys.argv[2])
 db_path = pathlib.Path(sys.argv[3])
-header = json.loads((work / "header.json").read_text(encoding="utf-8"))
+header = json.loads((work / "header.json").read_text(encoding="utf-8-sig"))
 gz_bytes = (work / "app.db.gz").read_bytes()
 gz_sha = hashlib.sha256(gz_bytes).hexdigest()
 if gz_sha != str(header.get("gz_sha256") or "").lower():

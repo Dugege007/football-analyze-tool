@@ -37,3 +37,43 @@ function Format-FatWinCommandLine {
   }
   return ($parts -join ' ')
 }
+
+function Set-FatProcessInputEncoding {
+  param($StartInfo)
+  $prop = $StartInfo.GetType().GetProperty('StandardInputEncoding')
+  if ($prop -and $prop.CanWrite) {
+    $prop.SetValue($StartInfo, (New-Object System.Text.UTF8Encoding $false), $null)
+  }
+}
+
+function Copy-FatRawStdin {
+  param(
+    [Parameter(Mandatory = $true)]$Process,
+    [Parameter(Mandatory = $true)][string]$PayloadPath
+  )
+  $writer = $Process.StandardInput
+  $flags = [System.Reflection.BindingFlags]'Instance,NonPublic'
+  $foundPreamble = $false
+  $type = $writer.GetType()
+  while ($null -ne $type) {
+    $preamble = $type.GetField('haveWrittenPreamble', $flags)
+    if ($preamble) {
+      $preamble.SetValue($writer, $true)
+      $foundPreamble = $true
+    }
+    $encoding = $type.GetField('encoding', $flags)
+    if ($encoding) { $encoding.SetValue($writer, (New-Object System.Text.UTF8Encoding $false)) }
+    $type = $type.BaseType
+  }
+  if (-not $foundPreamble) {
+    throw 'stdin writer preamble field missing'
+  }
+  $raw = $writer.BaseStream
+  $input = [System.IO.File]::OpenRead($PayloadPath)
+  try {
+    $input.CopyTo($raw)
+  } finally {
+    $input.Dispose()
+  }
+}
+
