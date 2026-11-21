@@ -17,6 +17,7 @@ import urllib.request
 from pathlib import Path
 
 DEFAULT_API_URL = "http://127.0.0.1:8787/health/db"
+_TOKEN_HEADER = "X-Fat-Health-Db-Token"
 
 
 def fail(token: str) -> None:
@@ -43,16 +44,32 @@ def load_identity():
     return read_identity
 
 
+def api_token() -> str:
+    configured = os.environ.get("FAT_HEALTH_DB_TOKEN_FILE", "").strip()
+    if not configured:
+        fail("TOKEN_MISSING")
+    try:
+        token = Path(configured).read_text(encoding="utf-8").strip()
+    except OSError:
+        fail("TOKEN_MISSING")
+    if not token:
+        fail("TOKEN_MISSING")
+    return token
+
+
 def fetch_remote(url: str) -> dict:
     if not url:
         fail("API_URL_MISSING")
-    request = urllib.request.Request(url, method="GET")
+    timeout = float(os.environ.get("FAT_HEALTH_DB_TIMEOUT", "60") or "60")
+    request = urllib.request.Request(url, method="GET", headers={_TOKEN_HEADER: api_token()})
     try:
-        with urllib.request.urlopen(request, timeout=3) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             if response.status != 200:
-                fail("API_UNREACHABLE")
+                fail("IDENTITY_REFUSED")
             payload = json.loads(response.read().decode("utf-8"))
-    except (OSError, urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+    except urllib.error.HTTPError as exc:
+        fail("IDENTITY_REFUSED" if exc.code in (401, 403, 405) else "API_UNREACHABLE")
+    except (OSError, urllib.error.URLError, json.JSONDecodeError, TimeoutError, ValueError):
         fail("API_UNREACHABLE")
     if not isinstance(payload, dict):
         fail("IDENTITY_REFUSED")

@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import secrets
 import shutil
 import signal
 import sqlite3
@@ -2040,18 +2041,88 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("# fat-auto-cn-push-watchdog", final)
         self.assertNotIn("GONE", final)
 
-    def test_health_db_route_reads_the_open_connection(self):
-        main = (ROOT.parents[1] / "api" / "app" / "main.py").read_text(encoding="utf-8")
-        start = main.index("def health_db")
-        chunk = main[start:main.index("\ndef ", start)]
-        self.assertIn("read_identity(conn)", chunk)
-        self.assertIn("connect()", chunk)
-        self.assertNotIn("sha256", chunk)
-        self.assertNotIn("read_bytes", chunk)
-        identity = (ROOT.parents[1] / "api" / "app" / "running_db.py").read_text(encoding="utf-8")
-        self.assertNotIn("read_bytes", identity)
-        hook = (ROOT / "cn_running_api_hook.py").read_text(encoding="utf-8")
-        self.assertNotIn("FAT_CN_EXPECT", hook)
+    def test_content_identity_preserves_types_and_middle_rows(self):
+        same_edge = ("HEAD", "TAIL")
+        old = self._middle_db("OLD!")
+        new = self._middle_db("NEW!")
+        self.assertEqual(self._periphery(old), self._periphery(new))
+        self.assertNotEqual(self._file_fingerprint(old), self._file_fingerprint(new))
+        before = old.read_bytes()
+        self._file_fingerprint(old)
+        self.assertEqual(old.read_bytes(), before)
+        self.assertEqual(same_edge[0], self._periphery(old)[2])
+        pairs = (
+            ([("ab", "c")], [("a", "bc")]),
+            ([(None, "")], [("", None)]),
+            ([(None, None)], [("", "")]),
+            ([("", b"")], [(b"", "")]),
+            ([(1, None)], [(1.0, None)]),
+            ([(1, None)], [("1", None)]),
+        )
+        for left_rows, right_rows in pairs:
+            with self.subTest(left=left_rows, right=right_rows):
+                self.assertNotEqual(
+                    self._file_fingerprint(self._value_db(left_rows)),
+                    self._file_fingerprint(self._value_db(right_rows)),
+                )
+
+    def test_health_db_asgi_rejects_before_connect(self):
+        token = secrets.token_urlsafe(16)
+        cases = (
+            ("asgi", "0", "", "", False),
+            ("fastapi", "0", "", "", False),
+            ("asgi", "0", token, "wrong-token", False),
+            ("fastapi", "0", token, token, False),
+            ("asgi", "1", token, "", True),
+            ("fastapi", "1", token, token, True),
+        )
+        for kind, readonly, file_token, header, db_exists in cases:
+            with self.subTest(kind=kind, readonly=readonly, header=bool(header), db_exists=db_exists):
+                db = self.tmp / f"asgi-{kind}-{readonly}-{bool(header)}-{db_exists}" / "app_latest.db"
+                if db_exists:
+                    db.parent.mkdir(parents=True)
+                    db.write_bytes(self._middle_db("KEEP").read_bytes())
+                    original = db.read_bytes()
+                token_file = db.parent / "health-db.token"
+                if file_token:
+                    token_file.parent.mkdir(parents=True, exist_ok=True)
+                    token_file.write_text(file_token + "\n", encoding="utf-8")
+                result = self._invoke_health_route(
+                    kind=kind,
+                    db=db,
+                    readonly=readonly,
+                    token_file=token_file if file_token else None,
+                    header=header,
+                )
+                if not db_exists:
+                    self.assertFalse(db.exists())
+                    self.assertNotIn(str(db), result["body"])
+                    self.assertNotIn("db_path", result["body"])
+                    if header and file_token == header:
+                        self.assertEqual(result["status"], 403, result["body"])
+                    else:
+                        self.assertEqual(result["status"], 401, result["body"])
+                elif not header:
+                    self.assertEqual(result["status"], 401)
+                    self.assertNotIn(str(db), result["body"])
+                    self.assertEqual(db.read_bytes(), original)
+                else:
+                    self.assertEqual(result["status"], 200, result["body"])
+                    payload = json.loads(result["body"])
+                    self.assertTrue(payload["read_only"])
+                    self.assertNotIn("db_sha256", payload)
+                    self.assertEqual(payload["fingerprint"], self._file_fingerprint(db))
+                    self.assertEqual(db.read_bytes(), original)
+        writable = self._invoke_health_route(
+            kind="fastapi",
+            db=self.tmp / "writable-missing" / "app_latest.db",
+            readonly="0",
+            token_file=self._write_token(self.tmp / "writable-token", token),
+            header=token,
+        )
+        self.assertEqual(writable["status"], 403)
+        self.assertNotIn("db_path", writable["body"])
+        self.assertFalse((self.tmp / "writable-missing" / "app_latest.db").exists())
 
     def test_running_api_hook_fails_closed_without_echoing_expected_hash(self):
         bait = "expected-hash-must-not-be-echoed"
@@ -2063,6 +2134,14 @@ class ReviewRegressionTests(unittest.TestCase):
             "FAT_CN_API_URL": "http://127.0.0.1:9/health/db",
             "FAT_CN_EXPECT_DB_SHA": bait,
         })
+        missing = subprocess.run(
+            ["python3", str(ROOT / "cn_running_api_hook.py")],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertNotIn(bait, missing.stdout)
+        self.assertIn("TOKEN_MISSING", missing.stderr)
+        env["FAT_HEALTH_DB_TOKEN_FILE"] = str(self._write_token(self.tmp / "closed.token", bait))
         completed = subprocess.run(
             ["python3", str(ROOT / "cn_running_api_hook.py")],
             env=env, text=True, capture_output=True, check=False,
@@ -2089,6 +2168,7 @@ class ReviewRegressionTests(unittest.TestCase):
                 probe = self._start_identity_probe(db_path, mode)
                 try:
                     command = (
+                        f"FAT_HEALTH_DB_TOKEN_FILE={probe['token_file']} "
                         f"FAT_CN_API_URL=http://127.0.0.1:{probe['port']}/health/db "
                         f"python3 {ROOT / 'cn_running_api_hook.py'}"
                     )
@@ -2111,7 +2191,7 @@ class ReviewRegressionTests(unittest.TestCase):
                         receipt = json.loads((drop / "LAST_PUSHED.json").read_text(encoding="utf-8"))
                         self.assertEqual(receipt["db_sha256"], hashlib.sha256(replacement).hexdigest())
                         self.assertTrue(receipt["activated"])
-                        served = self._probe_identity(probe["port"])
+                        served = self._probe_identity(probe["port"], probe["token"])
                         self.assertEqual(served["fingerprint_source"], "running_api")
                         self.assertNotIn("db_sha256", served)
                         self.assertEqual(served["db_path"], str(db_path))
@@ -2127,7 +2207,7 @@ class ReviewRegressionTests(unittest.TestCase):
                         if mode == "stale":
                             self.assertIn("FINGERPRINT_MISMATCH", pushed.stderr)
                             self.assertNotIn("CN_PUSH_ALERT", pushed.stderr)
-                            served = self._probe_identity(probe["port"])
+                            served = self._probe_identity(probe["port"], probe["token"])
                             self.assertEqual(served["fingerprint"], self._file_fingerprint(db_path))
                         else:
                             self.assertIn("FINGERPRINT_MISMATCH", pushed.stderr)
@@ -2136,6 +2216,61 @@ class ReviewRegressionTests(unittest.TestCase):
                             self.assertFalse(alert["receipt_issued"])
                 finally:
                     self._stop_probe(probe)
+
+    def test_middle_row_old_connection_does_not_commit_or_advance_base(self):
+        current_path = self._middle_db("OLD!")
+        replacement_path = self._middle_db("NEW!")
+        self.assertEqual(self._periphery(current_path), self._periphery(replacement_path))
+        self.assertNotEqual(self._file_fingerprint(current_path), self._file_fingerprint(replacement_path))
+        server, db_path, env, drop = self._initialized_package(
+            "middle-row", current_path.read_bytes(), replacement_path.read_bytes(), "match_file",
+        )
+        base_path, base_before, base_id = self._client_base(server)
+        probe = self._start_identity_probe(db_path, "stale")
+        try:
+            self._run_push(env, drop, probe)
+            failed = self._last_push
+            self.assertEqual(failed.returncode, 13, failed.stdout + failed.stderr)
+            self.assertNotIn("PUSH_COMMITTED", failed.stdout)
+            self.assertNotIn("COMMIT_JSON", failed.stdout)
+            self.assertIn("FINGERPRINT_MISMATCH", failed.stderr)
+            self.assertEqual(db_path.read_bytes(), current_path.read_bytes())
+            self.assertFalse((drop / "LAST_PUSHED.json").exists())
+            self.assertEqual(json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))["commit_id"], base_id)
+            served = self._probe_identity(probe["port"], probe["token"])
+            self.assertEqual(served["fingerprint"], self._file_fingerprint(db_path))
+            self.assertNotEqual(served["fingerprint"], self._file_fingerprint(replacement_path))
+            self._assert_base_unchanged(base_path, base_before, base_id)
+        finally:
+            self._stop_probe(probe)
+
+    def test_writable_instance_does_not_commit_or_advance_base(self):
+        current = self._middle_db("LIVE")
+        replacement = self._middle_db("NEXT")
+        server, db_path, env, drop = self._initialized_package(
+            "writable-api", current.read_bytes(), replacement.read_bytes(), "match_file",
+        )
+        base_path, base_before, base_id = self._client_base(server)
+        missing = server / "must-not-create.db"
+        probe = self._start_identity_probe(db_path, "writable")
+        try:
+            denied = self._probe_identity(probe["port"], probe["token"])
+            self.assertEqual(denied["status"], 403)
+            self.assertNotIn(str(db_path), denied["body"])
+            self.assertFalse(missing.exists())
+            self._run_push(env, drop, probe)
+            failed = self._last_push
+            self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
+            self.assertNotIn("PUSH_COMMITTED", failed.stdout)
+            self.assertNotIn("COMMIT_JSON", failed.stdout)
+            self.assertIn("IDENTITY_REFUSED", failed.stderr)
+            self.assertEqual(db_path.read_bytes(), current.read_bytes())
+            self.assertFalse((drop / "LAST_PUSHED.json").exists())
+            self.assertEqual(json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))["commit_id"], base_id)
+            self.assertFalse((server / "must-not-create.db").exists())
+            self._assert_base_unchanged(base_path, base_before, base_id)
+        finally:
+            self._stop_probe(probe)
 
     def _served_bytes(self, token: str) -> bytes:
         path = self.tmp / f"served-{token}.db"
@@ -2146,38 +2281,165 @@ class ReviewRegressionTests(unittest.TestCase):
         conn.close()
         return path.read_bytes()
 
+    def _write_token(self, path: Path, token: str) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(token + "\n", encoding="utf-8")
+        return path
+
+    def _middle_db(self, middle: str) -> Path:
+        path = self.tmp / f"middle-{middle}.db"
+        if path.exists():
+            path.unlink()
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE t(v TEXT)")
+        conn.execute("INSERT INTO t(v) VALUES ('HEAD')")
+        conn.execute("INSERT INTO t(v) VALUES (?)", (middle,))
+        conn.execute("INSERT INTO t(v) VALUES ('TAIL')")
+        conn.commit()
+        conn.close()
+        return path
+
+    def _value_db(self, rows: list) -> Path:
+        path = self.tmp / f"values-{len(list(self.tmp.glob('values-*.db')))}.db"
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE t(a, b)")
+        conn.executemany("INSERT INTO t(a, b) VALUES (?, ?)", rows)
+        conn.commit()
+        conn.close()
+        return path
+
+    def _periphery(self, path: Path):
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            page = conn.execute("PRAGMA page_count").fetchone()[0]
+            count, max_rowid = conn.execute("SELECT COUNT(*), MAX(rowid) FROM t").fetchone()
+            first = conn.execute("SELECT v FROM t ORDER BY rowid ASC LIMIT 1").fetchone()[0]
+            last = conn.execute("SELECT v FROM t ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+            return page, count, first, last, max_rowid
+        finally:
+            conn.close()
+
     def _file_fingerprint(self, path: Path) -> str:
         sys_path = str(ROOT.parents[1] / "api")
         if sys_path not in sys.path:
             sys.path.insert(0, sys_path)
         from app.running_db import read_identity
-        uri = path.resolve().as_uri() + "?mode=ro"
-        conn = sqlite3.connect(uri, uri=True)
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
         try:
             return read_identity(conn)["fingerprint"]
         finally:
             conn.close()
 
+    def _client_base(self, server: Path):
+        home = server.parent / "client-home"
+        record = json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))
+        imported = runner.import_push_base(home, record)
+        self.assertTrue(imported["ok"], imported)
+        path = home / "markers" / "push_base.json"
+        return path, path.read_bytes(), record["commit_id"]
+
+    def _assert_base_unchanged(self, path: Path, before: bytes, commit_id: str) -> None:
+        self.assertEqual(path.read_bytes(), before)
+        runner._advance_push_base_from_commit(
+            runner.home_paths(path.parents[1]), [], "ab" * 32, "cd" * 32,
+        )
+        record = json.loads(path.read_text(encoding="utf-8"))
+        runner._advance_push_base_from_commit(
+            runner.home_paths(path.parents[1]), [record], record.get("db_sha256") or "", record.get("gz_sha256") or "",
+        )
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["commit_id"], commit_id)
+
+    def _run_push(self, env: dict, drop: Path, probe: dict) -> None:
+        command = (
+            f"FAT_HEALTH_DB_TOKEN_FILE={probe['token_file']} "
+            f"FAT_CN_API_URL=http://127.0.0.1:{probe['port']}/health/db "
+            f"python3 {ROOT / 'cn_running_api_hook.py'}"
+        )
+        env["FAT_CN_ACTIVATE_CMD"] = command
+        env["FAT_CN_ROLLBACK_CMD"] = command
+        authorized = subprocess.run(
+            ["bash", str(ROOT / "authorize_push_baseline.sh"), "--dir", str(drop), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(authorized.returncode, 0, authorized.stdout + authorized.stderr)
+        self._last_push = subprocess.run(
+            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+
+    def _invoke_health_route(self, *, kind: str, db: Path, readonly: str, token_file: Path | None, header: str) -> dict:
+        script = self.tmp / f"asgi-case-{kind}-{readonly}-{db.parent.name}.py"
+        script.write_text(
+            "import asyncio, json, os, sys\n"
+            "os.environ['FAT_DISABLE_DOTENV'] = '1'\n"
+            "os.environ['APP_DB_PATH'] = sys.argv[1]\n"
+            "os.environ['APP_READONLY'] = sys.argv[2]\n"
+            "os.environ.pop('FAT_HEALTH_DB_TOKEN_FILE', None)\n"
+            "if sys.argv[3]:\n"
+            "    os.environ['FAT_HEALTH_DB_TOKEN_FILE'] = sys.argv[3]\n"
+            "sys.path.insert(0, sys.argv[4])\n"
+            "header = sys.argv[6]\n"
+            "kind = sys.argv[5]\n"
+            "async def run():\n"
+            "    headers = [(b'x-fat-health-db-token', header.encode())] if header else []\n"
+            "    if kind == 'fastapi':\n"
+            "        import httpx\n"
+            "        from fastapi import FastAPI\n"
+            "        from app.health_db_asgi import register_health_db\n"
+            "        app = FastAPI()\n"
+            "        register_health_db(app)\n"
+            "        transport = httpx.ASGITransport(app=app)\n"
+            "        async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:\n"
+            "            response = await client.get('/health/db', headers={'X-Fat-Health-Db-Token': header} if header else {})\n"
+            "        print(json.dumps({'status': response.status_code, 'body': response.text}))\n"
+            "        return\n"
+            "    from app.health_db_asgi import health_db_asgi\n"
+            "    messages = []\n"
+            "    scope = {'type': 'http', 'asgi': {'version': '3.0'}, 'http_version': '1.1', 'method': 'GET',\n"
+            "             'scheme': 'http', 'path': '/health/db', 'raw_path': b'/health/db', 'query_string': b'',\n"
+            "             'headers': headers, 'client': ('203.0.113.8', 443), 'server': ('127.0.0.1', 8787)}\n"
+            "    async def receive():\n"
+            "        return {'type': 'http.request', 'body': b'', 'more_body': False}\n"
+            "    async def send(message):\n"
+            "        messages.append(message)\n"
+            "    await health_db_asgi(scope, receive, send)\n"
+            "    status = next(item['status'] for item in messages if item['type'] == 'http.response.start')\n"
+            "    body = b''.join(item.get('body', b'') for item in messages if item['type'] == 'http.response.body')\n"
+            "    print(json.dumps({'status': status, 'body': body.decode()}))\n"
+            "asyncio.run(run())\n",
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [
+                "python3", str(script), str(db), readonly,
+                str(token_file or ""), str(ROOT.parents[1] / "api"), kind, header,
+            ],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        return json.loads(completed.stdout)
+
     def _start_identity_probe(self, db_path: Path, mode: str) -> dict:
+        token = secrets.token_urlsafe(16)
+        token_file = self._write_token(self.tmp / f"probe-token-{mode}-{db_path.parent.name}", token)
+        readonly = "1" if mode == "fresh" else "0"
         script = self.tmp / f"probe-{mode}-{db_path.parent.name}.py"
         script.write_text(
             "import hashlib, json, os, sqlite3, sys\n"
             "from http.server import BaseHTTPRequestHandler, HTTPServer\n"
+            "from pathlib import Path\n"
             "os.environ['FAT_DISABLE_DOTENV'] = '1'\n"
             "os.environ['APP_DB_PATH'] = sys.argv[1]\n"
+            "os.environ['APP_READONLY'] = sys.argv[5]\n"
+            "os.environ['FAT_HEALTH_DB_TOKEN_FILE'] = sys.argv[4]\n"
             "sys.path.insert(0, sys.argv[2])\n"
             "mode = sys.argv[3]\n"
-            "from app.running_db import read_identity\n"
-            "if mode == 'fresh':\n"
-            "    from app.db import connect\n"
-            "    def current():\n"
-            "        conn = connect()\n"
-            "        try:\n"
-            "            return read_identity(conn)\n"
-            "        finally:\n"
-            "            conn.close()\n"
+            "if mode in ('fresh', 'writable'):\n"
+            "    from app.health_db_asgi import invoke_health_db\n"
             "elif mode == 'stale':\n"
-            "    held = sqlite3.connect(sys.argv[1])\n"
+            "    from app.running_db import read_identity\n"
+            "    held = sqlite3.connect(Path(sys.argv[1]).resolve().as_uri() + '?mode=ro', uri=True)\n"
             "    def current():\n"
             "        return read_identity(held)\n"
             "else:\n"
@@ -2193,8 +2455,12 @@ class ReviewRegressionTests(unittest.TestCase):
             "    def do_GET(self):\n"
             "        if self.path.split('?', 1)[0] != '/health/db':\n"
             "            self.send_error(404); return\n"
-            "        body = json.dumps(current()).encode()\n"
-            "        self.send_response(200)\n"
+            "        if mode in ('fresh', 'writable'):\n"
+            "            pairs = [(key.lower().encode('latin-1'), value.encode('latin-1')) for key, value in self.headers.items()]\n"
+            "            status, body = invoke_health_db(pairs)\n"
+            "        else:\n"
+            "            status, body = 200, json.dumps(current()).encode()\n"
+            "        self.send_response(status)\n"
             "        self.send_header('Content-Type', 'application/json')\n"
             "        self.send_header('Content-Length', str(len(body)))\n"
             "        self.end_headers()\n"
@@ -2208,7 +2474,10 @@ class ReviewRegressionTests(unittest.TestCase):
             encoding="utf-8",
         )
         proc = subprocess.Popen(
-            ["python3", str(script), str(db_path), str(ROOT.parents[1] / "api"), mode],
+            [
+                "python3", str(script), str(db_path), str(ROOT.parents[1] / "api"),
+                mode, str(token_file), readonly,
+            ],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
         assert proc.stdout is not None
@@ -2217,12 +2486,22 @@ class ReviewRegressionTests(unittest.TestCase):
             err = proc.stderr.read() if proc.stderr is not None else ""
             proc.kill()
             raise AssertionError(line + err)
-        return {"proc": proc, "port": int(line.split()[1])}
+        return {"proc": proc, "port": int(line.split()[1]), "token": token, "token_file": str(token_file)}
 
-    def _probe_identity(self, port: int) -> dict:
+    def _probe_identity(self, port: int, token: str) -> dict:
+        import urllib.error
         import urllib.request
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health/db", timeout=3) as response:
-            return json.loads(response.read().decode("utf-8"))
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/health/db",
+            headers={"X-Fat-Health-Db-Token": token},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+                payload["status"] = response.status
+                return payload
+        except urllib.error.HTTPError as exc:
+            return {"status": exc.code, "body": exc.read().decode("utf-8")}
 
     def _stop_probe(self, probe: dict) -> None:
         proc = probe["proc"]

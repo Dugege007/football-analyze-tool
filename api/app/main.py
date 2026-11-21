@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import connect
-from app.running_db import read_identity
+from app.health_db_asgi import register_health_db
 from app import backtest as bt
 from app import settle_book as sb
 from app import shadow_evaluable as shadow_ev  # N5/N5-PIN 不可评估记账
@@ -759,14 +759,7 @@ def health() -> dict:
             "meta": _adb.db_meta()}
 
 
-@app.get("/health/db")
-def health_db() -> dict:
-    """只读报告本进程这次连接实际读到的库。不哈希磁盘文件，也不回显调用方给的摘要。"""
-    conn = connect()
-    try:
-        return read_identity(conn)
-    finally:
-        conn.close()
+register_health_db(app)
 
 
 def formal_strategies_for_match(conn: sqlite3.Connection, match_db_id: int) -> list[str]:
