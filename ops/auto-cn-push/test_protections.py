@@ -2253,6 +2253,47 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual((server / "LAST_COMMIT.json").read_bytes(), saved_base)
         self.assertEqual((server / "legacy_msi_baseline_audit.json").read_bytes(), audit_before)
 
+    def test_null_baseline_or_audit_is_not_treated_as_missing(self):
+        raw = b"null-state-db"
+        db_sha = hashlib.sha256(raw).hexdigest()
+        receipt = {
+            "jc_day": "2026-11-20",
+            "pushed_at": "2026-11-21T03:40:00+08:00",
+            "db_sha256": db_sha,
+            "gz_sha256": "ef" * 32,
+            "backup": "kept-backup-name",
+        }
+        path = self.tmp / "null-receipt.json"
+        path.write_text(json.dumps(receipt) + "\n", encoding="utf-8")
+        file_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        for name in ("LAST_COMMIT.json", "legacy_msi_baseline_audit.json"):
+            server = self.tmp / f"null-{name}"
+            server.mkdir()
+            db_path = server / "app_latest.db"
+            db_path.write_bytes(raw)
+            target = server / name
+            target.write_bytes(b"null\n")
+            before = target.read_bytes()
+            env = service_env(self.tmp / f"null-env-{name}", server)
+            completed = subprocess.run(
+                [
+                    "bash", str(ROOT / "migrate_legacy_msi_baseline.sh"),
+                    "--receipt", str(path),
+                    "--snapshot", str(db_path),
+                    "--evidence-source", "msi",
+                    "--receipt-sha256", file_sha,
+                ],
+                env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertIn("NOT_OBJECT", completed.stderr)
+            self.assertEqual(target.read_bytes(), before)
+            self.assertFalse((server / "LAST_COMMIT.json").exists()) if name != "LAST_COMMIT.json" else self.assertEqual(
+                (server / "LAST_COMMIT.json").read_bytes(), before,
+            )
+            if name == "LAST_COMMIT.json":
+                self.assertFalse((server / "legacy_msi_baseline_audit.json").exists())
+
     def test_content_identity_preserves_types_and_middle_rows(self):
         same_edge = ("HEAD", "TAIL")
         old = self._middle_db("OLD!")

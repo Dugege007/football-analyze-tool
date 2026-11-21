@@ -48,10 +48,20 @@ def fail(token: str) -> None:
     raise SystemExit(19)
 
 
+_MISSING = object()
+
+
 def load_json(path: pathlib.Path):
+    """只有文件真正不存在才返回缺失标记。JSON null 不是缺失。"""
     if not path.is_file():
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
+        return _MISSING
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        fail("BASELINE_CORRUPT" if path.name == "LAST_COMMIT.json" else "AUDIT_CORRUPT")
+    if not isinstance(value, dict):
+        fail("BASELINE_NOT_OBJECT" if path.name == "LAST_COMMIT.json" else "AUDIT_NOT_OBJECT")
+    return value
 
 
 def fsync_dir(path: pathlib.Path) -> None:
@@ -168,11 +178,11 @@ try:
         "receipt_file_sha256", "receipt_had_source", "legacy_migration", "evidence_source",
     ]
     audit_keys = list(audit.keys())
-    if existing is not None and not same_record(existing, record, baseline_keys):
+    if existing is not _MISSING and not same_record(existing, record, baseline_keys):
         fail("BASELINE_EXISTS")
-    if existing_audit is not None and not same_record(existing_audit, audit, audit_keys):
+    if existing_audit is not _MISSING and not same_record(existing_audit, audit, audit_keys):
         fail("AUDIT_CONFLICT")
-    if existing_audit is None:
+    if existing_audit is _MISSING:
         publish(audit_path, audit, "audit_replace")
     elif fault == "audit_replace":
         fail("AUDIT_WRITE_FAILED")
@@ -182,9 +192,9 @@ try:
     if confirmed["record"] != record or confirmed["audit"] != audit or confirmed["original"] != original:
         fail("EVIDENCE_CHANGED")
     current = load_json(latest)
-    if current is not None and not same_record(current, record, baseline_keys):
+    if current is not _MISSING and not same_record(current, record, baseline_keys):
         fail("BASELINE_EXISTS")
-    if current is None:
+    if current is _MISSING:
         publish(latest, record, "baseline_replace")
     if receipt_path.read_bytes() != original:
         fail("RECEIPT_MUTATED")
