@@ -13,6 +13,11 @@ elif [[ -x /usr/bin/python3 ]]; then
 else
   PY=python3
 fi
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/load_push_env.sh"
+if ! load_push_env "$HOME_DIR"; then
+  exit 5
+fi
 DECISION="$("$PY" "$SCRIPT_DIR/watchdog.py" --home "$HOME_DIR" --script-dir "$SCRIPT_DIR" --decide-only --skip-scan)"
 ACTION="$(printf '%s' "$DECISION" | "$PY" -c 'import json,sys; print(json.load(sys.stdin).get("action",""))')"
 REASON="$(printf '%s' "$DECISION" | "$PY" -c 'import json,sys; print(json.load(sys.stdin).get("reason",""))')"

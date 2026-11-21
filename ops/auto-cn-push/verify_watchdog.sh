@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 检查看门狗接线是否只装了一行，并做一次不拉起进程的判定。
+# 验收配置、循环健康和扫描。任一不健康都以非 0 退出并打印原因。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOME_DIR="${AUTO_CN_PUSH_HOME:-$SCRIPT_DIR}"
@@ -15,14 +15,11 @@ if [[ ! -x "$SCRIPT_DIR/ensure_auto_cn_push_watch.sh" ]]; then
   echo "VERIFY_FAIL watch script not executable"
   exit 1
 fi
-if [[ -n "${AUTO_CN_PUSH_CRON_FILE:-}" ]]; then
-  COUNT="$(grep -c "$MARKER" "$AUTO_CN_PUSH_CRON_FILE" || true)"
-else
-  COUNT="$(crontab -l 2>/dev/null | grep -c "$MARKER" || true)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/cron_table.sh"
+if ! read_cron_table; then
+  echo "CRONTAB_READ_FAILED"
+  printf '%s\n' "${CRON_READ_ERROR:-}"
+  exit 6
 fi
-if [[ "$COUNT" != "1" ]]; then
-  echo "VERIFY_FAIL cron_count=$COUNT"
-  exit 1
-fi
-"$PY" "$SCRIPT_DIR/watchdog.py" --home "$HOME_DIR" --decide-only --skip-scan >/dev/null
-echo "VERIFY_OK"
+exec "$PY" "$SCRIPT_DIR/verify_status.py" --home "$HOME_DIR" --cron-text "$CRON_TABLE" --marker "$MARKER"

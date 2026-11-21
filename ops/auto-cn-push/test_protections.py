@@ -177,7 +177,7 @@ class CoverageTests(unittest.TestCase):
 
     def test_historical_complete_recent_two_incomplete(self):
         make_db(self.db, historical_days())
-        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11"})
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
         calls = {"n": 0}
 
         def builder(day, coverage, out_dir):
@@ -229,7 +229,7 @@ class CoverageTests(unittest.TestCase):
             "2026-11-21": "incomplete",
         }
         make_db(self.db, days)
-        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11"})
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
         write_json(self.home / "markers" / "pushed_2026-11-20.json", {"jc_day": "2026-11-20", "db_sha256": "old"})
         calls = {"n": 0}
 
@@ -241,14 +241,17 @@ class CoverageTests(unittest.TestCase):
         coverage = result["coverage"]
         self.assertEqual(calls["n"], 1)
         self.assertEqual(coverage["boundary"], "2026-11-11")
-        self.assertEqual(coverage["claimed_jc_days"], ["2026-11-12", "2026-11-14"])
+        self.assertEqual(
+            coverage["claimed_jc_days"],
+            ["2026-11-12", "2026-11-14", "2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19"],
+        )
         self.assertIn("2026-11-13", coverage["no_matches"])
-        self.assertEqual(coverage["blocking_gap"]["jc_day"], "2026-11-15")
-        withheld = [item["jc_day"] for item in coverage["withheld_after_gap"]]
-        self.assertIn("2026-11-16", withheld)
-        self.assertIn("2026-11-19", withheld)
+        self.assertEqual(coverage["gap_days"][0]["jc_day"], "2026-11-15")
+        self.assertEqual(coverage["withheld_after_gap"], [])
+        self.assertIn("2026-11-16", coverage["claimed_jc_days"])
+        self.assertNotIn("2026-11-15", coverage["claimed_jc_days"])
         self.assertIn("2026-11-20", coverage["already_pushed_ignored"])
-        self.assertNotIn("2026-11-16", coverage["claimed_jc_days"])
+        self.assertEqual(coverage["boundary"], "2026-11-11")
         alerts = runner.check_alerts(self.home, self.db, self.live, 2)
         stale_days = [item["jc_day"] for item in alerts["stale_incomplete"]["days"]]
         self.assertIn("2026-11-15", stale_days)
@@ -258,7 +261,7 @@ class CoverageTests(unittest.TestCase):
 
     def test_pending_not_overwritten(self):
         make_db(self.db, historical_days())
-        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11"})
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
         pending_path = self.home / "markers" / "pending_push.json"
         write_json(pending_path, {"jc_day": "2026-11-19", "db_sha256": "keepdb", "gz_sha256": "keepgz", "ready_at": "2026-11-21T08:00:00+08:00"})
         staging = self.home / "staging"
@@ -272,7 +275,7 @@ class CoverageTests(unittest.TestCase):
 
     def test_prepare_failure_retries(self):
         make_db(self.db, historical_days())
-        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11"})
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
         staging = self.home / "staging"
         staging.mkdir()
         (staging / "app_latest.db.gz").write_bytes(b"OLD")
@@ -298,7 +301,7 @@ class CoverageTests(unittest.TestCase):
         import fcntl
 
         make_db(self.db, historical_days())
-        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11"})
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
         lock_path = self.home / "logs" / "prepare.lock"
         lock_path.parent.mkdir()
         fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
@@ -313,7 +316,7 @@ class CoverageTests(unittest.TestCase):
 
     def _prepared(self):
         make_db(self.db, historical_days())
-        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11"})
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
         result = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
         self.assertTrue(result["ok"], result)
         pending = json.loads((self.home / "markers" / "pending_push.json").read_text(encoding="utf-8"))
@@ -429,6 +432,12 @@ class WatchdogTests(unittest.TestCase):
         self.home = self.tmp / "home"
         (self.home / "logs").mkdir(parents=True)
         (self.home / "markers").mkdir()
+        self.db = self.tmp / "loop.db"
+        self.db.write_bytes(b"x")
+        self.env_file = self.tmp / "push.env"
+        self.env_file.write_text(f'APP_DB_PATH="{self.db}"\n', encoding="utf-8")
+        self._old_env = os.environ.get("AUTO_CN_PUSH_ENV")
+        os.environ["AUTO_CN_PUSH_ENV"] = str(self.env_file)
         self.procs: list[subprocess.Popen] = []
         self.extra_pids: list[int] = []
 
@@ -449,6 +458,10 @@ class WatchdogTests(unittest.TestCase):
                     os.killpg(proc.pid, signal.SIGKILL)
                 except OSError:
                     pass
+        if self._old_env is None:
+            os.environ.pop("AUTO_CN_PUSH_ENV", None)
+        else:
+            os.environ["AUTO_CN_PUSH_ENV"] = self._old_env
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_assess_matrix(self):
@@ -567,6 +580,7 @@ class WatchdogTests(unittest.TestCase):
         env["AUTO_CN_PUSH_PYTHON"] = str(fake)
         env["AUTO_CN_PUSH_INTERVAL_SEC"] = str(interval)
         env["STAGE_MARKS_DIR"] = str(self.tmp / "stage")
+        env["AUTO_CN_PUSH_ENV"] = str(self.env_file)
         env.pop("AUTO_CN_PUSH_ONCE", None)
         proc = subprocess.Popen(
             ["bash", str(ROOT / "ensure_auto_cn_push_loop.sh")],
@@ -667,17 +681,21 @@ class WatchdogTests(unittest.TestCase):
         live = self.tmp / "live"
         make_db(db, historical_days())
         before = db.read_bytes()
-        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11"})
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
         (self.home / "logs" / "ensure_auto_cn_push.pid").write_text("999999\n", encoding="ascii")
+        self.env_file.write_text(
+            f'APP_DB_PATH="{db}"\nODDS_DATA_DIR="{self.tmp / "odds"}"\n',
+            encoding="utf-8",
+        )
         env = os.environ.copy()
         env.update({
             "AUTO_CN_PUSH_HOME": str(self.home),
             "AUTO_CN_PUSH_ONCE": "1",
             "AUTO_CN_PUSH_NOW": "2026-11-21T12:00:00+08:00",
-            "APP_DB_PATH": str(db),
-            "ODDS_DATA_DIR": str(self.tmp / "odds"),
+            "AUTO_CN_PUSH_ENV": str(self.env_file),
             "STAGE_MARKS_DIR": str(self.tmp / "stage"),
         })
+        env.pop("APP_DB_PATH", None)
         completed = subprocess.run(
             ["python3", str(ROOT / "watchdog.py"), "--home", str(self.home), "--script-dir", str(ROOT)],
             env=env, text=True, capture_output=True, check=False, timeout=30,
@@ -702,6 +720,10 @@ class InstallTests(unittest.TestCase):
         self.home = self.tmp / "home"
         self.home.mkdir()
         self.cron = self.tmp / "cron"
+        self.db = self.tmp / "app.db"
+        self.db.write_bytes(b"x")
+        self.env_file = self.tmp / "push.env"
+        self.env_file.write_text(f'APP_DB_PATH="{self.db}"\n', encoding="utf-8")
         for name in (
             "install_watchdog.sh",
             "rollback_watchdog.sh",
@@ -718,7 +740,9 @@ class InstallTests(unittest.TestCase):
         env = os.environ.copy()
         env["AUTO_CN_PUSH_HOME"] = home or str(self.home)
         env["AUTO_CN_PUSH_CRON_FILE"] = str(self.cron)
+        env["AUTO_CN_PUSH_ENV"] = str(self.env_file)
         env.pop("AUTO_CN_PUSH_ALLOW_PRODUCTION_INSTALL", None)
+        env.pop("CRONTAB_BIN", None)
         return env
 
     def test_install_is_idempotent_and_rolls_back(self):
@@ -731,8 +755,8 @@ class InstallTests(unittest.TestCase):
         install_source = (ROOT / "install_watchdog.sh").read_text(encoding="utf-8")
         self.assertIn('PREFIX="AUTO_CN_PUSH_ALLOW_PRODUCTION_INSTALL=1 "', install_source)
         verified = subprocess.run(["bash", str(ROOT / "verify_watchdog.sh")], env=self.env(), text=True, capture_output=True, check=False)
-        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
-        self.assertIn("VERIFY_OK", verified.stdout)
+        self.assertEqual(verified.returncode, 2, verified.stdout + verified.stderr)
+        self.assertIn("VERIFY_LOOP", verified.stdout)
         rolled = subprocess.run(["bash", str(ROOT / "rollback_watchdog.sh")], env=self.env(), text=True, capture_output=True, check=False)
         self.assertEqual(rolled.returncode, 0, rolled.stderr)
         self.assertNotIn("# fat-auto-cn-push-watchdog", self.cron.read_text(encoding="utf-8"))
@@ -760,6 +784,310 @@ class InstallTests(unittest.TestCase):
         )
         self.assertEqual(legacy.returncode, 4)
         self.assertIn("REFUSING_LEGACY_PREPARE_CRON", legacy.stdout)
+
+
+class ReviewRegressionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="cn-review-"))
+        self.home = self.tmp / "home"
+        self.live = self.tmp / "live"
+        self.db = self.tmp / "app.db"
+        (self.home / "markers").mkdir(parents=True)
+        (self.home / "logs").mkdir()
+        os.environ["AUTO_CN_PUSH_NOW"] = "2026-11-21T12:00:00+08:00"
+        os.environ["STAGE_MARKS_DIR"] = str(self.tmp / "stage")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_repack_same_db_keeps_gz(self):
+        make_db(self.db, {"2026-11-18": "complete"})
+        first = build_package(self.db, self.tmp / "a", "2026-11-18", None)
+        second = build_package(self.db, self.tmp / "b", "2026-11-18", None)
+        self.assertEqual(first["gz_sha256"], second["gz_sha256"])
+        self.assertEqual(first["db_sha256"], second["db_sha256"])
+
+    def test_same_db_different_gz_needs_remote_confirm_and_does_not_rewrite(self):
+        make_db(self.db, historical_days())
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
+        prepared = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        pending = prepared["prepared"][0]
+        receipt_path = self.tmp / "LAST_PUSHED.json"
+        receipt = {"source": "msi", "jc_day": "2026-11-20", "db_sha256": pending["db_sha256"], "gz_sha256": "a" * 64}
+        receipt_path.write_bytes(b"\xef\xbb\xbf" + json.dumps(receipt).encode("utf-8"))
+        original = receipt_path.read_bytes()
+        with self.assertRaises(json.JSONDecodeError):
+            json.loads(receipt_path.read_text(encoding="utf-8"))
+        loaded = runner.load_json(receipt_path)
+        self.assertEqual(loaded["gz_sha256"], "a" * 64)
+        bad_health = {
+            "remote_db_sha256": pending["db_sha256"],
+            "pending_db_sha256": pending["db_sha256"],
+            "pending_gz_sha256": pending["gz_sha256"],
+            "receipt_db_sha256": pending["db_sha256"],
+            "receipt_gz_sha256": "a" * 64,
+            "health_ok": False,
+            "health_body": '{"ok": false}',
+            "rewrote_receipt_gz": False,
+        }
+        refused = runner.mark_confirmed(
+            home=self.home, jc_day=pending["jc_day"], db=self.db, live_root=self.live,
+            receipts=[loaded], remote_confirm=bad_health,
+        )
+        self.assertFalse(refused["ok"])
+        self.assertEqual(refused["reason"], "remote_health_failed")
+        self.assertEqual(receipt_path.read_bytes(), original)
+        forged = dict(bad_health)
+        forged["health_ok"] = True
+        forged["health_body"] = '{"ok": true}'
+        forged["receipt_gz_sha256"] = pending["gz_sha256"]
+        forged_result = runner.mark_confirmed(
+            home=self.home, jc_day=pending["jc_day"], db=self.db, live_root=self.live,
+            receipts=[loaded], remote_confirm=forged,
+        )
+        self.assertFalse(forged_result["ok"])
+        self.assertEqual(forged_result["reason"], "receipt_gz_not_cited")
+        self.assertEqual(receipt_path.read_bytes(), original)
+        confirm = dict(forged)
+        confirm["receipt_gz_sha256"] = "a" * 64
+        marked = runner.mark_confirmed(
+            home=self.home, jc_day=pending["jc_day"], db=self.db, live_root=self.live,
+            receipts=[loaded], remote_confirm=confirm,
+        )
+        self.assertTrue(marked["ok"], marked)
+        self.assertEqual(marked["reason"], "remote_db_reused")
+        self.assertFalse(marked["push_again"])
+        self.assertEqual(receipt_path.read_bytes(), original)
+        saved = json.loads((self.home / "markers" / "pushed_2026-11-19.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["receipt_gz_sha256"], "a" * 64)
+        self.assertNotEqual(saved["gz_sha256"], saved["receipt_gz_sha256"])
+
+    def test_clean_env_does_not_start_or_use_default_db(self):
+        env = os.environ.copy()
+        env.pop("AUTO_CN_PUSH_ENV", None)
+        env.pop("APP_DB_PATH", None)
+        note = self.tmp / "started"
+        starter = self.tmp / "starter.sh"
+        starter.write_text(f"#!/bin/sh\necho no > {note}\n", encoding="utf-8")
+        starter.chmod(0o755)
+        completed = subprocess.run(
+            ["python3", str(ROOT / "watchdog.py"), "--home", str(self.home), "--starter", str(starter), "--skip-scan"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 5, completed.stdout + completed.stderr)
+        self.assertIn("config_missing", completed.stdout)
+        self.assertFalse(note.exists())
+        alert = json.loads((self.home / "markers" / "ALERT_CONFIG.json").read_text(encoding="utf-8"))
+        self.assertIn("默认库", alert["note"])
+
+    def test_env_path_with_spaces(self):
+        root = self.tmp / "dir with space"
+        home = root / "ops home"
+        db = root / "db dir" / "app.db"
+        make_db(db, {})
+        env_file = root / "env dir" / "push env"
+        env_file.parent.mkdir(parents=True)
+        env_file.write_text(f'APP_DB_PATH="{db}"\n', encoding="utf-8")
+        cron = root / "cron file"
+        env = os.environ.copy()
+        env.update({
+            "AUTO_CN_PUSH_HOME": str(home),
+            "AUTO_CN_PUSH_ENV": str(env_file),
+            "AUTO_CN_PUSH_CRON_FILE": str(cron),
+        })
+        env.pop("CRONTAB_BIN", None)
+        completed = subprocess.run(["bash", str(ROOT / "install_watchdog.sh")], env=env, text=True, capture_output=True, check=False)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        text = cron.read_text(encoding="utf-8")
+        self.assertIn(f"AUTO_CN_PUSH_ENV='{env_file}'", text)
+        self.assertEqual(text.count("# fat-auto-cn-push-watchdog"), 1)
+
+    def _fake_crontab(self, mode: str) -> tuple[Path, Path]:
+        state = self.tmp / "cron-state"
+        if mode == "jobs":
+            state.write_text("0 1 * * * /usr/bin/keep-me\n", encoding="utf-8")
+        path = self.tmp / "fake-crontab"
+        path.write_text(
+            "#!/bin/bash\n"
+            f"STATE='{state}'\n"
+            f"MODE='{mode}'\n"
+            'if [[ "$1" == "-l" ]]; then\n'
+            '  if [[ "$MODE" == "fail" ]]; then echo "crontab: permission denied" >&2; exit 1; fi\n'
+            '  if [[ "$MODE" == "none" && ! -s "$STATE" ]]; then echo "no crontab for user" >&2; exit 1; fi\n'
+            '  if [[ -f "$STATE" ]]; then cat "$STATE"; fi\n'
+            "  exit 0\n"
+            "fi\n"
+            'cat > "$STATE"\n',
+            encoding="utf-8",
+        )
+        path.chmod(0o755)
+        return path, state
+
+    def _install_env(self, crontab: Path) -> dict:
+        db = self.tmp / "install.db"
+        db.write_bytes(b"x")
+        env_file = self.tmp / "install.env"
+        env_file.write_text(f'APP_DB_PATH="{db}"\n', encoding="utf-8")
+        env = os.environ.copy()
+        env.update({
+            "AUTO_CN_PUSH_HOME": str(self.home),
+            "AUTO_CN_PUSH_ENV": str(env_file),
+            "CRONTAB_BIN": str(crontab),
+        })
+        env.pop("AUTO_CN_PUSH_CRON_FILE", None)
+        env.pop("AUTO_CN_PUSH_ALLOW_PRODUCTION_INSTALL", None)
+        return env
+
+    def test_crontab_read_failure_does_not_replace(self):
+        binary, state = self._fake_crontab("fail")
+        state.write_text("0 1 * * * /usr/bin/keep-me\n", encoding="utf-8")
+        before = state.read_bytes()
+        completed = subprocess.run(
+            ["bash", str(ROOT / "install_watchdog.sh")],
+            env=self._install_env(binary), text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 6, completed.stdout + completed.stderr)
+        self.assertIn("CRONTAB_READ_FAILED", completed.stdout)
+        self.assertEqual(state.read_bytes(), before)
+
+    def test_crontab_preserves_existing_jobs_and_rollback_restores(self):
+        binary, state = self._fake_crontab("jobs")
+        completed = subprocess.run(
+            ["bash", str(ROOT / "install_watchdog.sh")],
+            env=self._install_env(binary), text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        installed = state.read_text(encoding="utf-8")
+        self.assertIn("/usr/bin/keep-me", installed)
+        self.assertEqual(installed.count("# fat-auto-cn-push-watchdog"), 1)
+        rolled = subprocess.run(
+            ["bash", str(ROOT / "rollback_watchdog.sh")],
+            env=self._install_env(binary), text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(rolled.returncode, 0, rolled.stdout + rolled.stderr)
+        restored = state.read_text(encoding="utf-8")
+        self.assertIn("/usr/bin/keep-me", restored)
+        self.assertNotIn("# fat-auto-cn-push-watchdog", restored)
+        note = json.loads((self.home / "logs" / "ROLLBACK_DONE.json").read_text(encoding="utf-8"))
+        self.assertTrue(note["windows_scripts_untouched"])
+        self.assertTrue(note["pending_kept"])
+
+    def test_no_crontab_is_not_a_read_failure(self):
+        binary, state = self._fake_crontab("none")
+        completed = subprocess.run(
+            ["bash", str(ROOT / "install_watchdog.sh")],
+            env=self._install_env(binary), text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("# fat-auto-cn-push-watchdog", state.read_text(encoding="utf-8"))
+
+    def test_truncated_records_are_not_coverage(self):
+        staging = self.home / "staging"
+        staging.mkdir()
+        (staging / "app_latest.db.gz").write_bytes(b"KEEP")
+        pending = self.home / "markers" / "pending_push.json"
+        pending.write_text('{"jc_day": "2026-11-19", ', encoding="utf-8")
+        partial = pending.read_bytes()
+        result = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        self.assertEqual(result["error"], "pending_corrupt")
+        self.assertEqual((staging / "app_latest.db.gz").read_bytes(), b"KEEP")
+        self.assertFalse(pending.exists())
+        quarantined = list((self.home / "markers" / "quarantine").iterdir())
+        self.assertTrue(any(item.read_bytes() == partial for item in quarantined))
+        pushed = self.home / "markers" / "pushed_2026-11-12.json"
+        pushed.write_text('{"jc_day":', encoding="utf-8")
+        fragment = pushed.read_bytes()
+        self.assertNotIn("2026-11-12", runner.pushed_days(self.home / "markers", self.home))
+        self.assertTrue(any(item.read_bytes() == fragment for item in (self.home / "markers" / "quarantine").iterdir()))
+        good = self.home / "markers" / "kept.json"
+        runner.write_json(good, {"ok": True})
+        before = good.read_text(encoding="utf-8")
+        with self.assertRaises(RuntimeError):
+            runner.write_json(good, {"ok": False}, fault="before_replace")
+        self.assertEqual(good.read_text(encoding="utf-8"), before)
+
+    def test_no_match_is_checked_without_repeated_scan(self):
+        make_db(self.db, {"2026-11-12": "complete", "2026-11-13": "none", "2026-11-21": "incomplete"})
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
+        calls = []
+
+        def checker(day):
+            calls.append(day)
+            return evaluate(day, self.db, self.live, False)
+
+        first = runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=TODAY, lookback=14, check_fn=checker,
+        )
+        self.assertIn("2026-11-13", calls)
+        self.assertIn("2026-11-12", first["coverage"]["claimed_jc_days"])
+        calls.clear()
+        second = runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=TODAY, lookback=14, check_fn=checker,
+        )
+        self.assertNotIn("2026-11-13", calls)
+        self.assertIn("2026-11-13", second["checked_empty"])
+        self.assertTrue((self.home / "markers" / "checked_no_matches_2026-11-13.json").is_file())
+        self.assertFalse((self.home / "markers" / "pushed_2026-11-13.json").exists())
+
+    def test_receipt_migration_does_not_fabricate_middle_days(self):
+        make_db(self.db, {
+            "2026-11-12": "complete",
+            "2026-11-13": "none",
+            "2026-11-14": "complete",
+            "2026-11-15": "incomplete",
+            "2026-11-16": "complete",
+            "2026-11-20": "complete",
+        })
+        import hashlib
+        digest = hashlib.sha256(self.db.read_bytes()).hexdigest()
+        receipt = {"source": "msi", "jc_day": "2026-11-20", "db_sha256": digest, "gz_sha256": "b" * 64}
+        from migrate_receipt import migrate_receipt
+        missing = migrate_receipt(
+            home=self.home, receipt=receipt, snapshot=None, live_root=self.live,
+            today=TODAY, start=date(2026, 11, 12),
+        )
+        self.assertEqual(missing["status"], "needs_evidence")
+        self.assertEqual(list((self.home / "markers").glob("pushed_2026-11-1*.json")), [])
+        other = self.tmp / "other.db"
+        other.write_bytes(b"different")
+        mismatched = migrate_receipt(
+            home=self.home, receipt=receipt, snapshot=other, live_root=self.live,
+            today=TODAY, start=date(2026, 11, 12),
+        )
+        self.assertEqual(mismatched["status"], "snapshot_hash_mismatch")
+        self.assertEqual(list((self.home / "markers").glob("pushed_*.json")), [])
+        migrated = migrate_receipt(
+            home=self.home, receipt=receipt, snapshot=self.db, live_root=self.live,
+            today=TODAY, start=date(2026, 11, 12),
+        )
+        self.assertIn("2026-11-12", migrated["marked"])
+        self.assertIn("2026-11-16", migrated["marked"])
+        self.assertNotIn("2026-11-15", migrated["marked"])
+        self.assertIn("2026-11-13", migrated["no_matches"])
+        saved = json.loads((self.home / "markers" / "pushed_2026-11-12.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["evidence_source"], "historical_snapshot")
+        self.assertEqual(saved["evidence_db_sha256"], digest)
+        self.assertTrue(saved["not_a_new_push"])
+
+    def test_two_machines_and_running_task(self):
+        pending = {"db_sha256": "d" * 64, "gz_sha256": "e" * 64}
+        first = protect.acquire_push_claim(None, "ypc", pending, 1_000.0)
+        self.assertTrue(first["ok"])
+        second = protect.acquire_push_claim(first["claim"], "msi", pending, 1_100.0)
+        self.assertFalse(second["ok"])
+        self.assertEqual(second["reason"], "other_machine_holds_claim")
+        self.assertFalse(protect.windows_install_allowed(task_status="Running", lock_held=False)[0])
+        self.assertFalse(protect.windows_install_allowed(task_status="Ready", lock_held=True)[0])
+        self.assertTrue(protect.windows_install_allowed(task_status="Ready", lock_held=False)[0])
+        push = (ROOT / "push-formal-db.ps1").read_text(encoding="utf-8")
+        self.assertIn("REUSED_REMOTE_DB", push)
+        self.assertIn("remote health failed", push)
+        self.assertNotIn("SKIP already pushed", push)
+        self.assertIn("Write-Utf8NoBom", push)
+        install = (ROOT / "install_package_atomic.ps1").read_text(encoding="utf-8")
+        self.assertIn("task still running after disable", install)
 
 
 if __name__ == "__main__":

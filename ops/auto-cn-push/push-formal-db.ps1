@@ -59,18 +59,14 @@ if (Test-Path $ExpectFile) {
   }
 }
 
-# Idempotent: skip if same db sha already pushed
-if (Test-Path $MarkerDone) {
-  try {
-    $prev = Get-Content $MarkerDone -Raw | ConvertFrom-Json
-    if ($prev.db_sha256 -eq $ExpectedSha) {
-      Write-Host ("SKIP already pushed db_sha=$ExpectedSha jc_day=" + $prev.jc_day)
-      # Still drop .ready so watch stays quiet
-      if (Test-Path $ReadyFile) { Remove-Item $ReadyFile -Force }
-      exit 0
-    }
-  } catch {}
-}
+# 同 db 不能在读到远端哈希之前跳过，也不能改写 LAST_PUSHED 的 gz。
+$Machine = if ($env:AUTO_CN_PUSH_MACHINE) { $env:AUTO_CN_PUSH_MACHINE } else { '' }
+$ClaimFile = Join-Path $Dir 'push_claim.json'
+if (-not (Test-Path $ClaimFile)) { throw 'missing push_claim.json; refuse unclaimed push' }
+$claim = Get-Content $ClaimFile -Raw -Encoding UTF8 | ConvertFrom-Json
+if (-not $Machine -or [string]$claim.machine -ne $Machine) { throw "push claim machine mismatch" }
+if ($claim.db_sha256 -and $claim.db_sha256.ToString().ToLower() -ne $ExpectedSha) { throw 'push claim db mismatch' }
+if ($claim.gz_sha256 -and $claim.gz_sha256.ToString().ToLower() -ne $gotGz) { throw 'push claim gz mismatch' }
 
 $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $BackupDir = "/root/fat-deploy-backups/db-auto-close-$Stamp"
@@ -88,8 +84,44 @@ function Ssh([string]$RemoteCmd) {
   if ($LASTEXITCODE -ne 0) { throw ("ssh exit " + $LASTEXITCODE) }
 }
 
-Write-Host '=== pre: remote sha + LIVE_CAPTURE check ==='
-Ssh 'sha256sum /opt/football-data/app_latest.db; grep -i LIVE_CAPTURE /opt/football-data/env 2>/dev/null || echo no-LIVE_CAPTURE-in-env'
+function Write-Utf8NoBom([string]$Path, [string]$Text) {
+  $utf8 = New-Object System.Text.UTF8Encoding $false
+  [System.IO.File]::WriteAllText($Path, $Text, $utf8)
+}
+
+Write-Host '=== pre: remote db sha ==='
+$remoteText = Ssh 'sha256sum /opt/football-data/app_latest.db'
+$remoteDb = (($remoteText -split '\s+')[0]).ToLower()
+if ($remoteDb -eq $ExpectedSha) {
+  $health = Ssh 'curl -fsS http://127.0.0.1:8787/health'
+  if ($health -notmatch '"ok"\s*:\s*true') { throw "remote health failed: $health" }
+  $prevGz = $null
+  $prevDb = $null
+  if (Test-Path $MarkerDone) {
+    try {
+      $prev = Get-Content $MarkerDone -Raw -Encoding UTF8 | ConvertFrom-Json
+      $prevGz = [string]$prev.gz_sha256
+      $prevDb = [string]$prev.db_sha256
+    } catch {}
+  }
+  $confirm = [ordered]@{
+    kind = 'remote_db_confirm'
+    remote_db_sha256 = $remoteDb
+    pending_db_sha256 = $ExpectedSha
+    pending_gz_sha256 = $gotGz
+    receipt_db_sha256 = $prevDb
+    receipt_gz_sha256 = $prevGz
+    health_ok = $true
+    health_body = $health.Trim()
+    confirmed_at = (Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz')
+    rewrote_receipt_gz = $false
+    note = 'remote db already matches; LAST_PUSHED was not modified'
+  }
+  Write-Utf8NoBom (Join-Path $Dir 'REMOTE_DB_CONFIRM.json') (($confirm | ConvertTo-Json) + "`n")
+  if (Test-Path $ReadyFile) { Remove-Item $ReadyFile -Force }
+  Write-Host "REUSED_REMOTE_DB remote=$remoteDb receipt_gz_unchanged"
+  exit 0
+}
 
 Write-Host '=== backup remote ==='
 Ssh ("mkdir -p " + $BackupDir)
@@ -123,21 +155,25 @@ Ssh ("echo $b64 | base64 -d > /tmp/fat-finish-replace.sh && bash /tmp/fat-finish
 Ssh 'systemctl restart football-analyze-api'
 Start-Sleep -Seconds 6
 Ssh 'systemctl is-active football-analyze-api'
-Ssh 'curl -sS http://127.0.0.1:8787/health'
+$health = Ssh 'curl -fsS http://127.0.0.1:8787/health'
+if ($health -notmatch '"ok"\s*:\s*true') { throw "remote health failed after replace: $health" }
+$postText = Ssh 'sha256sum /opt/football-data/app_latest.db'
+$postDb = (($postText -split '\s+')[0]).ToLower()
+if ($postDb -ne $ExpectedSha) { throw "remote db after replace is $postDb" }
 
-# Write LAST_PUSHED immediately after health OK — before optional LIVE_CAPTURE probe,
-# so a probe failure cannot leave CN updated without a local marker.
+# 健康且远端哈希一致之后才写回执。不用会写 BOM 的 Set-Content -Encoding UTF8。
 $done = [ordered]@{
   jc_day = $JcDay
   pushed_at = (Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz')
   db_sha256 = $ExpectedSha
   gz_sha256 = $gotGz
   backup = $BackupDir
+  health_ok = $true
 }
-($done | ConvertTo-Json) | Set-Content -Path $MarkerDone -Encoding UTF8
+Write-Utf8NoBom $MarkerDone (($done | ConvertTo-Json) + "`n")
 if (Test-Path $ReadyFile) { Remove-Item $ReadyFile -Force }
 Write-Host ("=== PUSH OK jc_day=$JcDay db_sha=$ExpectedSha backup=$BackupDir ===")
-Write-Host 'NOTE: also run on box: python3 run_auto_cn_push.py --mark-pushed <jc_day>'
+Write-Host 'NOTE: also run on box: python3 run_auto_cn_push.py --mark-pushed <jc_day> --receipt LAST_PUSHED.json'
 
 Write-Host '=== LIVE_CAPTURE still off? (non-fatal) ==='
 try {

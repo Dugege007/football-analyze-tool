@@ -13,16 +13,18 @@ import json
 import os
 import shutil
 import sys
+import time
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from check_close_complete import DEFAULT_DB, DEFAULT_LIVE, evaluate
+from check_close_complete import DEFAULT_LIVE, evaluate
+from durable import atomic_write_text
 from prepare_formal_package import build_package
 from protect import (
-    contiguous_boundary,
     delivery_decision,
     norm_hash,
+    resolved_boundary,
     scan_days,
     select_coverage,
 )
@@ -49,19 +51,29 @@ def home_paths(home: Path) -> dict[str, Path]:
         "alert_stale": markers / "ALERT_STALE_INCOMPLETE.json",
         "alert_stale_ack": markers / "ALERT_STALE_INCOMPLETE_ACK.json",
         "alert_unpushed": markers / "ALERT_COMPLETE_UNPUSHED.json",
+        "alert_corrupt": markers / "ALERT_MARKER_CORRUPT.json",
+        "gap_ledger": markers / "gap_ledger.json",
         "prepare_lock": home / "logs" / "prepare.lock",
     }
+
+
+class CorruptRecord(RuntimeError):
+    pass
 
 
 def load_json(path: Path, default=None):
     if not path.is_file():
         return default
-    return json.loads(path.read_text(encoding="utf-8"))
+    # utf-8-sig 去掉 Windows PowerShell 5.1 Set-Content -Encoding UTF8 写入的 BOM。
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as exc:
+        raise CorruptRecord(str(path)) from exc
 
 
-def write_json(path: Path, obj) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+def write_json(path: Path, obj, *, fault: str | None = None) -> None:
+    text = json.dumps(obj, ensure_ascii=False, indent=2) + "\n"
+    atomic_write_text(path, text, fault=fault)
 
 
 def now_cn() -> datetime:
@@ -110,13 +122,58 @@ def marker_path(markers: Path, jc_day: str) -> Path:
     return markers / f"pushed_{jc_day}.json"
 
 
-def pushed_days(markers: Path) -> set[str]:
+def quarantine_record(path: Path, home: Path, reason: str) -> Path:
+    dest_dir = home / "markers" / "quarantine"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{path.name}.{time.time_ns()}"
+    os.replace(path, dest)
+    write_json(home_paths(home)["alert_corrupt"], {
+        "kind": "corrupt_record",
+        "reason": reason,
+        "quarantine": str(dest),
+        "kept": True,
+        "note": "损坏记录已隔离，原字节保留，不当作已覆盖",
+    })
+    return dest
+
+
+def pushed_days(markers: Path, home: Path | None = None) -> set[str]:
     found: set[str] = set()
     if not markers.is_dir():
         return found
-    for path in markers.glob("pushed_*.json"):
+    root = home or markers.parent
+    for path in list(markers.glob("pushed_*.json")):
         day = path.stem.removeprefix("pushed_")
-        if len(day) == 10 and day[4] == "-" and day[7] == "-":
+        if len(day) != 10 or day[4] != "-" or day[7] != "-":
+            continue
+        try:
+            payload = load_json(path, None)
+        except CorruptRecord:
+            quarantine_record(path, root, "pushed_marker_corrupt")
+            continue
+        if not isinstance(payload, dict) or payload.get("jc_day") != day or not norm_hash(payload.get("db_sha256")):
+            quarantine_record(path, root, "pushed_marker_incomplete")
+            continue
+        found.add(day)
+    return found
+
+
+def checked_empty_days(markers: Path, db: Path, home: Path) -> set[str]:
+    found: set[str] = set()
+    if not markers.is_dir() or not db.is_file():
+        return found
+    stat = db.stat()
+    for path in list(markers.glob("checked_no_matches_*.json")):
+        day = path.stem.removeprefix("checked_no_matches_")
+        try:
+            payload = load_json(path, None)
+        except CorruptRecord:
+            quarantine_record(path, home, "checked_empty_corrupt")
+            continue
+        if not isinstance(payload, dict) or payload.get("jc_day") != day or payload.get("reason") != "no_matches":
+            quarantine_record(path, home, "checked_empty_incomplete")
+            continue
+        if payload.get("db_mtime_ns") == stat.st_mtime_ns and payload.get("db_size") == stat.st_size:
             found.add(day)
     return found
 
@@ -164,8 +221,18 @@ def check_day(jc_day: str, db: Path, live_root: Path, require_live: bool = False
     return evaluate(jc_day, db, live_root, require_live)
 
 
+def load_json_soft(path: Path, default=None, home: Path | None = None):
+    try:
+        return load_json(path, default)
+    except CorruptRecord:
+        if home is not None and path.is_file():
+            quarantine_record(path, home, "json_corrupt")
+        return default
+
+
 def plan_coverage(
     *,
+    home: Path,
     markers: Path,
     db: Path,
     live_root: Path,
@@ -174,12 +241,23 @@ def plan_coverage(
     require_live: bool = False,
     check_fn=None,
 ) -> dict:
-    pushed = pushed_days(markers)
-    boundary = contiguous_boundary(pushed)
+    pushed = pushed_days(markers, home)
+    checked = checked_empty_days(markers, db, home)
+    boundary = resolved_boundary(pushed, checked)
     days = scan_days(boundary, today, lookback)
     checker = check_fn or (lambda day: check_day(day, db, live_root, require_live))
+    stat = db.stat()
     reports = []
     for day in days:
+        if day in checked:
+            reports.append({
+                "jc_day": day,
+                "complete": False,
+                "reason": "no_matches",
+                "n_matches": 0,
+                "checked": True,
+            })
+            continue
         row = checker(day)
         if not isinstance(row, dict):
             raise RuntimeError(f"check failed for {day}")
@@ -187,7 +265,29 @@ def plan_coverage(
             raise RuntimeError(row["error"])
         reports.append(row)
     coverage = select_coverage(reports, pushed=pushed, today=today, boundary=boundary)
-    return {"pushed": sorted(pushed), "coverage": coverage, "reports": reports}
+    for row in reports:
+        if row.get("checked"):
+            continue
+        if row.get("reason") != "no_matches" and row.get("n_matches") != 0:
+            continue
+        if row.get("complete"):
+            continue
+        day = row["jc_day"]
+        write_json(markers / f"checked_no_matches_{day}.json", {
+            "jc_day": day,
+            "reason": "no_matches",
+            "n_matches": 0,
+            "db_mtime_ns": stat.st_mtime_ns,
+            "db_size": stat.st_size,
+            "kind": "checked_not_pushed",
+            "note": "无场次的已检查证据，不是已推标记",
+        })
+    write_json(home_paths(home)["gap_ledger"], {
+        "kind": "gap_ledger",
+        "days": coverage.get("gap_days") or [],
+        "note": "缺口日保留并继续告警，不阻止更晚齐套日进入本次覆盖",
+    })
+    return {"pushed": sorted(pushed), "coverage": coverage, "reports": reports, "checked_empty": sorted(checked)}
 
 
 def _past_incomplete(reports: list[dict], today, pushed: set[str]) -> list[dict]:
@@ -246,6 +346,7 @@ def scan_and_alert(*, home: Path, db: Path, live_root: Path, require_live: bool 
     now = now_cn()
     paths = home_paths(home)
     planned = plan_coverage(
+        home=home,
         markers=paths["markers"],
         db=db,
         live_root=live_root,
@@ -284,15 +385,27 @@ def prepare_unpushed(
     work = paths["staging"] / f".work-{os.getpid()}"
     try:
         if paths["pending"].is_file():
+            try:
+                existing = load_json(paths["pending"], None)
+            except CorruptRecord:
+                quarantine_record(paths["pending"], home, "pending_corrupt")
+                return {
+                    "ok": False,
+                    "prepared": False,
+                    "retryable": False,
+                    "error": "pending_corrupt",
+                    "skipped": [{"reason": "pending_corrupt"}],
+                }
             return {
                 "ok": True,
                 "prepared": [],
                 "skipped": [{"reason": "pending_exists"}],
-                "pending": load_json(paths["pending"], None),
+                "pending": existing,
             }
         now = now_cn()
         try:
             planned = plan_coverage(
+                home=home,
                 markers=paths["markers"],
                 db=db,
                 live_root=live_root,
@@ -388,6 +501,7 @@ def mark_confirmed(
     live_root: Path,
     receipts: list[dict],
     ready: dict | None = None,
+    remote_confirm: dict | None = None,
 ) -> dict:
     """哈希与 pending 不一致时不写已推标记。已标记且哈希相同则幂等返回。"""
     paths = home_paths(home)
@@ -398,9 +512,9 @@ def mark_confirmed(
         pending = load_json(paths["pending"], None)
         package = load_json(paths["staging"] / "meta.json", None)
         if pending and package:
-            decision = delivery_decision(pending, ready, receipts, package)
+            decision = delivery_decision(pending, ready, receipts, package, remote_confirm)
         elif pending:
-            decision = delivery_decision(pending, ready, receipts, pending)
+            decision = delivery_decision(pending, ready, receipts, pending, remote_confirm)
         else:
             decision = {
                 "allow_mark": False,
@@ -422,7 +536,17 @@ def mark_confirmed(
         if not pending and claimed and receipts:
             matched = None
             for rec in receipts:
-                if norm_hash(rec.get("db_sha256")) == db_sha and norm_hash(rec.get("gz_sha256")) == gz_sha:
+                same_db = norm_hash(rec.get("db_sha256")) == db_sha
+                same_gz = norm_hash(rec.get("gz_sha256")) == gz_sha
+                reused = False
+                if same_db and not same_gz and remote_confirm:
+                    from protect import remote_reuse_ok
+                    reused, _why = remote_reuse_ok(
+                        {"db_sha256": db_sha, "gz_sha256": gz_sha},
+                        rec,
+                        remote_confirm,
+                    )
+                if (same_db and same_gz) or reused:
                     matched = str(rec.get("source") or "receipt")
                     break
             if matched and all(_marker_matches(marker_path(paths["markers"], day), db_sha, gz_sha) for day in claimed):
@@ -495,6 +619,8 @@ def mark_confirmed(
                 "db_sha256": db_sha,
                 "gz_sha256": gz_sha,
                 "receipt_source": decision.get("matched_receipt"),
+                "receipt_gz_sha256": decision.get("receipt_gz_sha256"),
+                "delivery": decision.get("reason"),
                 "coverage": (pending or {}).get("coverage"),
                 "note": "idempotent marker — will not auto-prepare again for this jc_day",
             }
@@ -516,7 +642,7 @@ def mark_confirmed(
             "needs_push": False,
             "matched_receipt": decision.get("matched_receipt"),
             "stale_receipts": decision.get("stale_receipts") or [],
-            "reason": "marked",
+            "reason": decision.get("reason") or "marked",
         }
     finally:
         lock.release()
@@ -560,6 +686,7 @@ def check_alerts(home: Path, db: Path, live_root: Path, timeout_hours: float) ->
             result["cleared"] = True
     try:
         planned = plan_coverage(
+            home=home,
             markers=paths["markers"],
             db=db,
             live_root=live_root,
@@ -629,11 +756,22 @@ def main(argv=None) -> int:
     parser.add_argument("--ack-stale-incomplete", metavar="FINGERPRINT")
     parser.add_argument("--receipt", action="append", default=[], type=Path)
     parser.add_argument("--ready", type=Path)
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument("--db", type=Path, default=None)
     parser.add_argument("--live-root", type=Path, default=DEFAULT_LIVE)
     parser.add_argument("--home", type=Path, default=OPS)
+    parser.add_argument("--remote-confirm", type=Path)
     args = parser.parse_args(argv)
     home = args.home
+    if args.db is None and (args.prepare or args.check or args.check_alerts or args.scan_unpushed or args.mark_pushed or args.check_delivery):
+        try:
+            from config_env import ConfigError, load_push_env
+            args.db = Path(load_push_env()["APP_DB_PATH"])
+        except ConfigError as exc:
+            paths = home_paths(home)
+            paths["markers"].mkdir(parents=True, exist_ok=True)
+            write_json(paths["markers"] / "ALERT_CONFIG.json", {"kind": "config", "reason": "config_missing", "note": str(exc)})
+            print(json.dumps({"ok": False, "reason": "config_missing", "error": str(exc)}, ensure_ascii=False))
+            return 5
     paths = home_paths(home)
     paths["markers"].mkdir(parents=True, exist_ok=True)
 
@@ -664,16 +802,17 @@ def main(argv=None) -> int:
             "pending": load_json(paths["pending"]),
             "staging_meta": load_json(paths["staging"] / "meta.json"),
             "pushed_markers": [p.name for p in pushed],
-            "boundary": contiguous_boundary(pushed_days(paths["markers"])),
+            "boundary": resolved_boundary(pushed_days(paths["markers"], home), checked_empty_days(paths["markers"], args.db, home) if args.db else set()),
         }, ensure_ascii=False, indent=2))
         return 0
     if args.check_delivery or (args.mark_pushed and args.receipt):
         receipts = _load_receipts(args.receipt)
         ready = load_json(args.ready, None) if args.ready else None
+        confirm = load_json(args.remote_confirm, None) if args.remote_confirm else None
         if args.check_delivery and not args.mark_pushed:
             pending = load_json(paths["pending"], None)
             package = load_json(paths["staging"] / "meta.json", None)
-            decision = delivery_decision(pending, ready, receipts, package)
+            decision = delivery_decision(pending, ready, receipts, package, confirm)
             print(json.dumps(decision, ensure_ascii=False, indent=2))
             return 0 if decision.get("allow_mark") or decision.get("allow_push") or decision.get("reason") == "receipt_match" else 2
         result = mark_confirmed(
@@ -683,6 +822,7 @@ def main(argv=None) -> int:
             live_root=args.live_root,
             receipts=receipts,
             ready=ready,
+            remote_confirm=confirm,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 2
@@ -702,6 +842,7 @@ def main(argv=None) -> int:
             print(json.dumps({"results": [check_day(args.date, args.db, args.live_root, args.require_live)]}, ensure_ascii=False, indent=2))
             return 0
         planned = plan_coverage(
+            home=home,
             markers=paths["markers"],
             db=args.db,
             live_root=args.live_root,

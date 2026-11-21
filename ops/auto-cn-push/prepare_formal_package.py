@@ -48,8 +48,10 @@ def build_package(
     finally:
         src.close()
     db_sha = sha256_file(raw_db)
-    with raw_db.open("rb") as fin, gzip.open(gz, "wb", compresslevel=6) as fout:
-        shutil.copyfileobj(fin, fout, length=1024 * 1024)
+    # mtime 固定为 0，同一库字节重复打包得到同一个 gz。不要靠改回执 gz 来对齐。
+    with raw_db.open("rb") as fin, gz.open("wb") as raw_out:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw_out, mtime=0, compresslevel=6) as fout:
+            shutil.copyfileobj(fin, fout, length=1024 * 1024)
     gz_sha = sha256_file(gz)
     (out_dir / "app_latest.db.sha256").write_text(db_sha + "\n", encoding="ascii")
     (out_dir / "app_latest.db.gz.sha256").write_text(gz_sha + "\n", encoding="ascii")

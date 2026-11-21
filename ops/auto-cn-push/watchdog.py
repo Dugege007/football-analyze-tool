@@ -377,7 +377,7 @@ def default_starter(script_dir: Path, home: Path) -> int:
 def maybe_scan_alert(home: Path) -> None:
     db = os.environ.get("APP_DB_PATH", "").strip()
     if not db or not Path(db).is_file():
-        return
+        raise RuntimeError("APP_DB_PATH 未设置或不是已有文件，拒绝扫描默认库")
     script_dir = Path(__file__).resolve().parent
     if str(script_dir) not in sys.path:
         sys.path.insert(0, str(script_dir))
@@ -386,6 +386,27 @@ def maybe_scan_alert(home: Path) -> None:
     live = os.environ.get("ODDS_DATA_DIR", "").strip()
     live_root = Path(live) / "5dollar/live" if live else home / "live"
     run_auto_cn_push.scan_and_alert(home=home, db=Path(db), live_root=live_root)
+
+
+def apply_runtime_config(home: Path) -> str | None:
+    from config_env import ConfigError, load_push_env
+
+    try:
+        values = load_push_env()
+    except ConfigError as exc:
+        home.joinpath("markers").mkdir(parents=True, exist_ok=True)
+        home.joinpath("markers", "ALERT_CONFIG.json").write_text(
+            json.dumps({"kind": "config", "reason": "config_missing", "note": str(exc)}, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        return str(exc)
+    os.environ["APP_DB_PATH"] = values["APP_DB_PATH"]
+    if values.get("ODDS_DATA_DIR"):
+        os.environ["ODDS_DATA_DIR"] = values["ODDS_DATA_DIR"]
+    alert = home / "markers" / "ALERT_CONFIG.json"
+    if alert.is_file():
+        alert.unlink()
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -418,11 +439,29 @@ def main(argv: list[str] | None = None) -> int:
         if inspecting:
             print(json.dumps(decision, ensure_ascii=False))
             return 0
+        needs_config = decision.get("action") == "restart" or not args.skip_scan
+        if needs_config:
+            config_error = apply_runtime_config(home)
+            if config_error:
+                print(json.dumps({
+                    "action": "alert",
+                    "reason": "config_missing",
+                    "error": config_error,
+                    "kill": False,
+                }, ensure_ascii=False))
+                return 5
         if not args.skip_scan:
             try:
                 maybe_scan_alert(home)
             except Exception as exc:
                 print(f"[scan_warn] {exc}", file=sys.stderr)
+                (home / "markers").mkdir(parents=True, exist_ok=True)
+                (home / "markers" / "ALERT_SCAN.json").write_text(
+                    json.dumps({"kind": "scan", "reason": "scan_failed", "error": str(exc)}, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+                if decision.get("action") != "restart":
+                    return 6
         if args.starter:
             starter = lambda: subprocess.run([args.starter], check=False).returncode  # noqa: E731
         else:

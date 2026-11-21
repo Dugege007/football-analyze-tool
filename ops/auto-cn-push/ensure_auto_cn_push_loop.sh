@@ -15,6 +15,11 @@ elif [[ -x /usr/bin/python3 ]]; then
 else
   PY=python3
 fi
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/load_push_env.sh"
+if ! load_push_env "$HOME_DIR"; then
+  exit 5
+fi
 exec 9>"$LOCK"
 if ! flock -n 9; then
   echo "already running pid=$(cat "$LOG/ensure_auto_cn_push.pid" 2>/dev/null || echo ?)"
@@ -25,9 +30,9 @@ echo "ensure_auto_cn_push start $(date '+%Y-%m-%dT%H:%M:%S%z') pid=$$" | tee -a 
 export AUTO_CN_PUSH_HOME="$HOME_DIR"
 while true; do
   "$PY" "$SCRIPT_DIR/write_heartbeat.py" --home "$HOME_DIR" --pid "$$" --phase prepare
-  "$PY" "$SCRIPT_DIR/run_auto_cn_push.py" --home "$HOME_DIR" --prepare >>"$LOG/cron.log" 2>&1 || true
+  "$PY" "$SCRIPT_DIR/run_auto_cn_push.py" --home "$HOME_DIR" --db "$APP_DB_PATH" --prepare >>"$LOG/cron.log" 2>&1 || true
   "$PY" "$SCRIPT_DIR/write_heartbeat.py" --home "$HOME_DIR" --pid "$$" --phase check-alerts
-  "$PY" "$SCRIPT_DIR/run_auto_cn_push.py" --home "$HOME_DIR" --check-alerts >>"$LOG/alert.log" 2>&1 || true
+  "$PY" "$SCRIPT_DIR/run_auto_cn_push.py" --home "$HOME_DIR" --db "$APP_DB_PATH" --check-alerts >>"$LOG/alert.log" 2>&1 || true
   if [[ -f "$HOME_DIR/markers/pending_push.json" ]]; then
     cp -f "$HOME_DIR/markers/pending_push.json" "$LOG/NEED_YPC_PUSH.json"
   else
