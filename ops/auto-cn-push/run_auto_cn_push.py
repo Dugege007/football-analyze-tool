@@ -996,7 +996,7 @@ def main(argv=None) -> int:
         if args.check_delivery and not args.mark_pushed:
             pending = load_json(paths["pending"], None)
             package = load_json(paths["staging"] / "meta.json", None)
-            decision = delivery_decision(pending, ready, receipts, package, confirm)
+            decision = delivery_decision(pending, ready, receipts, package)
             print(json.dumps(decision, ensure_ascii=False, indent=2))
             return 0 if decision.get("allow_mark") or decision.get("allow_push") or decision.get("reason") == "receipt_match" else 2
         result = mark_confirmed(

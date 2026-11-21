@@ -110,21 +110,21 @@ $psi.UseShellExecute = $false
 $psi.CreateNoWindow = $true
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
-$child = New-Object System.Diagnostics.Process
-$child.StartInfo = $psi
-[void]$child.Start()
-$childOut = $child.StandardOutput.ReadToEndAsync()
-$childErr = $child.StandardError.ReadToEndAsync()
-[void]$child.WaitForExit()
-$childText = ''
-$childError = ''
-try { $childText = $childOut.Result } catch {}
-try { $childError = $childErr.Result } catch {}
-if ($child.ExitCode -ne 0) { Fail "separate process exit $($child.ExitCode) $childError $childText" }
+$separateProc = New-Object System.Diagnostics.Process
+$separateProc.StartInfo = $psi
+[void]$separateProc.Start()
+$separateOut = $separateProc.StandardOutput.ReadToEndAsync()
+$separateErr = $separateProc.StandardError.ReadToEndAsync()
+[void]$separateProc.WaitForExit()
+$separateText = ''
+$separateError = ''
+try { $separateText = $separateOut.Result } catch {}
+try { $separateError = $separateErr.Result } catch {}
+if ($separateProc.ExitCode -ne 0) { Fail "separate process exit $($separateProc.ExitCode) $separateError $separateText" }
 if (-not (Test-Path -LiteralPath $resultFile)) { Fail 'separate process wrote no result' }
 $mark = [System.IO.File]::ReadAllText($resultFile).Trim()
 Remove-Item -LiteralPath $resultFile -Force -ErrorAction SilentlyContinue
 if ($mark -ne 'OK') { Fail "separate process result $mark" }
-Write-Output $childText.Trim()
+Write-Output $separateText.Trim()
 Write-Output 'STDIN_FRAME_OK'
 exit 0

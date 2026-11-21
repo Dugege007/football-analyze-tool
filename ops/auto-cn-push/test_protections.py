@@ -1781,6 +1781,49 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("InputEncoding = $oldIn", frame)
         self.assertIn("SEPARATE_PROCESS_FRAME_OK", frame)
 
+    def test_powershell_variables_do_not_differ_only_by_case(self):
+        import re
+        for path in ROOT.glob("*.ps1"):
+            text = path.read_text(encoding="utf-8-sig")
+            text = re.sub(r"(?s)@'.*?'@", " ", text)
+            text = text.replace("`$", "")
+            scopes = re.split(r"(?m)^function\s+\w+[^\n]*\{", text)
+            for scope in scopes:
+                groups = {}
+                for name in re.findall(r"\$(\w+)", scope):
+                    groups.setdefault(name.casefold(), set()).add(name)
+                clashes = {key: sorted(value) for key, value in groups.items() if len(value) > 1}
+                self.assertFalse(clashes, (path.name, clashes))
+
+    def test_check_delivery_cli_returns_decision(self):
+        db_sha = "ab" * 32
+        gz_sha = "cd" * 32
+        (self.home / "staging").mkdir()
+        write_json(self.home / "markers" / "pending_push.json", {
+            "jc_day": "2026-11-12", "db_sha256": db_sha, "gz_sha256": gz_sha,
+        })
+        write_json(self.home / "staging" / "meta.json", {
+            "jc_day": "2026-11-12", "db_sha256": db_sha, "gz_sha256": gz_sha,
+        })
+        receipt = self.tmp / "receipt.json"
+        write_json(receipt, {"source": "msi", "db_sha256": db_sha, "gz_sha256": gz_sha})
+        completed = subprocess.run(
+            [
+                "python3", str(ROOT / "run_auto_cn_push.py"),
+                "--check-delivery",
+                "--home", str(self.home),
+                "--db", str(self.db),
+                "--live-root", str(self.live),
+                "--receipt", str(receipt),
+            ],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertNotIn("NameError", completed.stderr + completed.stdout)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        decision = json.loads(completed.stdout)
+        self.assertTrue(decision["allow_mark"])
+        self.assertEqual(decision["reason"], "receipt_match")
+
     def test_server_header_accepts_utf8_bom_without_touching_gz(self):
         import io
         raw = b"db-bytes-for-bom-header"

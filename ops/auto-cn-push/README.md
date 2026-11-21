@@ -53,7 +53,7 @@ Windows 本机安装和推送使用同一把 `FileShare.None` 文件锁，不要
 & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\fat-tools\windows_isolation_check.ps1" -DropDir "C:\Program Files\fat drop" -Python "C:\Python314\python.exe"
 ```
 
-成功时会先打印 `PS51_PARSE_OK` 和「参数回显通过」。stdin 帧检查是另一条命令，分别在当前 UTF-8 宿主和单独的 `powershell.exe -File` 进程里核对载荷首字节、长度和 gz。云端没有执行这些 PowerShell 命令。
+成功时会先打印 `PS51_PARSE_OK` 和「参数回显通过」。stdin 帧检查是另一条命令。分开跑当前 UTF-8 宿主和独立 `-Child` 进程时，两机已经核对过首字节 `7B22`、131 字节和完整 gz。官方合一入口里局部进程变量曾与 `[switch]$Child` 大小写冲突，脚本会在打印 `STDIN_FRAME_OK` 前以退出码 1 结束；局部进程已改名为 `$separateProc`。云端没有执行这些 PowerShell 命令，合一入口仍要在两台机器上再跑一次。`--check-delivery` 不再把未定义的 `confirm` 传给投递判断。
 
 ```powershell
 & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\fat-tools\windows_stdin_frame_check.ps1" -Python "C:\Python314\python.exe"
