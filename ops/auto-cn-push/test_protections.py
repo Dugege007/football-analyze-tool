@@ -836,8 +836,9 @@ class ReviewRegressionTests(unittest.TestCase):
             receipts=[loaded],
         )
         self.assertFalse(refused["ok"])
-        self.assertEqual(refused["reason"], "gz_not_delivered")
+        self.assertEqual(refused["reason"], "needs_gz_commit")
         self.assertFalse(refused["push_again"])
+        self.assertTrue((self.home / "markers" / "pending_push.json").is_file())
         self.assertEqual(receipt_path.read_bytes(), original)
         self.assertFalse((self.home / "markers" / "pushed_2026-11-19.json").exists())
         self.assertTrue((self.home / "markers" / "pending_push.json").is_file())
@@ -1014,6 +1015,231 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertTrue((self.home / "markers" / "checked_no_matches_2026-11-13.json").is_file())
         self.assertFalse((self.home / "markers" / "pushed_2026-11-13.json").exists())
 
+    def test_transaction_same_db_new_gz_and_stale_predecessor(self):
+        import gzip as gzip_mod
+        import hashlib
+        import io
+
+        def pack(raw: bytes, mtime: int) -> bytes:
+            buf = io.BytesIO()
+            with gzip_mod.GzipFile(fileobj=buf, mode="wb", mtime=mtime) as handle:
+                handle.write(raw)
+            return buf.getvalue()
+
+        def stage(directory: Path, raw: bytes, mtime: int) -> str:
+            blob = pack(raw, mtime)
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "app_latest.db.gz").write_bytes(blob)
+            (directory / "app_latest.db.sha256").write_text(hashlib.sha256(raw).hexdigest() + "\n", encoding="ascii")
+            gz_sha = hashlib.sha256(blob).hexdigest()
+            (directory / "app_latest.db.gz.sha256").write_text(gz_sha + "\n", encoding="ascii")
+            (directory / "meta.json").write_text(json.dumps({"jc_day": "2026-11-20"}), encoding="utf-8")
+            (directory / "app_latest.ready").write_text(json.dumps({
+                "db_sha256": hashlib.sha256(raw).hexdigest(),
+                "gz_sha256": gz_sha,
+            }), encoding="utf-8")
+            return gz_sha
+
+        make_db(self.db, historical_days())
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
+        prepared = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        pending = prepared["prepared"][0]
+        staging = self.home / "staging"
+        new_blob = (staging / "app_latest.db.gz").read_bytes()
+        raw = gzip_mod.decompress(new_blob)
+        self.assertEqual(hashlib.sha256(new_blob).hexdigest(), pending["gz_sha256"])
+        old_buf = io.BytesIO()
+        with gzip_mod.GzipFile(fileobj=old_buf, mode="wb", mtime=11) as handle:
+            handle.write(raw)
+        old_blob = old_buf.getvalue()
+        old_gz = hashlib.sha256(old_blob).hexdigest()
+        self.assertNotEqual(old_gz, pending["gz_sha256"])
+        old_body = json.dumps({
+            "source": "msi",
+            "jc_day": pending["jc_day"],
+            "db_sha256": pending["db_sha256"],
+            "gz_sha256": old_gz,
+        }).encode()
+        server = self.tmp / "server"
+        server.mkdir()
+        (server / "app_latest.db").write_bytes(raw)
+        drop = self.tmp / "drop-new-gz"
+        drop.mkdir()
+        for name in ("app_latest.db.gz", "app_latest.db.sha256", "app_latest.db.gz.sha256", "meta.json"):
+            (drop / name).write_bytes((staging / name).read_bytes())
+        (drop / "app_latest.ready").write_text(json.dumps({
+            "db_sha256": pending["db_sha256"],
+            "gz_sha256": pending["gz_sha256"],
+        }), encoding="utf-8")
+        (drop / "LAST_PUSHED.json").write_bytes(old_body)
+        health = self.tmp / "health.sh"
+        health.write_text("#!/bin/sh\nprintf '%s' '{\"ok\":true}'\n", encoding="utf-8")
+        health.chmod(0o755)
+        ssh_bin = self.tmp / "bin"
+        ssh_bin.mkdir()
+        ssh = ssh_bin / "ssh"
+        ssh.write_text(
+            "#!/bin/bash\nset -euo pipefail\n"
+            "while [[ $# -gt 0 ]]; do\n"
+            "  case \"$1\" in\n"
+            "    -T|-t) shift ;;\n"
+            "    -o|-i) shift 2 ;;\n"
+            "    *) break ;;\n"
+            "  esac\ndone\nshift\nexec bash -c \"$1\"\n",
+            encoding="utf-8",
+        )
+        ssh.chmod(0o755)
+        env = os.environ.copy()
+        env.update({
+            "PATH": str(ssh_bin) + os.pathsep + env.get("PATH", ""),
+            "FAT_CN_ROOT": str(server),
+            "FAT_CN_LOCK": str(self.tmp / "remote.lock"),
+            "FAT_CN_HEALTH_CMD": str(health),
+        })
+        done = subprocess.run(
+            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("PUSH_COMMITTED", done.stdout)
+        self.assertIn("fat-cn-push.", done.stderr)
+        self.assertNotIn("fat-finish-replace.sh", done.stderr)
+        self.assertEqual((drop / "LAST_PUSHED.json.previous").read_bytes(), old_body)
+        committed = json.loads((drop / "LAST_PUSHED.json").read_text(encoding="utf-8"))
+        self.assertEqual(committed["gz_sha256"], pending["gz_sha256"])
+        self.assertEqual(committed["db_sha256"], pending["db_sha256"])
+        self.assertTrue(committed["health_ok"] is True)
+        self.assertTrue(str(committed["workdir"]).find("/fat-cn-push.") > 0)
+        self.assertFalse(Path(committed["workdir"]).exists())
+        self.assertEqual((server / "app_latest.db").read_bytes(), raw)
+        self.assertFalse((drop / "app_latest.ready").exists())
+        server_commit = json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))
+        self.assertEqual(server_commit["commit_id"], committed["commit_id"])
+        marked = runner.mark_confirmed(
+            home=self.home, jc_day=pending["jc_day"], db=self.db, live_root=self.live,
+            receipts=[committed],
+        )
+        self.assertTrue(marked["ok"], marked)
+        self.assertFalse((self.home / "markers" / "pending_push.json").exists())
+        self.assertTrue((self.home / "markers" / "pushed_2026-11-12.json").is_file())
+        self.assertEqual((drop / "LAST_PUSHED.json.previous").read_bytes(), old_body)
+        newer = b"formal-db-bytes-v2"
+        (server / "app_latest.db").write_bytes(newer)
+        late = self.tmp / "drop-late"
+        stage(late, raw, 2)
+        late_run = subprocess.run(
+            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(late), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(late_run.returncode, 12, late_run.stdout + late_run.stderr)
+        self.assertIn("STALE_PREDECESSOR", late_run.stderr)
+        self.assertEqual((server / "app_latest.db").read_bytes(), newer)
+        self.assertFalse((late / "LAST_PUSHED.json").exists())
+        waiter = self.tmp / "drop-wait"
+        stage(waiter, newer, 3)
+        env_wait = dict(env)
+        env_wait["FAT_CN_PAUSE_SEC"] = "2"
+        first = subprocess.Popen(
+            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(waiter), "--ssh-target", "local"],
+            env=env_wait, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+        )
+        try:
+            import select
+            fd = first.stderr.fileno()
+            os.set_blocking(fd, False)
+            seen = b""
+            deadline = time.time() + 5
+            while b"WORKDIR=" not in seen and time.time() < deadline:
+                ready_fds, _, _ = select.select([fd], [], [], 0.2)
+                if ready_fds:
+                    seen += os.read(fd, 4096)
+            self.assertIn(b"WORKDIR=", seen)
+            rival = self.tmp / "drop-rival"
+            stage(rival, newer, 4)
+            blocked = subprocess.run(
+                ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(rival), "--ssh-target", "local"],
+                env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(blocked.returncode, 9, blocked.stdout + blocked.stderr)
+            self.assertIn("REMOTE_PUSH_LOCK_HELD", blocked.stderr)
+            self.assertTrue((rival / "app_latest.ready").is_file())
+            self.assertFalse((rival / "LAST_PUSHED.json").exists())
+            same = subprocess.run(
+                ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(waiter)],
+                env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(same.returncode, 11, same.stdout + same.stderr)
+            self.assertIn("DROP_LOCK_HELD", same.stderr)
+            self.assertTrue((waiter / "app_latest.ready").is_file())
+        finally:
+            os.killpg(first.pid, signal.SIGKILL)
+            first.wait(timeout=5)
+            first.stdout.close()
+            first.stderr.close()
+
+    def test_health_failure_restores_db(self):
+        import hashlib
+        server = self.tmp / "server-health"
+        server.mkdir()
+        (server / "app_latest.db").write_bytes(b"current-db")
+        drop = self.tmp / "drop-health"
+        blob = gzip.compress(b"replacement-db", mtime=0)
+        drop.mkdir()
+        (drop / "app_latest.db.gz").write_bytes(blob)
+        (drop / "app_latest.db.sha256").write_text(hashlib.sha256(b"replacement-db").hexdigest() + "\n", encoding="ascii")
+        gz_sha = hashlib.sha256(blob).hexdigest()
+        (drop / "app_latest.db.gz.sha256").write_text(gz_sha + "\n", encoding="ascii")
+        (drop / "meta.json").write_text(json.dumps({"jc_day": "2026-11-20"}), encoding="utf-8")
+        (drop / "app_latest.ready").write_text(json.dumps({
+            "db_sha256": hashlib.sha256(b"replacement-db").hexdigest(),
+            "gz_sha256": gz_sha,
+        }), encoding="utf-8")
+        (drop / "LAST_PUSHED.json").write_text(json.dumps({
+            "db_sha256": hashlib.sha256(b"current-db").hexdigest(),
+            "gz_sha256": "c" * 64,
+        }), encoding="utf-8")
+        health = self.tmp / "nested-ok.sh"
+        health.write_text("#!/bin/sh\nprintf '%s' '{\"meta\":{\"ok\":true}}'\n", encoding="utf-8")
+        health.chmod(0o755)
+        env = os.environ.copy()
+        env.update({"FAT_CN_ROOT": str(server), "FAT_CN_LOCK": str(self.tmp / "health.lock"), "FAT_CN_HEALTH_CMD": str(health)})
+        failed = subprocess.run(
+            ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop)],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(failed.returncode, 13, failed.stdout + failed.stderr)
+        self.assertIn("remote health failed", failed.stderr)
+        self.assertEqual((server / "app_latest.db").read_bytes(), b"current-db")
+        self.assertFalse((server / "LAST_COMMIT.json").exists())
+        self.assertTrue((drop / "app_latest.ready").is_file())
+        self.assertIn('"gz_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"', (drop / "LAST_PUSHED.json").read_text(encoding="utf-8"))
+
+    def test_install_lock_is_held_before_push_reads(self):
+        drop = self.tmp / "drop-install"
+        drop.mkdir()
+        ready = drop / "app_latest.ready"
+        ready.write_text("OLD", encoding="utf-8")
+        holder = subprocess.Popen(
+            ["bash", str(ROOT / "hold_drop_lock.sh"), str(drop)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "DROP_LOCK_HELD_OK")
+            ready.write_text("B-READY", encoding="utf-8")
+            blocked = subprocess.run(
+                ["bash", str(ROOT / "invoke_cn_push.sh"), "--dir", str(drop)],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(blocked.returncode, 11, blocked.stdout + blocked.stderr)
+            self.assertIn("DROP_LOCK_HELD", blocked.stderr)
+            self.assertFalse((drop / "commit.stdout").exists())
+            self.assertEqual(ready.read_text(encoding="utf-8"), "B-READY")
+        finally:
+            holder.stdin.close()
+            holder.wait(timeout=5)
+            holder.stdout.close()
+            holder.stderr.close()
+
     def test_receipt_migration_does_not_fabricate_middle_days(self):
         make_db(self.db, {
             "2026-11-12": "complete",
@@ -1068,6 +1294,16 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual(migrated.get("dropped_from_csl_snapshot"), "absent")
         ledger = json.loads((self.home / "markers" / "gap_ledger.json").read_text(encoding="utf-8"))
         self.assertIn("2026-10-01", [item["jc_day"] for item in ledger["days"]])
+        current = migrate_receipt(
+            home=self.home, receipt=receipt, snapshot=self.db, live_root=self.live,
+            today=TODAY, start=date(2026, 11, 12), as_current=True,
+        )
+        self.assertEqual(current["status"], "current_evidence_not_pushed")
+        self.assertEqual(current["marked"], [])
+        self.assertTrue((self.home / "markers" / "evidence_current_2026-11-15.json").is_file())
+        evidence = json.loads((self.home / "markers" / "evidence_current_2026-11-15.json").read_text(encoding="utf-8"))
+        self.assertTrue(evidence["not_pushed"])
+        self.assertFalse((self.home / "markers" / "pushed_2026-11-15.json").exists())
 
     def test_quarantine_hold_blocks_later_prepare(self):
         staging = self.home / "staging"
@@ -1119,25 +1355,6 @@ class ReviewRegressionTests(unittest.TestCase):
         row = next(item for item in planned["reports"] if item["jc_day"] == "2026-11-13")
         self.assertEqual(row["n_matches"], 1)
         self.assertNotEqual(row.get("reason"), "no_matches")
-
-    def test_remote_lock_blocks_second_executor(self):
-        lock = self.tmp / "locks" / "push.lock"
-        holder = subprocess.Popen(
-            ["bash", str(ROOT / "remote_push_lock.sh"), str(lock), "sleep", "20"],
-            start_new_session=True,
-        )
-        try:
-            wait_until(lambda: lock.exists(), timeout=5)
-            second = subprocess.run(
-                ["bash", str(ROOT / "remote_push_lock.sh"), str(lock), "echo", "entered"],
-                text=True, capture_output=True, check=False, timeout=5,
-            )
-            self.assertEqual(second.returncode, 9, second.stdout + second.stderr)
-            self.assertIn("REMOTE_PUSH_LOCK_HELD", second.stdout)
-            self.assertNotIn("entered", second.stdout)
-        finally:
-            os.killpg(holder.pid, signal.SIGTERM)
-            holder.wait(timeout=5)
 
     def test_crontab_conflict_and_verify_do_not_restore_table(self):
         binary, state = self._fake_crontab("jobs")

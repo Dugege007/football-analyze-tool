@@ -9,6 +9,26 @@ param(
   [string]$TaskName = 'FootballAutoCnPushAfterClose'
 )
 $ErrorActionPreference = 'Stop'
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$bash = if ($env:FAT_CN_BASH) { $env:FAT_CN_BASH } else { 'bash' }
+$hold = Join-Path $here 'hold_drop_lock.sh'
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = $bash
+$psi.Arguments = '"' + $hold + '" "' + $Dir + '"'
+$psi.UseShellExecute = $false
+$psi.RedirectStandardInput = $true
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError = $true
+$lockProc = New-Object System.Diagnostics.Process
+$lockProc.StartInfo = $psi
+if (-not $lockProc.Start()) { throw 'cannot start drop lock' }
+$got = $lockProc.StandardOutput.ReadLine()
+if ($got -ne 'DROP_LOCK_HELD_OK') {
+  try { $lockProc.StandardInput.Close() } catch {}
+  $err = ''
+  try { $err = $lockProc.StandardError.ReadToEnd() } catch {}
+  throw "drop lock held: $err"
+}
 
 function Write-FatEvent([string]$Event, [string]$Detail = '') {
   $log = Join-Path $Dir 'auto-push-events.log'
@@ -25,13 +45,6 @@ if (-not (Test-Path -LiteralPath $Dir)) {
 }
 
 $taskWasDisabled = $false
-$dropLockPath = Join-Path $Dir 'drop.operation.lock'
-$dropLock = $null
-try {
-  $dropLock = [System.IO.File]::Open($dropLockPath, 'OpenOrCreate', 'ReadWrite', 'None')
-} catch {
-  throw "drop lock held"
-}
 if ($DisableTaskDuringInstall) {
   try {
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -48,7 +61,7 @@ if ($DisableTaskDuringInstall) {
       $task = Get-ScheduledTask -TaskName $TaskName
       if ($task.State -eq 'Running') {
         Enable-ScheduledTask -TaskName $TaskName | Out-Null
-        if ($dropLock) { $dropLock.Dispose() }
+        try { $lockProc.StandardInput.Close() } catch {}
         throw 'task still running after disable; refused to swap'
       }
     }
@@ -144,7 +157,10 @@ try {
   Write-Host ("ATOMIC_INSTALL_OK jc_day=$jc gz_sha=$wantGz ready=$readyPath")
 }
 finally {
-  if ($dropLock) { $dropLock.Dispose() }
+  if ($lockProc -and -not $lockProc.HasExited) {
+    try { $lockProc.StandardInput.Close() } catch {}
+    $lockProc.WaitForExit(5000) | Out-Null
+  }
   if ($taskWasDisabled) {
     try {
       schtasks /Change /TN $TaskName /ENABLE | Out-Null

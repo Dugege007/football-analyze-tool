@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# 在执行端用 flock 独占锁。YuePC 与 MSI 的新推送脚本通过 SSH 调用它。
-# 现网旧脚本不调用本文件，因此在那些脚本被换上之前，这把锁不会生效。
+# 独占锁包住整个服务器事务。标准输入原样交给 cn_push_transaction.sh。
+# 锁在进程退出时才释放，不会在单条远端命令结束后放开。
 set -euo pipefail
 LOCK="${1:?lock path required}"
-shift || true
+HERE="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$(dirname "$LOCK")"
 exec 8>"$LOCK"
 if ! flock -n 8; then
-  echo "REMOTE_PUSH_LOCK_HELD"
+  echo "REMOTE_PUSH_LOCK_HELD" >&2
   exit 9
 fi
-if [[ "$#" -gt 0 ]]; then
-  "$@"
-fi
+exec bash "$HERE/cn_push_transaction.sh"

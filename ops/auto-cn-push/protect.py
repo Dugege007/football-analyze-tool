@@ -208,12 +208,13 @@ def delivery_decision(
             stale.append({"source": source, "db_sha256": db, "gz_sha256": gz})
     result["stale_receipts"] = stale
     if db_only and not matched:
-        # 同库不同 gz 说明这份包不是已投递的那一份。不标记，也不另写确认文件。
-        result["reason"] = "gz_not_delivered"
+        # 旧回执的 gz 对不上这次包。允许把这次 gz 送进服务器事务，但在新回执出现前不标记。
+        result["reason"] = "needs_gz_commit"
         result["receipt_gz_sha256"] = norm_hash(db_only[0].get("gz_sha256"))
-        result["allow_push"] = False
+        result["allow_push"] = True
         result["allow_mark"] = False
         result["push_again"] = False
+        result["needs_push"] = True
         return result
     if matched:
         # 已有一台机器的回执与 pending 一致。旧 ready 不能再投，也不需要重推。

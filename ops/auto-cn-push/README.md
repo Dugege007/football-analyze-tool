@@ -37,11 +37,11 @@
 
 ## 同库异 gz 与 Windows 脚本
 
-现网脚本在 db 哈希相同就删掉 ready 并退出。仓库副本改为：远端库哈希和这次 gz 都与 `LAST_PUSHED` 一致才跳过；只是 db 相同而 gz 不同就失败退出，不改回执、不删 ready。健康结果按 JSON 根上的 `ok` 判断。YuePC 仍优先，MSI 仍是备用。新脚本在大陆机上用 `flock` 抢 `/run/fat-cn-push.lock`，本机安装和推送再抢同一个 `drop.operation.lock`。任务是否仍在运行看 `Get-ScheduledTask` 的 `State`，不看英文 Status 文本。PowerShell 5.1 写出的 BOM 回执，box 用 `utf-8-sig` 读取。
+现网脚本在 db 哈希相同就删掉 ready 并退出。仓库里的推送入口先拿投放目录锁，再读包，然后用一次会话把 gz 送进 `remote_push_lock.sh`。这把锁盖住校验、备份、接收、替换、健康检查和服务器提交；客户端回执只采用服务器打印的 `COMMIT_JSON`。旧包如果赶不上当前库的前驱，会被拒绝，不会覆盖新库。同库但 gz 不同时，事务仍接收并校验这次 gz，写出新回执，不改旧回执文件。YuePC 仍优先，MSI 仍是备用，两边都调用这一条入口。健康结果只认 JSON 根上的 `ok`。
 
-这些都只在仓库副本里。旧的 YuePC / MSI 脚本没有这些锁，也仍会在 db 相同、gz 不同时删掉 ready。换上副本之前，跨机互斥和“gz 不同不删 ready”都没有生效，旧入口可以绕过。
+这些服务器锁和“同库提交新 gz”只在换上仓库副本后才会在 YuePC / MSI 执行。旧脚本不调用这条事务，维护窗口里必须停掉旧入口，否则旧入口仍可绕过。没有在 Windows 上执行过 PowerShell。
 
-11-20 的回执不能给 11-12 至 11-19 补造已推标记。没有与回执哈希一致的历史快照时，`migrate_receipt.py` 不写已推标记，也不清掉已有缺口。历史判断不读今天的 live 撤场目录。当前库只能用 `--as-current` 记成当前证据。已有不同证据的标记会停住，不覆盖。
+11-20 的回执不能给 11-12 至 11-19 补造已推标记。没有与回执哈希一致的历史快照时，`migrate_receipt.py` 不写已推标记，也不清掉已有缺口。历史判断不使用调用方传来的 live 撤场目录。`--as-current` 只写 `evidence_current_*.json`，不写 `pushed_*.json`。已有不同证据的标记会停住，不覆盖。
 
 ## 安全迁移
 
@@ -49,7 +49,7 @@
 
 默认不要用仓库副本覆盖 YuePC / MSI 上的现有推送脚本。若以后改用副本，只在那台机器的计划任务或不入库文件里注入这两个变量，值从现网脚本现有默认值抄取。`env.example` 只说明键名，cron 不会 source 仓库里的这个文件。
 
-循环和看门狗共用仓库外的配置文件，由 `AUTO_CN_PUSH_ENV` 指向。文件里必须同时有已存在的 `APP_DB_PATH` 和 `ODDS_DATA_DIR`。缺任何一个就写 `markers/ALERT_CONFIG.json` 并以非 0 退出，不会去打开脚本里的默认库或默认 live 目录。`check_close_complete.py` 与现网原件哈希一致：`d22aeb9ff120a8031351a1452d3d482680d0de2a3be5f22e7a33857644200c51`。
+循环和看门狗共用仓库外的配置文件，由 `AUTO_CN_PUSH_ENV` 指向。文件里必须同时有已存在的 `APP_DB_PATH` 和 `ODDS_DATA_DIR`。缺任何一个就写 `markers/ALERT_CONFIG.json` 并以非 0 退出，不会去打开脚本里的默认库或默认 live 目录。安装和回滚在写入前读两次任务表；这不是比较并交换，维护时不要同时改 crontab。`check_close_complete.py` 与现网原件哈希一致：`d22aeb9ff120a8031351a1452d3d482680d0de2a3be5f22e7a33857644200c51`。
 
 ## 安装、核对、回滚
 
@@ -73,9 +73,10 @@ bash ops/auto-cn-push/rollback_watchdog.sh
 
 没有合并，没有部署，没有推大陆站。Windows 上的旧推送和旧安装脚本都还在用。因此下面这些都还不能在现网兑现：
 
-- 大陆机上的 `flock`、本机 `drop.operation.lock`、以及“db 相同但 gz 不同时不删 ready”。旧脚本不抢这些锁，也可以继续按旧逻辑跳过。
-- `pending_expect.json` 只有新安装脚本会写、新推送脚本会读。
-- 11-12 至 11-19 若没有与 11-20 回执哈希一致的历史快照，不能标成当时已推。`--as-current` 只产生当前证据。
+- 服务器事务锁、投放目录锁，以及“同库不同 gz 由服务器提交新回执”。旧入口不调用 `invoke_cn_push.sh`，维护时必须停掉旧入口。
+- YuePC 仍优先，MSI 仍是备用。两边的仓库副本都进同一条事务；线上副本换掉之前，这条链不生效。
+- 11-12 至 11-19 若没有与 11-20 回执哈希一致的历史快照，不能标成当时已推。`--as-current` 只写 `evidence_current_*.json`，不写已推标记。
+- 本环境没有 PowerShell，没有执行 `install_package_atomic.ps1` 或 `push-formal-db.ps1`。安装器要先跑 `hold_drop_lock.sh` 再读包；这一点只在 bash 锁进程上做过交错测试。
 
 ## 测试
 

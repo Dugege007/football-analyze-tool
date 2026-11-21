@@ -53,16 +53,13 @@ def migrate_receipt(
         report["status"] = "lock_held"
         return report
     try:
-        if snapshot is None or as_current:
-            report["status"] = "needs_evidence" if snapshot is None else "current_evidence"
+        if snapshot is None:
+            report["status"] = "needs_evidence"
             report["note"] = "没有当时的快照，不能把回执日期写成中间日的历史证据"
-            if snapshot is None:
-                write_json(paths["markers"] / "MIGRATION_NEEDS_EVIDENCE.json", report)
-                return report
-            return _write_days(
-                home, report, snapshot, live_root, today, start, receipt,
-                evidence_source="current_snapshot", historical=False,
-            )
+            write_json(paths["markers"] / "MIGRATION_NEEDS_EVIDENCE.json", report)
+            return report
+        if as_current:
+            return _write_current_evidence(home, report, snapshot, today, start, receipt)
         snap_sha = sha256_file(snapshot)
         report["snapshot_db_sha256"] = snap_sha
         if snap_sha != str(receipt.get("db_sha256") or "").lower():
@@ -70,14 +67,9 @@ def migrate_receipt(
             report["note"] = "快照哈希与回执不一致，不把当前结果写成当时的证据"
             write_json(paths["markers"] / "MIGRATION_NEEDS_EVIDENCE.json", report)
             return report
-        # 历史判断不用调用方传来的当前 live 目录，除非该目录被明确标成当时的撤场快照。
-        historical_live = Path(live_root) if live_root and (Path(live_root) / "BOUND_TO_RECEIPT").is_file() else None
-        if historical_live is None:
-            historical_live = paths["markers"] / ".no-live-snapshot"
-            historical_live.mkdir(parents=True, exist_ok=True)
-            report["dropped_from_csl_snapshot"] = "absent"
-        else:
-            report["dropped_from_csl_snapshot"] = str(historical_live)
+        historical_live = paths["markers"] / ".no-live-snapshot"
+        historical_live.mkdir(parents=True, exist_ok=True)
+        report["dropped_from_csl_snapshot"] = "absent"
         return _write_days(
             home, report, snapshot, historical_live, today, start, receipt,
             evidence_source="historical_snapshot", historical=True,
@@ -86,7 +78,41 @@ def migrate_receipt(
         lock.release()
 
 
+def _write_current_evidence(home, report, snapshot, today, start, receipt):
+    """当前库只留下不能被当成已推的证据文件。"""
+    paths = home_paths(home)
+    end = date.fromisoformat(str(receipt["jc_day"]))
+    empty = paths["markers"] / ".no-live-snapshot"
+    empty.mkdir(parents=True, exist_ok=True)
+    day = start
+    while day <= end and day <= today:
+        row = evaluate(day.isoformat(), snapshot, empty, False)
+        write_json(paths["markers"] / f"evidence_current_{day.isoformat()}.json", {
+            "jc_day": day.isoformat(),
+            "complete": bool(row.get("complete")),
+            "reason": row.get("reason"),
+            "n_matches": row.get("n_matches"),
+            "evidence_source": "current_snapshot",
+            "historical": False,
+            "not_pushed": True,
+            "note": "当前库证据。没有对应投递回执，不是已推标记",
+        })
+        kind = "no_matches" if (row.get("reason") == "no_matches" or row.get("n_matches") == 0) else (
+            "complete" if row.get("complete") else "gaps"
+        )
+        report.setdefault(kind, []).append(day.isoformat())
+        day += timedelta(days=1)
+    report["status"] = "current_evidence_not_pushed"
+    report["marked"] = []
+    write_json(paths["markers"] / "MIGRATION_REPORT.json", report)
+    return report
+
+
 def _write_days(home, report, snapshot, live_root, today, start, receipt, *, evidence_source, historical):
+    if not historical:
+        raise RuntimeError("当前证据不能写成已推标记")
+    if not receipt.get("gz_sha256"):
+        raise RuntimeError("没有投递回执的 gz，不能晋升为已推")
     paths = home_paths(home)
     end = date.fromisoformat(str(receipt["jc_day"]))
     planned = []
