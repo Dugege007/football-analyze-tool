@@ -1,4 +1,4 @@
-# YuePC 优先。MSI 备用脚本只换投放目录后调用本文件。
+﻿# YuePC 优先。MSI 备用脚本只换投放目录后调用本文件。
 # 本机锁是 Windows FileShare.None，从第一次读包之前持有到结束。
 # 服务器事务仍由 ssh.exe 把原始字节送进远端 bash/flock。不用本机 flock，也不把载荷送进文本管道。
 param(
@@ -26,6 +26,7 @@ $sshPath = $sshCmd.Source
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $here 'windows_drop_lock.ps1')
+. (Join-Path $here 'windows_argv.ps1')
 $dropLock = Open-FatDropLock -Dir $Dir
 if (-not $dropLock) {
   Exit-Fat 11 'DROP_LOCK_HELD'
@@ -33,10 +34,6 @@ if (-not $dropLock) {
 
 function Quote-Bash([string]$Text) {
   return "'" + ($Text -replace "'", "'\''") + "'"
-}
-
-function Quote-Win([string]$Text) {
-  return '"' + ($Text -replace '"', '\"') + '"'
 }
 
 function Get-FatSha256([byte[]]$Bytes) {
@@ -175,10 +172,12 @@ exit `$rc
       $psi.RedirectStandardOutput = $true
       $psi.RedirectStandardError = $true
       $psi.CreateNoWindow = $true
-      $arg = '-T -o BatchMode=yes -o ConnectTimeout=30'
-      if ($Key) { $arg += ' -i ' + (Quote-Win $Key) }
-      $arg += ' ' + (Quote-Win $SshTarget) + ' ' + (Quote-Win $remote)
-      $psi.Arguments = $arg
+      $psi.Arguments = Format-FatWinCommandLine -Argument ($(
+        $sshArg = @('-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=30')
+        if ($Key) { $sshArg += @('-i', $Key) }
+        $sshArg += @($SshTarget, $remote)
+        $sshArg
+      ))
       $proc = New-Object System.Diagnostics.Process
       $proc.StartInfo = $psi
       [void]$proc.Start()

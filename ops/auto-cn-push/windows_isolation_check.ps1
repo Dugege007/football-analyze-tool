@@ -1,12 +1,23 @@
-# 在 YuePC / MSI 上检查本机文件锁、安装/推送入口交错，以及 SSH 失败时不写回执。
-# 不连接生产服务器，不安装功能，不开端口。成功时只打印「辅助锁检查通过」。
+﻿# PS 5.1 on gb2312: this file is UTF-8 with BOM so ParseFile keeps every character.
+# Checks: ParseFile, child arguments that contain spaces, a missing directory with spaces,
+# install blocked while push holds the lock, SSH failure leaves ready and writes no receipt.
+# It does not claim the remote transaction succeeded.
 param(
   [Parameter(Mandatory = $true)][string]$DropDir,
-  [Parameter(Mandatory = $true)][string]$Python
+  [Parameter(Mandatory = $true)][string]$Python,
+  [switch]$EchoArgs
 )
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $here 'windows_drop_lock.ps1')
+. (Join-Path $here 'windows_argv.ps1')
+
+if ($EchoArgs) {
+  Write-Output "ECHO_FILE=$PSCommandPath"
+  Write-Output "ECHO_DROP=$DropDir"
+  Write-Output "ECHO_PY=$Python"
+  exit 0
+}
 
 function Fail([string]$Message) {
   [Console]::Error.WriteLine($Message)
@@ -18,12 +29,75 @@ function Fail-Dep([string]$Name) {
   exit 20
 }
 
-if (-not (Test-Path -LiteralPath $Python)) { Fail-Dep "python $Python" }
-$exe = (Resolve-Path -LiteralPath $Python).Path
-if ($exe -match '\\WindowsApps\\') { Fail-Dep 'python_stub' }
-& $exe -c "import sys; print(sys.executable)"
-if ($LASTEXITCODE -ne 0) { Fail-Dep "python_exit $LASTEXITCODE" }
+function Start-FatChild {
+  param(
+    [Parameter(Mandatory = $true)][string[]]$Argument
+  )
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $psi.Arguments = Format-FatWinCommandLine -Argument $Argument
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $proc = New-Object System.Diagnostics.Process
+  $proc.StartInfo = $psi
+  [void]$proc.Start()
+  return @{
+    Proc = $proc
+    OutTask = $proc.StandardOutput.ReadToEndAsync()
+    ErrTask = $proc.StandardError.ReadToEndAsync()
+  }
+}
 
+function Finish-FatChild($Child) {
+  [void]$Child.Proc.WaitForExit()
+  $out = ''
+  $err = ''
+  try { $out = $Child.OutTask.Result } catch {}
+  try { $err = $Child.ErrTask.Result } catch {}
+  return @{ Code = $Child.Proc.ExitCode; Out = $out; Err = $err }
+}
+
+$tokens = $null
+$parseErrors = $null
+Get-ChildItem -LiteralPath $here -Filter '*.ps1' | ForEach-Object {
+  $tokens = $null
+  $parseErrors = $null
+  $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors)
+  if ($parseErrors -and @($parseErrors).Count -gt 0) {
+    $first = @($parseErrors)[0]
+    Fail ("PARSE_FAIL " + $_.Name + " line " + $first.Extent.StartLineNumber + " " + $first.Message)
+  }
+}
+Write-Output 'PS51_PARSE_OK'
+
+$echo = Start-FatChild -Argument @(
+  '-NoProfile', '-ExecutionPolicy', 'Bypass',
+  '-File', $PSCommandPath,
+  '-EchoArgs',
+  '-DropDir', $DropDir,
+  '-Python', $Python
+)
+$echoResult = Finish-FatChild $echo
+if ($echoResult.Code -ne 0) { Fail ("arg echo exit " + $echoResult.Code + " " + $echoResult.Err) }
+foreach ($pair in @(
+  @('ECHO_FILE=', $PSCommandPath),
+  @('ECHO_DROP=', $DropDir),
+  @('ECHO_PY=', $Python)
+)) {
+  $expected = $pair[0] + $pair[1]
+  if ($echoResult.Out -notmatch [regex]::Escape($expected)) {
+    Fail ("arg split: " + $echoResult.Out)
+  }
+}
+Write-Output '参数回显通过'
+
+if (-not (Test-Path -LiteralPath $Python)) { Fail-Dep "python $Python" }
+$pythonExe = (Resolve-Path -LiteralPath $Python).Path
+if ($pythonExe -match '\\WindowsApps\\') { Fail-Dep 'python_stub' }
+& $pythonExe -c "import sys; print(sys.executable)"
+if ($LASTEXITCODE -ne 0) { Fail-Dep "python_exit $LASTEXITCODE" }
 $ssh = Get-Command ssh.exe -ErrorAction SilentlyContinue
 if (-not $ssh) { Fail-Dep 'ssh.exe' }
 
@@ -67,7 +141,7 @@ gz_sha = hashlib.sha256(blob).hexdigest()
 '@
 $pyFile = Join-Path ([System.IO.Path]::GetTempPath()) ("fat-iso-" + [guid]::NewGuid().ToString('n') + ".py")
 [System.IO.File]::WriteAllText($pyFile, $py, (New-Object System.Text.UTF8Encoding $false))
-& $exe $pyFile $DropDir
+& $pythonExe $pyFile $DropDir
 Remove-Item -LiteralPath $pyFile -Force -ErrorAction SilentlyContinue
 if ($LASTEXITCODE -ne 0) { Fail-Dep "python_fixture $LASTEXITCODE" }
 $readyPath = Join-Path $DropDir 'app_latest.ready'
@@ -84,53 +158,47 @@ $fake = Join-Path $env:WINDIR ("Temp\fat-ssh-" + [guid]::NewGuid().ToString('n')
 & $csc @('/nologo', "/out:$fake", $cs)
 Remove-Item -LiteralPath $cs -Force -ErrorAction SilentlyContinue
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $fake)) { Fail-Dep 'csc.exe' }
+
 $pushScript = Join-Path $here 'push-formal-db.ps1'
 $installScript = Join-Path $here 'install_package_atomic.ps1'
-$pushOut = Join-Path $DropDir 'push-out.txt'
-$pushErr = Join-Path $DropDir 'push-err.txt'
-$installOut = Join-Path $DropDir 'install-out.txt'
-$installErr = Join-Path $DropDir 'install-err.txt'
-$pushArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Dir "{1}" -SshTarget dummy -SshExe "{2}"' -f (
-  $pushScript -replace '"', '\"'
-), (
-  $DropDir -replace '"', '\"'
-), (
-  $fake -replace '"', '\"'
+$push = Start-FatChild -Argument @(
+  '-NoProfile', '-ExecutionPolicy', 'Bypass',
+  '-File', $pushScript,
+  '-Dir', $DropDir,
+  '-SshTarget', 'dummy',
+  '-SshExe', $fake
 )
-$push = Start-Process -FilePath 'powershell.exe' -PassThru -WindowStyle Hidden `
-  -RedirectStandardOutput $pushOut -RedirectStandardError $pushErr -ArgumentList $pushArgs
 $install = $null
 try {
   Start-Sleep -Seconds 1
-  if ($push.HasExited) { Fail 'push exited before the lock could be contested' }
-  $installArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Dir "{1}"' -f (
-    ($installScript -replace '"', '\"')
-  ), (
-    ($DropDir -replace '"', '\"')
+  if ($push.Proc.HasExited) { Fail 'push exited before the lock could be contested' }
+  $install = Start-FatChild -Argument @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass',
+    '-File', $installScript,
+    '-Dir', $DropDir
   )
-  $install = Start-Process -FilePath 'powershell.exe' -PassThru -WindowStyle Hidden `
-    -RedirectStandardOutput $installOut -RedirectStandardError $installErr -ArgumentList $installArgs
-  if (-not $install.WaitForExit(20000)) {
-    try { $install.Kill() } catch {}
+  if (-not $install.Proc.WaitForExit(20000)) {
+    try { $install.Proc.Kill() } catch {}
     Fail 'install did not finish while push held the lock'
   }
-  $installText = ''
-  if (Test-Path -LiteralPath $installErr) { $installText = [System.IO.File]::ReadAllText($installErr) }
-  if ($install.ExitCode -ne 11 -or $installText -notmatch 'DROP_LOCK_HELD') {
-    Fail "install was not blocked by the push lock: exit=$($install.ExitCode) $installText"
+  $installResult = Finish-FatChild $install
+  $install = $null
+  if ($installResult.Code -ne 11 -or $installResult.Err -notmatch 'DROP_LOCK_HELD') {
+    Fail ("install was not blocked by the push lock: exit=" + $installResult.Code + " " + $installResult.Err)
   }
   Write-Output '推送持锁时安装被拒绝'
 } finally {
-  if ($push -and -not $push.HasExited) {
-    try { $push.WaitForExit(20000) } catch {}
+  if ($push -and -not $push.Proc.HasExited) {
+    try { [void]$push.Proc.WaitForExit(20000) } catch {}
   }
-  if ($push -and -not $push.HasExited) {
-    try { $push.Kill() } catch {}
-    try { $push.WaitForExit(5000) } catch {}
+  if ($push -and -not $push.Proc.HasExited) {
+    try { $push.Proc.Kill() } catch {}
+    try { [void]$push.Proc.WaitForExit(5000) } catch {}
   }
   Remove-Item -LiteralPath $fake -Force -ErrorAction SilentlyContinue
 }
-if ($push.ExitCode -eq 0) { Fail 'ssh failure was reported as success' }
+$pushResult = Finish-FatChild $push
+if ($pushResult.Code -eq 0) { Fail 'ssh failure was reported as success' }
 if (Test-Path -LiteralPath (Join-Path $DropDir 'LAST_PUSHED.json')) { Fail 'ssh failure wrote a receipt' }
 $readyAfter = [System.IO.File]::ReadAllBytes($readyPath)
 if ([Convert]::ToBase64String($readyBefore) -ne [Convert]::ToBase64String($readyAfter)) {
@@ -140,7 +208,6 @@ Write-Output 'SSH失败未写回执且ready仍在'
 $reacquired = Open-FatDropLock -Dir $DropDir
 if (-not $reacquired) { Fail 'lock was not released after push exited' }
 $reacquired.Dispose()
-Remove-Item -LiteralPath $fake -Force -ErrorAction SilentlyContinue
 Write-Output '推送结束后锁可再取得'
 Write-Output '辅助锁检查通过'
 exit 0

@@ -1742,6 +1742,33 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertIn("DEPENDENCY_MISSING", failed.stderr)
         self.assertNotIn("DROP_LOCK_HELD", failed.stderr)
 
+    def test_non_ascii_powershell_files_keep_utf8_bom(self):
+        bom = b"\xef\xbb\xbf"
+        required = {
+            "windows_drop_lock.ps1",
+            "windows_isolation_check.ps1",
+            "windows_argv.ps1",
+            "push-formal-db.ps1",
+            "ypc_watch_and_push.ps1",
+        }
+        seen = set()
+        for path in ROOT.glob("*.ps1"):
+            raw = path.read_bytes()
+            if raw.startswith(bom):
+                text = raw[3:].decode("utf-8")
+                self.assertTrue(any(ord(ch) > 127 for ch in text) or path.name == "windows_argv.ps1")
+                seen.add(path.name)
+            else:
+                raw.decode("ascii")
+        missing = required - seen
+        self.assertFalse(missing, sorted(missing))
+        isolation = (ROOT / "windows_isolation_check.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn("Format-FatWinCommandLine", isolation)
+        self.assertNotIn("-ArgumentList", isolation)
+        self.assertIn("PS51_PARSE_OK", isolation)
+        self.assertIn("ECHO_DROP=", isolation)
+        self.assertNotIn("ISOLATION_OK", isolation)
+
     def test_disk_hash_is_not_a_running_api_fingerprint(self):
         _server, db_path, env, drop = self._initialized_package(
             "disk-fingerprint", b"current-db", b"replacement-db", "disk_only",

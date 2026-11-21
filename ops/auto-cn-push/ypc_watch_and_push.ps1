@@ -1,4 +1,4 @@
-# Poll drop dir; push only when app_latest.ready exists and package hashes match.
+﻿# Poll drop dir; push only when app_latest.ready exists and package hashes match.
 # Consecutive mismatch / push failure → ALERT_NEED_ANALYST.json for analyst routine.
 param(
   [string]$Dir = $(if ($env:AUTO_CN_PUSH_YPC_DROP) { $env:AUTO_CN_PUSH_YPC_DROP } else { 'C:\Users\Administrator\football-cn-auto-push' }),
