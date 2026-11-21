@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import connect
+from app.health_db_asgi import register_health_db
 from app import backtest as bt
 from app import settle_book as sb
 from app import shadow_evaluable as shadow_ev  # N5/N5-PIN 不可评估记账
@@ -756,6 +757,9 @@ def health() -> dict:
     return {"ok": True, "version": API_VERSION,
             "dual_write_odds_asian": DUAL_WRITE_ODDS_ASIAN,
             "meta": _adb.db_meta()}
+
+
+register_health_db(app)
 
 
 def formal_strategies_for_match(conn: sqlite3.Connection, match_db_id: int) -> list[str]:

@@ -1,0 +1,8 @@
+markers/
+staging/
+logs/
+chunks-deliver/
+chunks-deliver-packs/
+__pycache__/
+*.db
+*.db.gz
