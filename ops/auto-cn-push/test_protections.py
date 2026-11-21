@@ -86,12 +86,38 @@ def historical_days() -> dict[str, str]:
     return days
 
 
+def seed_push_base(home: Path) -> dict:
+    db_sha = "ab" * 32
+    gz_sha = "cd" * 32
+    jc_day = "2026-11-11"
+    record = {
+        "commit_id": "baseline-" + hashlib.sha256(f"msi\n{jc_day}\n{db_sha}\n{gz_sha}".encode()).hexdigest(),
+        "kind": "baseline",
+        "source": "msi_receipt",
+        "receipt_source": "msi",
+        "jc_day": jc_day,
+        "db_sha256": db_sha,
+        "gz_sha256": gz_sha,
+        "snapshot_sha256": db_sha,
+        "remote_db_sha256": db_sha,
+        "initialized_from": "maintenance_baseline",
+        "activated": False,
+    }
+    result = runner.import_push_base(home, record)
+    if not result.get("ok"):
+        raise RuntimeError(result)
+    return result
+
+
 def kill_tree(pid: int) -> None:
     children = Path(f"/proc/{pid}/task/{pid}/children")
-    if children.is_file():
-        for token in children.read_text(encoding="utf-8", errors="replace").split():
-            if token.isdigit():
-                kill_tree(int(token))
+    try:
+        text = children.read_text(encoding="utf-8", errors="replace") if children.is_file() else ""
+    except OSError:
+        text = ""
+    for token in text.split():
+        if token.isdigit():
+            kill_tree(int(token))
     try:
         os.kill(pid, signal.SIGTERM)
     except OSError:
@@ -143,6 +169,8 @@ class CoverageTests(unittest.TestCase):
         (self.home / "markers").mkdir()
         os.environ["AUTO_CN_PUSH_NOW"] = "2026-11-21T12:00:00+08:00"
         os.environ["STAGE_MARKS_DIR"] = str(self.tmp / "stage")
+        seed_push_base(self.home)
+        seed_push_base(self.home)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -305,7 +333,7 @@ class CoverageTests(unittest.TestCase):
         make_db(self.db, historical_days())
         write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
         lock_path = self.home / "logs" / "prepare.lock"
-        lock_path.parent.mkdir()
+        lock_path.parent.mkdir(exist_ok=True)
         fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
         fcntl.flock(fd, fcntl.LOCK_EX)
         try:
@@ -689,6 +717,7 @@ class WatchdogTests(unittest.TestCase):
         make_db(db, historical_days())
         before = db.read_bytes()
         write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
+        seed_push_base(self.home)
         (self.home / "logs" / "ensure_auto_cn_push.pid").write_text("999999\n", encoding="ascii")
         odds = self.tmp / "odds"
         odds.mkdir(exist_ok=True)
@@ -899,6 +928,7 @@ class ReviewRegressionTests(unittest.TestCase):
         (self.home / "logs").mkdir()
         os.environ["AUTO_CN_PUSH_NOW"] = "2026-11-21T12:00:00+08:00"
         os.environ["STAGE_MARKS_DIR"] = str(self.tmp / "stage")
+        seed_push_base(self.home)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -1153,7 +1183,9 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual(baseline["receipt_source"], "msi")
         self.assertEqual(baseline["source"], "msi_receipt")
         self.assertNotIn("yuepc", json.dumps(baseline))
-        write_json(self.home / "markers" / "push_base.json", {"commit_id": baseline["commit_id"]})
+        (self.home / "markers" / "push_base.json").unlink()
+        imported = runner.import_push_base(self.home, baseline)
+        self.assertTrue(imported["ok"], imported)
         prepared = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
         pending = prepared["prepared"][0]
         self.assertEqual(pending["expected_commit_id"], baseline["commit_id"])
@@ -1472,6 +1504,199 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertNotIn("COMMIT_JSON", failed.stdout)
         self.assertEqual(db_path.read_bytes(), b"current-db")
         self.assertFalse((drop / "LAST_PUSHED.json").exists())
+
+    def test_missing_or_bad_push_base_does_not_publish(self):
+        make_db(self.db, historical_days())
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
+        base = self.home / "markers" / "push_base.json"
+        base.unlink()
+        staging = self.home / "staging"
+        staging.mkdir()
+        (staging / "app_latest.db.gz").write_bytes(b"KEEP")
+        missing = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        self.assertFalse(missing["ok"])
+        self.assertEqual(missing["error"], "push_base_missing")
+        self.assertEqual((staging / "app_latest.db.gz").read_bytes(), b"KEEP")
+        self.assertFalse((self.home / "markers" / "pending_push.json").exists())
+        base.write_text("{", encoding="utf-8")
+        corrupt = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        self.assertEqual(corrupt["error"], "push_base_invalid")
+        self.assertEqual(base.read_text(encoding="utf-8"), "{")
+        self.assertEqual((staging / "app_latest.db.gz").read_bytes(), b"KEEP")
+        write_json(base, {"commit_id": ""})
+        empty = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        self.assertEqual(empty["error"], "push_base_invalid")
+        self.assertFalse((self.home / "markers" / "pending_push.json").exists())
+        base.unlink()
+        forged = runner.import_push_base(self.home, {"commit_id": "not-a-server-commit", "kind": "baseline"})
+        self.assertFalse(forged["ok"])
+        self.assertEqual(forged["reason"], "baseline_untrusted")
+        self.assertFalse(base.exists())
+
+    def test_two_prepare_rounds_use_confirmed_commit(self):
+        base = self.home / "markers" / "push_base.json"
+        base.unlink()
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
+        make_db(self.db, {
+            "2026-11-11": "complete",
+            "2026-11-12": "complete",
+            "2026-11-13": "none",
+            "2026-11-14": "incomplete",
+            "2026-11-21": "incomplete",
+        })
+        server = self.tmp / "round-server"
+        server.mkdir()
+        db_path = server / "app_latest.db"
+        db_path.write_bytes(b"live-base")
+        db_sha = hashlib.sha256(b"live-base").hexdigest()
+        receipt = self.tmp / "round-msi.json"
+        receipt.write_text(json.dumps({
+            "source": "msi",
+            "jc_day": "2026-11-11",
+            "db_sha256": db_sha,
+            "gz_sha256": "cd" * 32,
+        }), encoding="utf-8")
+        env = service_env(self.tmp / "round-env", server)
+        init = subprocess.run(
+            ["bash", str(ROOT / "init_server_baseline.sh"), "--receipt", str(receipt), "--snapshot", str(db_path)],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(init.returncode, 0, init.stdout + init.stderr)
+        imported = runner.import_push_base(
+            self.home, json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8")),
+        )
+        self.assertTrue(imported["ok"], imported)
+
+        def deliver_and_confirm(drop: Path):
+            drop.mkdir()
+            staging = self.home / "staging"
+            for name in ("app_latest.db.gz", "app_latest.db.sha256", "app_latest.db.gz.sha256", "meta.json"):
+                shutil.copy(staging / name, drop / name)
+            meta = json.loads((drop / "meta.json").read_text(encoding="utf-8"))
+            (drop / "app_latest.ready").write_text(json.dumps({
+                "db_sha256": meta["db_sha256"],
+                "gz_sha256": meta["gz_sha256"],
+            }), encoding="utf-8")
+            pushed = subprocess.run(
+                ["bash", str(ROOT / "push_cn_package.sh"), "--dir", str(drop), "--ssh-target", "local"],
+                env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(pushed.returncode, 0, pushed.stdout + pushed.stderr)
+            self.assertIn("BASELINE_AUTHORIZED", pushed.stdout)
+            self.assertIn("PUSH_COMMITTED", pushed.stdout)
+            commit = json.loads((drop / "LAST_PUSHED.json").read_text(encoding="utf-8"))
+            marked = runner.mark_confirmed(
+                home=self.home, jc_day=meta["jc_day"], db=self.db, live_root=self.live, receipts=[commit],
+            )
+            self.assertTrue(marked["ok"], marked)
+            return meta, commit
+
+        first = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        self.assertTrue(first["ok"], first)
+        self.assertEqual(first["prepared"][0]["expected_commit_id"], imported["commit_id"])
+        meta1, commit1 = deliver_and_confirm(self.tmp / "round-drop-1")
+        self.assertEqual(commit1["predecessor_commit_id"], imported["commit_id"])
+        self.assertEqual(gzip_commit_id((self.tmp / "round-drop-1" / "app_latest.db.gz").read_bytes()), imported["commit_id"])
+        advanced = json.loads(base.read_text(encoding="utf-8"))
+        self.assertEqual(advanced["commit_id"], commit1["commit_id"])
+        self.assertEqual(advanced["source"], "server_commit")
+        self.db.unlink()
+        make_db(self.db, {
+            "2026-11-11": "complete",
+            "2026-11-12": "complete",
+            "2026-11-13": "none",
+            "2026-11-14": "complete",
+            "2026-11-21": "incomplete",
+        })
+        second = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        self.assertTrue(second["ok"], second)
+        self.assertEqual(second["prepared"][0]["expected_commit_id"], commit1["commit_id"])
+        self.assertIn("2026-11-14", second["prepared"][0]["coverage"]["claimed_jc_days"])
+        meta2, commit2 = deliver_and_confirm(self.tmp / "round-drop-2")
+        self.assertEqual(meta2["expected_commit_id"], commit1["commit_id"])
+        self.assertEqual(commit2["predecessor_commit_id"], commit1["commit_id"])
+        self.assertEqual(gzip.decompress((self.tmp / "round-drop-2" / "app_latest.db.gz").read_bytes()), db_path.read_bytes())
+        self.assertEqual(json.loads(base.read_text(encoding="utf-8"))["commit_id"], commit2["commit_id"])
+
+    def test_bound_package_never_authorized_is_rejected_after_successor(self):
+        base = self.home / "markers" / "push_base.json"
+        base.unlink()
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
+        make_db(self.db, {
+            "2026-11-11": "complete",
+            "2026-11-12": "complete",
+            "2026-11-21": "incomplete",
+        })
+        server = self.tmp / "held-server"
+        server.mkdir()
+        db_path = server / "app_latest.db"
+        db_path.write_bytes(b"held-base")
+        db_sha = hashlib.sha256(b"held-base").hexdigest()
+        receipt = self.tmp / "held-msi.json"
+        receipt.write_text(json.dumps({
+            "source": "msi",
+            "jc_day": "2026-11-11",
+            "db_sha256": db_sha,
+            "gz_sha256": "ef" * 32,
+        }), encoding="utf-8")
+        env = service_env(self.tmp / "held-env", server)
+        init = subprocess.run(
+            ["bash", str(ROOT / "init_server_baseline.sh"), "--receipt", str(receipt), "--snapshot", str(db_path)],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(init.returncode, 0, init.stdout + init.stderr)
+        imported = runner.import_push_base(self.home, json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8")))
+        self.assertTrue(imported["ok"], imported)
+        held = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        self.assertTrue(held["ok"], held)
+        saved = self.tmp / "held-a"
+        saved.mkdir()
+        for name in ("app_latest.db.gz", "app_latest.db.sha256", "app_latest.db.gz.sha256", "meta.json"):
+            shutil.copy(self.home / "staging" / name, saved / name)
+        meta = json.loads((saved / "meta.json").read_text(encoding="utf-8"))
+        (saved / "app_latest.ready").write_text(json.dumps({
+            "db_sha256": meta["db_sha256"], "gz_sha256": meta["gz_sha256"],
+        }), encoding="utf-8")
+        self.assertEqual(gzip_commit_id((saved / "app_latest.db.gz").read_bytes()), imported["commit_id"])
+        (self.home / "markers" / "pending_push.json").unlink()
+        for extra in (self.home / "markers").glob("pending_2026-*.json"):
+            extra.unlink()
+        self.db.unlink()
+        make_db(self.db, {
+            "2026-11-11": "complete",
+            "2026-11-12": "complete",
+            "2026-11-13": "complete",
+            "2026-11-21": "incomplete",
+        })
+        successor = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        self.assertTrue(successor["ok"], successor)
+        drop_b = self.tmp / "held-b"
+        drop_b.mkdir()
+        for name in ("app_latest.db.gz", "app_latest.db.sha256", "app_latest.db.gz.sha256", "meta.json"):
+            shutil.copy(self.home / "staging" / name, drop_b / name)
+        meta_b = json.loads((drop_b / "meta.json").read_text(encoding="utf-8"))
+        (drop_b / "app_latest.ready").write_text(json.dumps({
+            "db_sha256": meta_b["db_sha256"], "gz_sha256": meta_b["gz_sha256"],
+        }), encoding="utf-8")
+        pushed = subprocess.run(
+            ["bash", str(ROOT / "push_cn_package.sh"), "--dir", str(drop_b), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(pushed.returncode, 0, pushed.stdout + pushed.stderr)
+        live_bytes = db_path.read_bytes()
+        live_commit = json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))["commit_id"]
+        refused = subprocess.run(
+            ["bash", str(ROOT / "push_cn_package.sh"), "--dir", str(saved), "--ssh-target", "local"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(refused.returncode, 12, refused.stdout + refused.stderr)
+        self.assertIn("STALE_BASELINE", refused.stderr)
+        self.assertNotIn("PUSH_COMMITTED", refused.stdout)
+        self.assertNotIn("COMMIT_JSON", refused.stdout)
+        self.assertFalse((saved / "LAST_PUSHED.json").exists())
+        self.assertEqual(db_path.read_bytes(), live_bytes)
+        self.assertEqual(json.loads((server / "LAST_COMMIT.json").read_text(encoding="utf-8"))["commit_id"], live_commit)
+        self.assertFalse((server / "authorized" / f"{meta['gz_sha256']}.json").exists())
 
     def test_install_lock_is_held_before_push_reads(self):
         drop = self.tmp / "drop-install"

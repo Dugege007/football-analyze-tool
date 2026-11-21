@@ -13,7 +13,7 @@ if (-not $SshTarget -and $env:FAT_CN_ALLOW_TEST_LOCAL -ne '1') {
 }
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $bash = if ($env:FAT_CN_BASH) { $env:FAT_CN_BASH } else { 'bash' }
-$args = @((Join-Path $here 'invoke_cn_push.sh'), '--dir', $Dir)
+$args = @((Join-Path $here 'push_cn_package.sh'), '--dir', $Dir)
 if ($SshTarget) { $args += @('--ssh-target', $SshTarget) }
 if ($Key) { $args += @('--ssh-key', $Key) }
 if ($SkipReadyCheck) { $args += '--skip-ready' }

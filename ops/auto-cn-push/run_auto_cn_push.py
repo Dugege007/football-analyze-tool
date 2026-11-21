@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import shutil
@@ -470,17 +471,38 @@ def prepare_unpushed(
                 "skipped": [{"reason": "pending_exists"}],
                 "pending": load_json(paths["pending"], None),
             }
+        base_file = paths["markers"] / "push_base.json"
+        if not base_file.is_file():
+            return {
+                "ok": False,
+                "prepared": False,
+                "retryable": False,
+                "error": "push_base_missing",
+                "coverage": coverage,
+            }
+        try:
+            base_payload = load_json(base_file, None)
+        except CorruptRecord:
+            return {
+                "ok": False,
+                "prepared": False,
+                "retryable": False,
+                "error": "push_base_invalid",
+                "coverage": coverage,
+            }
+        base_commit = str((base_payload or {}).get("commit_id") or "").strip()
+        if not base_commit:
+            return {
+                "ok": False,
+                "prepared": False,
+                "retryable": False,
+                "error": "push_base_invalid",
+                "coverage": coverage,
+            }
         if work.exists():
             shutil.rmtree(work)
         work.mkdir(parents=True, exist_ok=True)
         jc_day = claimed[-1]
-        base_commit = ""
-        base_file = paths["markers"] / "push_base.json"
-        if base_file.is_file():
-            try:
-                base_commit = str((load_json(base_file, {}) or {}).get("commit_id") or "")
-            except CorruptRecord:
-                base_commit = ""
 
         def default_builder(day, cov, out_dir):
             return build_package(db, out_dir, day, cov, expected_commit_id=base_commit or None)
@@ -674,6 +696,7 @@ def mark_confirmed(
             written.append(day)
         if paths["pending"].is_file() and (paths["pending"] and (not claimed or (pending or {}).get("jc_day") in claimed or jc_day in claimed)):
             paths["pending"].unlink(missing_ok=True)
+        _advance_push_base_from_commit(paths, receipts, db_sha, gz_sha)
         _stage_mark(
             "cn.push",
             status="ok",
@@ -692,6 +715,105 @@ def mark_confirmed(
         }
     finally:
         lock.release()
+
+
+def _baseline_commit_id(jc_day: str, db_sha: str, gz_sha: str) -> str:
+    identity = f"msi\n{jc_day}\n{db_sha}\n{gz_sha}".encode()
+    return "baseline-" + hashlib.sha256(identity).hexdigest()
+
+
+def _valid_maintenance_baseline(record: dict | None) -> bool:
+    """只接受维护脚本写出的 MSI 基线。单独的 commit_id 不能冒充。"""
+    if not isinstance(record, dict):
+        return False
+    if record.get("kind") != "baseline" or record.get("source") != "msi_receipt":
+        return False
+    if record.get("receipt_source") != "msi" or record.get("initialized_from") != "maintenance_baseline":
+        return False
+    db_sha = norm_hash(record.get("db_sha256"))
+    gz_sha = norm_hash(record.get("gz_sha256"))
+    jc_day = str(record.get("jc_day") or "")
+    if not db_sha or not gz_sha or not jc_day:
+        return False
+    if norm_hash(record.get("snapshot_sha256")) not in ("", db_sha):
+        return False
+    if norm_hash(record.get("remote_db_sha256")) not in ("", db_sha):
+        return False
+    return record.get("commit_id") == _baseline_commit_id(jc_day, db_sha, gz_sha)
+
+
+def import_push_base(home: Path, record: dict) -> dict:
+    """一次性导入维护基线。已有不同提交身份时不覆盖。"""
+    if not _valid_maintenance_baseline(record):
+        return {"ok": False, "reason": "baseline_untrusted"}
+    paths = home_paths(home)
+    paths["markers"].mkdir(parents=True, exist_ok=True)
+    lock = PrepareLock(paths["prepare_lock"])
+    if not lock.acquire():
+        return {"ok": False, "reason": "lock_held"}
+    try:
+        path = paths["markers"] / "push_base.json"
+        if path.is_file():
+            try:
+                existing = load_json(path, None) or {}
+            except CorruptRecord:
+                return {"ok": False, "reason": "push_base_invalid"}
+            if existing.get("commit_id") == record["commit_id"]:
+                return {"ok": True, "already": True, "commit_id": record["commit_id"]}
+            if existing.get("commit_id"):
+                return {"ok": False, "reason": "push_base_exists"}
+        payload = {
+            "commit_id": record["commit_id"],
+            "source": "msi_receipt",
+            "kind": "baseline",
+            "jc_day": record["jc_day"],
+            "db_sha256": norm_hash(record.get("db_sha256")),
+            "gz_sha256": norm_hash(record.get("gz_sha256")),
+            "initialized_from": "maintenance_baseline",
+        }
+        write_json(path, payload)
+        return {"ok": True, "already": False, "commit_id": payload["commit_id"]}
+    finally:
+        lock.release()
+
+
+def _advance_push_base_from_commit(paths: dict, receipts: list[dict], db_sha: str, gz_sha: str) -> None:
+    """确认到真实服务器回执后，把基线推进到该提交。无来源的 JSON 不写。"""
+    path = paths["markers"] / "push_base.json"
+    if not path.is_file():
+        return
+    try:
+        current = load_json(path, None) or {}
+    except CorruptRecord:
+        return
+    base_id = str(current.get("commit_id") or "")
+    if not base_id:
+        return
+    chosen = None
+    for rec in receipts:
+        if norm_hash(rec.get("db_sha256")) != db_sha or norm_hash(rec.get("gz_sha256")) != gz_sha:
+            continue
+        if rec.get("activated") is not True or rec.get("health_ok") is not True:
+            continue
+        commit_id = str(rec.get("commit_id") or "")
+        predecessor = str(rec.get("predecessor_commit_id") or "")
+        if not commit_id or predecessor != base_id:
+            continue
+        served = norm_hash(rec.get("served_db_sha256"))
+        if served and served != db_sha:
+            continue
+        chosen = rec
+        break
+    if not chosen:
+        return
+    write_json(path, {
+        "commit_id": chosen["commit_id"],
+        "source": "server_commit",
+        "predecessor_commit_id": base_id,
+        "db_sha256": db_sha,
+        "gz_sha256": gz_sha,
+        "activated": True,
+    })
 
 
 def check_alerts(home: Path, db: Path, live_root: Path, timeout_hours: float) -> dict:
@@ -806,6 +928,7 @@ def main(argv=None) -> int:
     parser.add_argument("--live-root", type=Path, default=None)
     parser.add_argument("--home", type=Path, default=OPS)
     parser.add_argument("--release-quarantine", metavar="REASON")
+    parser.add_argument("--import-push-base", type=Path)
     args = parser.parse_args(argv)
     home = args.home
     needs_config = any((
@@ -829,6 +952,11 @@ def main(argv=None) -> int:
     if args.release_quarantine is not None:
         print(json.dumps(release_quarantine(home, args.release_quarantine), ensure_ascii=False, indent=2))
         return 0
+    if args.import_push_base is not None:
+        record = json.loads(args.import_push_base.read_text(encoding="utf-8-sig"))
+        result = import_push_base(home, record)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 2
     paths = home_paths(home)
     paths["markers"].mkdir(parents=True, exist_ok=True)
 
