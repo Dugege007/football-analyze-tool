@@ -2137,6 +2137,122 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual(rejected["reason"], "baseline_untrusted")
         self.assertFalse((self.tmp / "stripped-home" / "markers" / "push_base.json").exists())
 
+    def test_legacy_migration_holds_push_lock_and_commits_audit_first(self):
+        raw = b"locked-legacy-db"
+        db_sha = hashlib.sha256(raw).hexdigest()
+        gz_sha = "ab" * 32
+        receipt = {
+            "jc_day": "2026-11-20",
+            "pushed_at": "2026-11-21T03:40:00+08:00",
+            "db_sha256": db_sha,
+            "gz_sha256": gz_sha,
+            "backup": "kept-backup-name",
+        }
+        path = self.tmp / "locked-receipt.json"
+        body = b"\xef\xbb\xbf" + (json.dumps(receipt, ensure_ascii=False) + "\n").encode("utf-8")
+        path.write_bytes(body)
+        file_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+        server = self.tmp / "locked-server"
+        server.mkdir()
+        db_path = server / "app_latest.db"
+        db_path.write_bytes(raw)
+        env = service_env(self.tmp / "locked-env", server)
+        script = ["bash", str(ROOT / "migrate_legacy_msi_baseline.sh")]
+        args = [
+            "--receipt", str(path),
+            "--snapshot", str(db_path),
+            "--evidence-source", "msi",
+            "--receipt-sha256", file_sha,
+        ]
+
+        def migrate(extra=None):
+            run_env = dict(env)
+            if extra:
+                run_env.update(extra)
+            return subprocess.run(
+                script + args, env=run_env, text=True, capture_output=True, check=False,
+            )
+
+        holder = subprocess.Popen(
+            ["flock", "-x", env["FAT_CN_LOCK"], "sleep", "1.5"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        time.sleep(0.2)
+        blocked = migrate()
+        self.assertEqual(blocked.returncode, 9, blocked.stdout + blocked.stderr)
+        self.assertIn("REMOTE_PUSH_LOCK_HELD", blocked.stderr)
+        self.assertFalse((server / "LAST_COMMIT.json").exists())
+        self.assertFalse((server / "legacy_msi_baseline_audit.json").exists())
+        holder.wait(timeout=5)
+        paused = dict(env)
+        paused["FAT_CN_MIGRATE_PAUSE_SEC"] = "1.2"
+        first = subprocess.Popen(
+            script + args, env=paused, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        time.sleep(0.3)
+        overlapped = migrate()
+        self.assertEqual(overlapped.returncode, 9, overlapped.stdout + overlapped.stderr)
+        self.assertIn("REMOTE_PUSH_LOCK_HELD", overlapped.stderr)
+        first_out, first_err = first.communicate(timeout=5)
+        self.assertEqual(first.returncode, 0, first_out + first_err)
+        self.assertTrue((server / "legacy_msi_baseline_audit.json").is_file())
+        self.assertTrue((server / "LAST_COMMIT.json").is_file())
+        (server / "LAST_COMMIT.json").unlink()
+        (server / "legacy_msi_baseline_audit.json").unlink()
+
+        advanced = {
+            "commit_id": "advanced-formal-commit",
+            "kind": "commit",
+            "db_sha256": db_sha,
+            "gz_sha256": gz_sha,
+            "activated": True,
+        }
+        advanced_text = json.dumps(advanced, ensure_ascii=False) + "\n"
+        (server / "LAST_COMMIT.json").write_text(advanced_text, encoding="utf-8")
+        refused = migrate()
+        self.assertEqual(refused.returncode, 19, refused.stdout + refused.stderr)
+        self.assertIn("BASELINE_EXISTS", refused.stderr)
+        self.assertEqual((server / "LAST_COMMIT.json").read_text(encoding="utf-8"), advanced_text)
+        self.assertFalse((server / "legacy_msi_baseline_audit.json").exists())
+        (server / "LAST_COMMIT.json").unlink()
+
+        failed_audit = migrate({"FAT_CN_MIGRATE_FAULT": "audit_replace"})
+        self.assertEqual(failed_audit.returncode, 19, failed_audit.stdout + failed_audit.stderr)
+        self.assertIn("AUDIT_WRITE_FAILED", failed_audit.stderr)
+        self.assertFalse((server / "legacy_msi_baseline_audit.json").exists())
+        self.assertFalse((server / "LAST_COMMIT.json").exists())
+        recovered = migrate()
+        self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+        audit_bytes = (server / "legacy_msi_baseline_audit.json").read_bytes()
+        base_bytes = (server / "LAST_COMMIT.json").read_bytes()
+        self.assertTrue(json.loads(audit_bytes.decode("utf-8"))["receipt_had_source"] is False)
+        self.assertEqual(path.read_bytes()[:3], b"\xef\xbb\xbf")
+        self.assertNotIn("source", json.loads(path.read_bytes().decode("utf-8-sig")))
+
+        (server / "LAST_COMMIT.json").unlink()
+        audit_before = audit_bytes
+        stopped = migrate({"FAT_CN_MIGRATE_FAULT": "before_baseline"})
+        self.assertEqual(stopped.returncode, 19, stopped.stdout + stopped.stderr)
+        self.assertIn("BASELINE_NOT_PUBLISHED", stopped.stderr)
+        self.assertFalse((server / "LAST_COMMIT.json").exists())
+        self.assertEqual((server / "legacy_msi_baseline_audit.json").read_bytes(), audit_before)
+        db_path.write_bytes(b"changed-under-audit")
+        conflict = migrate()
+        self.assertEqual(conflict.returncode, 19, conflict.stdout + conflict.stderr)
+        self.assertIn("BASELINE_HASH_MISMATCH", conflict.stderr)
+        self.assertEqual((server / "legacy_msi_baseline_audit.json").read_bytes(), audit_before)
+        self.assertFalse((server / "LAST_COMMIT.json").exists())
+        db_path.write_bytes(raw)
+        finished = migrate()
+        self.assertEqual(finished.returncode, 0, finished.stdout + finished.stderr)
+        self.assertEqual((server / "legacy_msi_baseline_audit.json").read_bytes(), audit_before)
+        saved_base = (server / "LAST_COMMIT.json").read_bytes()
+        self.assertNotIn("advanced-formal-commit", saved_base.decode("utf-8"))
+        repeat = migrate()
+        self.assertEqual(repeat.returncode, 0, repeat.stdout + repeat.stderr)
+        self.assertEqual((server / "LAST_COMMIT.json").read_bytes(), saved_base)
+        self.assertEqual((server / "legacy_msi_baseline_audit.json").read_bytes(), audit_before)
+
     def test_content_identity_preserves_types_and_middle_rows(self):
         same_edge = ("HEAD", "TAIL")
         old = self._middle_db("OLD!")
