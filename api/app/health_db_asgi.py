@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import os
@@ -45,12 +46,20 @@ def _same_token(provided: str, expected: str) -> bool:
         return False
 
 
-def invoke_health_db(headers: list[tuple[bytes, bytes]]) -> tuple[int, bytes]:
-    """先核对内部令牌和只读实例，通过后才连接数据库。"""
+def _authorize(headers: list[tuple[bytes, bytes]]) -> tuple[int, bytes] | None:
     expected = _expected_token()
     provided = _provided_token(headers)
     if expected is None or not provided or not _same_token(provided, expected):
         return 401, _DENIED
+    return None
+
+
+def _close_connection(conn: sqlite3.Connection) -> None:
+    conn.close()
+
+
+def _snapshot_response() -> tuple[int, bytes]:
+    """在调用方线程里完成建连、读取和关闭。"""
     import app.db as database
 
     if not database.READONLY:
@@ -64,10 +73,26 @@ def invoke_health_db(headers: list[tuple[bytes, bytes]]) -> tuple[int, bytes]:
     try:
         identity = read_identity(conn)
     finally:
-        conn.close()
+        _close_connection(conn)
     if identity.get("read_only") is not True or identity.get("ok") is not True:
         return 403, _WRITABLE
     return 200, json.dumps(identity, ensure_ascii=False).encode("utf-8")
+
+
+def invoke_health_db(headers: list[tuple[bytes, bytes]]) -> tuple[int, bytes]:
+    """先核对内部令牌和只读实例，通过后才连接数据库。"""
+    denied = _authorize(headers)
+    if denied is not None:
+        return denied
+    return _snapshot_response()
+
+
+async def call_health_db(headers: list[tuple[bytes, bytes]]) -> tuple[int, bytes]:
+    """令牌检查仍在打开库之前。摘要放到一条工作线程，避免占住事件循环。"""
+    denied = _authorize(headers)
+    if denied is not None:
+        return denied
+    return await asyncio.to_thread(_snapshot_response)
 
 
 async def health_db_asgi(scope, receive, send) -> None:
@@ -81,7 +106,7 @@ async def health_db_asgi(scope, receive, send) -> None:
     if scope.get("method") != "GET":
         status, body = 405, _DENIED
     else:
-        status, body = invoke_health_db(list(scope.get("headers") or []))
+        status, body = await call_health_db(list(scope.get("headers") or []))
     await send({
         "type": "http.response.start",
         "status": status,
@@ -99,5 +124,5 @@ def register_health_db(app) -> None:
 
     @app.get("/health/db")
     async def health_db(request: Request):
-        status, body = invoke_health_db(list(request.scope["headers"]))
+        status, body = await call_health_db(list(request.scope["headers"]))
         return Response(content=body, status_code=status, media_type="application/json")

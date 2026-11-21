@@ -43,7 +43,7 @@
 
 换库使用目标目录里的临时文件再 `os.replace`。随后必须运行生产激活钩子。钩子要报告正在运行的 API 指纹，`fingerprint_source` 必须是 `running_api`。只对磁盘文件做 sha256 不能当成服务已经在跑。事务不把预期哈希放进环境变量。钩子没配置就失败，不换库。激活对不上时先恢复文件，再跑回滚钩子。回滚对不上就写 `CN_PUSH_ALERT.json`，不发成功回执。YuePC 仍优先，MSI 仍是备用。
 
-生产激活钩子是 `cn_running_api_hook.py`。它请求正在运行的 `GET /health/db`。这个接口先核对内部令牌，再确认进程是 `APP_READONLY=1` 且连接以 `mode=ro` 打开，然后才连接数据库。身份是这次只读事务里的全部结构和全部行，用类型标记和长度前缀编码，保留 NULL、整数、浮点、文本和二进制的区别。首尾行、页数和行数相同但中间内容不同时，摘要不同。响应里没有文件 sha256。钩子再用只读连接对 `FAT_CN_DB` 算同一份摘要。两边一致，路径是同一个文件，`journal_mode` 为 `delete`，并且旁边没有 `-wal`/`-shm`，才把文件字节的 sha256 写进证明。未授权、可写实例、连不上、摘要不一致、路径不一致，或仍是 wal，都失败，事务按原逻辑回滚。可写实例不能得到 `read_only=true`。钩子不读预期哈希。现有 `/health` 仍只返回版本、双写开关和库标签，不证明读到了哪一份文件。
+生产激活钩子是 `cn_running_api_hook.py`。它请求正在运行的 `GET /health/db`。这个接口先核对内部令牌，再确认进程是 `APP_READONLY=1` 且连接以 `mode=ro` 打开，然后才连接数据库。身份是这次只读事务里的全部结构和全部行，用类型标记和长度前缀编码，保留 NULL、整数、浮点、文本和二进制的区别。摘要在一条工作线程里计算，建连、读取和关闭都在这条线程上，不占事件循环。首尾行、页数和行数相同但中间内容不同时，摘要不同。响应里没有文件 sha256。钩子再用只读连接对 `FAT_CN_DB` 算同一份摘要。两边一致，路径是同一个文件，`journal_mode` 为 `delete`，并且旁边没有 `-wal`/`-shm`，才把文件字节的 sha256 写进证明。未授权、可写实例、连不上、摘要不一致、路径不一致，或仍是 wal，都失败，事务按原逻辑回滚。可写实例不能得到 `read_only=true`。钩子不读预期哈希。现有 `/health` 仍只返回版本、双写开关和库标签，不证明读到了哪一份文件。
 
 令牌不写进仓库，也不写进钩子命令。操作者自己生成文件，权限只给运行接口和钩子的用户：
 
@@ -72,13 +72,7 @@ location = /api/health/db {
 proxy_set_header X-Fat-Health-Db-Token "";
 ```
 
-这次没有读取现网单元，下面几项必须在服务器上只读确认，不能靠仓库猜测：
-
-- `systemctl cat football-analyze-api` 里的 User、WorkingDirectory、Environment、EnvironmentFile、ExecStart。
-- 进程环境中的 `APP_DB_PATH`。代码不设置时默认是 `api/data/app.db`，不是 `/opt/football-data/app_latest.db`。
-- `APP_READONLY` 和 `APP_DB_LABEL`。默认关闭只读时，这个接口会拒绝，不能把可写业务进程当成运行侧证明。
-- 运行中的 `/health/db` 返回的 `journal_mode`，以及 `/opt/football-data/app_latest.db-wal`、`app_latest.db-shm` 是否存在。wal 或这些伴随文件会让钩子失败。
-- Nginx 上 `/api` 是否去掉前缀，以及有没有把 `/health/db` 暴露到公网。钩子打本机 `8787`，不走公网。
+只读现场已经核对，钩子和 `/health/db` 仍未部署：用户 `football`，工作目录 `/opt/football-analyze-tool/api`，虚拟环境 `/opt/football-analyze-tool/.venv` 的 Python 3.12.13，`APP_DB_PATH=/opt/football-data/app_latest.db`，`APP_READONLY=1`，`APP_DB_LABEL=live`，日志模式 `delete`，旁边没有 `-wal`/`-shm`。Nginx 的 `/api/` 会去掉前缀。令牌文件、精确拒绝 `/api/health/db`，以及清空 `X-Fat-Health-Db-Token` 还没有装上。EnvironmentFile 的路径这次没有给出。
 
 接口代码里的 `/health/db` 还没有装到现网。钩子命令也还没有写进推送环境。这次没有重启 `football-analyze-api`，没有换 `/opt/football-data/app_latest.db`。
 

@@ -2124,6 +2124,107 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertNotIn("db_path", writable["body"])
         self.assertFalse((self.tmp / "writable-missing" / "app_latest.db").exists())
 
+    def test_snapshot_thread_keeps_other_requests_responsive(self):
+        db = self.tmp / "slow-snapshot" / "app_latest.db"
+        db.parent.mkdir(parents=True)
+        db.write_bytes(self._middle_db("SLOW").read_bytes())
+        token = secrets.token_urlsafe(16)
+        token_file = self._write_token(self.tmp / "slow-snapshot" / "token", token)
+        script = self.tmp / "slow-snapshot.py"
+        script.write_text(
+            "import asyncio, json, os, sys, threading, time\n"
+            "os.environ['FAT_DISABLE_DOTENV'] = '1'\n"
+            "os.environ['APP_DB_PATH'] = sys.argv[1]\n"
+            "os.environ['APP_READONLY'] = '1'\n"
+            "os.environ['FAT_HEALTH_DB_TOKEN_FILE'] = sys.argv[2]\n"
+            "sys.path.insert(0, sys.argv[3])\n"
+            "token = sys.argv[4]\n"
+            "import app.db as database\n"
+            "import app.health_db_asgi as gate\n"
+            "import app.running_db as running_db\n"
+            "from app.health_db_asgi import health_db_asgi, register_health_db\n"
+            "main_id = threading.get_ident()\n"
+            "seen = []\n"
+            "real_connect = database.connect\n"
+            "real_fp = running_db.connection_fingerprint\n"
+            "real_close = gate._close_connection\n"
+            "def connect_wrapped(*args, **kwargs):\n"
+            "    seen.append(threading.get_ident())\n"
+            "    return real_connect(*args, **kwargs)\n"
+            "def close_wrapped(conn):\n"
+            "    seen.append(threading.get_ident())\n"
+            "    return real_close(conn)\n"
+            "def fp_wrapped(conn):\n"
+            "    seen.append(threading.get_ident())\n"
+            "    time.sleep(0.6)\n"
+            "    return real_fp(conn)\n"
+            "database.connect = connect_wrapped\n"
+            "gate._close_connection = close_wrapped\n"
+            "running_db.connection_fingerprint = fp_wrapped\n"
+            "async def measure(kind):\n"
+            "    import httpx\n"
+            "    from fastapi import FastAPI\n"
+            "    seen.clear()\n"
+            "    if kind == 'fastapi':\n"
+            "        app = FastAPI()\n"
+            "        @app.get('/ping')\n"
+            "        async def ping():\n"
+            "            return {'ok': True}\n"
+            "        register_health_db(app)\n"
+            "    else:\n"
+            "        async def app(scope, receive, send):\n"
+            "            if scope.get('path') == '/health/db':\n"
+            "                await health_db_asgi(scope, receive, send)\n"
+            "                return\n"
+            "            body = b'{\"ok\":true}'\n"
+            "            await send({'type': 'http.response.start', 'status': 200, 'headers': [\n"
+            "                (b'content-type', b'application/json'),\n"
+            "                (b'content-length', str(len(body)).encode()),\n"
+            "            ]})\n"
+            "            await send({'type': 'http.response.body', 'body': body})\n"
+            "    transport = httpx.ASGITransport(app=app)\n"
+            "    headers = {'X-Fat-Health-Db-Token': token}\n"
+            "    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:\n"
+            "        started = time.perf_counter()\n"
+            "        slow_task = asyncio.create_task(client.get('/health/db', headers=headers))\n"
+            "        await asyncio.sleep(0.05)\n"
+            "        fast_started = time.perf_counter()\n"
+            "        fast = await client.get('/ping')\n"
+            "        fast_dt = time.perf_counter() - fast_started\n"
+            "        denied = await client.get('/health/db')\n"
+            "        denied_dt = time.perf_counter() - fast_started\n"
+            "        slow = await slow_task\n"
+            "        slow_dt = time.perf_counter() - started\n"
+            "    return {\n"
+            "        'fast_status': fast.status_code, 'fast': fast_dt,\n"
+            "        'denied_status': denied.status_code, 'denied': denied_dt,\n"
+            "        'slow_status': slow.status_code, 'slow': slow_dt,\n"
+            "        'threads': seen, 'main': main_id,\n"
+            "    }\n"
+            "async def main():\n"
+            "    print(json.dumps({'fastapi': await measure('fastapi'), 'asgi': await measure('asgi')}))\n"
+            "asyncio.run(main())\n",
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            ["python3", str(script), str(db), str(token_file), str(ROOT.parents[1] / "api"), token],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        report = json.loads(completed.stdout)
+        for kind, item in report.items():
+            with self.subTest(kind=kind):
+                self.assertEqual(item["slow_status"], 200)
+                self.assertEqual(item["fast_status"], 200)
+                self.assertEqual(item["denied_status"], 401)
+                self.assertGreaterEqual(item["slow"], 0.5)
+                self.assertLess(item["fast"], 0.25)
+                self.assertLess(item["denied"], 0.25)
+                threads = item["threads"]
+                self.assertGreaterEqual(len(threads), 3)
+                self.assertEqual(len(set(threads)), 1)
+                self.assertNotEqual(threads[0], item["main"])
+
     def test_running_api_hook_fails_closed_without_echoing_expected_hash(self):
         bait = "expected-hash-must-not-be-echoed"
         db = self.tmp / "closed.db"
