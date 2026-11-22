@@ -264,15 +264,7 @@ def load_json_soft(path: Path, default=None, home: Path | None = None):
 
 def merge_gap_ledger(home: Path, reports: list[dict], new_gaps: list[dict]) -> None:
     path = home_paths(home)["gap_ledger"]
-    try:
-        existing = load_json(path, {}) or {}
-    except CorruptRecord:
-        quarantine_record(path, home, "gap_ledger_corrupt")
-        existing = {}
-    by_day = {}
-    for item in existing.get("days") or []:
-        if isinstance(item, dict) and item.get("jc_day"):
-            by_day[item["jc_day"]] = item
+    by_day = load_gap_ledger(home)
     scanned = {str(row.get("jc_day")) for row in reports if row.get("jc_day")}
     for day in list(by_day):
         if day in scanned:
@@ -288,31 +280,45 @@ def merge_gap_ledger(home: Path, reports: list[dict], new_gaps: list[dict]) -> N
 
 
 def load_catchup_floor(home: Path) -> date | None:
-    """显式追补起点。文件不存在表示未声明；损坏或非对象则失败，不当成没有起点。"""
+    """显式追补起点。文件不存在表示未声明；损坏、非对象或未来日则失败，不当成没有起点。"""
     path = home_paths(home)["catchup_floor"]
     if not path.is_file():
         return None
     payload = load_json(path, None)
     if not isinstance(payload, dict) or payload.get("kind") != "catchup_floor":
         raise CorruptRecord(str(path))
-    parsed = parse_day(str(payload.get("scan_from") or ""))
-    if parsed is None:
+    raw = payload.get("scan_from")
+    parsed = parse_day(raw) if isinstance(raw, str) else None
+    if parsed is None or parsed.isoformat() != raw or parsed > now_cn().date():
         raise CorruptRecord(str(path))
     return parsed
 
 
-def unresolved_gap_days(home: Path) -> set[str]:
+def load_gap_ledger(home: Path) -> dict[str, dict]:
+    """缺失文件表示没有缺口。已存在的账本必须是对象，days 必须是带合法日期的列表。"""
     path = home_paths(home)["gap_ledger"]
     if not path.is_file():
-        return set()
+        return {}
     payload = load_json(path, None)
-    if not isinstance(payload, dict) or payload.get("kind") not in (None, "gap_ledger"):
+    if not isinstance(payload, dict) or payload.get("kind") != "gap_ledger":
         raise CorruptRecord(str(path))
-    found: set[str] = set()
-    for item in payload.get("days") or []:
-        if isinstance(item, dict) and item.get("jc_day"):
-            found.add(str(item["jc_day"]))
-    return found
+    days = payload.get("days")
+    if not isinstance(days, list):
+        raise CorruptRecord(str(path))
+    by_day: dict[str, dict] = {}
+    for item in days:
+        if not isinstance(item, dict):
+            raise CorruptRecord(str(path))
+        raw = item.get("jc_day")
+        parsed = parse_day(raw) if isinstance(raw, str) else None
+        if parsed is None or parsed.isoformat() != raw:
+            raise CorruptRecord(str(path))
+        by_day[raw] = item
+    return by_day
+
+
+def unresolved_gap_days(home: Path) -> set[str]:
+    return set(load_gap_ledger(home))
 
 
 def declare_catchup_floor(home: Path, day: str) -> dict:
@@ -346,18 +352,18 @@ def declare_catchup_floor(home: Path, day: str) -> dict:
 
 
 def maintenance_freeze(home: Path) -> dict | None:
+    """文件不存在表示未冻结。已存在但不是 held=true 的维护冻结则失败，调用方不得改写原字节。"""
     path = home_paths(home)["maintenance_freeze"]
     if not path.is_file():
         return None
-    try:
-        payload = load_json(path, None)
-    except CorruptRecord:
-        return {"held": True, "reason": "freeze_unreadable"}
-    if not isinstance(payload, dict):
-        return {"held": True, "reason": "freeze_not_object"}
-    if payload.get("held") is True and payload.get("kind") == "maintenance_freeze":
+    payload = load_json(path, None)
+    if (
+        isinstance(payload, dict)
+        and payload.get("kind") == "maintenance_freeze"
+        and payload.get("held") is True
+    ):
         return payload
-    return None
+    raise CorruptRecord(str(path))
 
 
 def set_maintenance_freeze(home: Path, reason: str, *, held: bool) -> dict:
@@ -371,6 +377,11 @@ def set_maintenance_freeze(home: Path, reason: str, *, held: bool) -> dict:
         return {"ok": False, "reason": "lock_held"}
     try:
         path = paths["maintenance_freeze"]
+        if path.is_file():
+            try:
+                maintenance_freeze(home)
+            except CorruptRecord:
+                return {"ok": False, "reason": "maintenance_freeze_corrupt", "kept": True}
         if held:
             write_json(path, {
                 "kind": "maintenance_freeze",
@@ -397,7 +408,47 @@ def plan_coverage(
     lookback: int,
     require_live: bool = False,
     check_fn=None,
+    lock_held: bool = False,
 ) -> dict:
+    if not lock_held:
+        lock = PrepareLock(home_paths(home)["prepare_lock"])
+        if not lock.acquire():
+            return {
+                "ok": False,
+                "frozen": False,
+                "reason": "lock_held",
+                "wrote_markers": False,
+                "pushed": [],
+                "reports": [],
+                "coverage": {"claimed_jc_days": [], "gap_days": []},
+            }
+        try:
+            return plan_coverage(
+                home=home,
+                markers=markers,
+                db=db,
+                live_root=live_root,
+                today=today,
+                lookback=lookback,
+                require_live=require_live,
+                check_fn=check_fn,
+                lock_held=True,
+            )
+        finally:
+            lock.release()
+    if maintenance_freeze(home):
+        return {
+            "ok": False,
+            "frozen": True,
+            "reason": "maintenance_freeze",
+            "wrote_markers": False,
+            "pushed": sorted(pushed_days(markers, home)),
+            "reports": [],
+            "coverage": {"claimed_jc_days": [], "gap_days": [], "boundary": None},
+        }
+    pause = os.environ.get("AUTO_CN_PUSH_SCAN_PAUSE_SEC", "").strip()
+    if pause:
+        time.sleep(float(pause))
     pushed = pushed_days(markers, home)
     boundary = contiguous_boundary(pushed)
     floor = load_catchup_floor(home)
@@ -489,16 +540,6 @@ def update_complete_unpushed_alert(home: Path, coverage: dict, pending_exists: b
 
 
 def scan_and_alert(*, home: Path, db: Path, live_root: Path, require_live: bool = False) -> dict:
-    if maintenance_freeze(home):
-        return {
-            "ok": False,
-            "frozen": True,
-            "reason": "maintenance_freeze",
-            "coverage": {"claimed_jc_days": []},
-            "pending": False,
-            "complete_unpushed": None,
-            "wrote_markers": False,
-        }
     now = now_cn()
     paths = home_paths(home)
     planned = plan_coverage(
@@ -510,9 +551,19 @@ def scan_and_alert(*, home: Path, db: Path, live_root: Path, require_live: bool 
         lookback=lookback_days(),
         require_live=require_live,
     )
+    if planned.get("frozen") or planned.get("reason") == "lock_held":
+        return {
+            "ok": False,
+            "frozen": bool(planned.get("frozen")),
+            "reason": planned.get("reason"),
+            "coverage": planned.get("coverage") or {"claimed_jc_days": [], "gap_days": []},
+            "pending": False,
+            "complete_unpushed": None,
+            "wrote_markers": False,
+        }
     pending = load_json(paths["pending"], None)
     alert = update_complete_unpushed_alert(home, planned["coverage"], bool(pending), now)
-    return {"coverage": planned["coverage"], "pending": bool(pending), **alert}
+    return {"ok": True, "frozen": False, "wrote_markers": True, "coverage": planned["coverage"], "pending": bool(pending), **alert}
 
 
 def _publish_work(work: Path, staging: Path) -> None:
@@ -550,7 +601,17 @@ def prepare_unpushed(
                 "skipped": [{"reason": "quarantine_hold"}],
                 "hold": held,
             }
-        if maintenance_freeze(home):
+        try:
+            frozen = maintenance_freeze(home)
+        except CorruptRecord:
+            return {
+                "ok": False,
+                "prepared": False,
+                "retryable": False,
+                "error": "maintenance_freeze_corrupt",
+                "skipped": [{"reason": "maintenance_freeze_corrupt"}],
+            }
+        if frozen:
             return {
                 "ok": False,
                 "prepared": False,
@@ -586,9 +647,19 @@ def prepare_unpushed(
                 today=now.date(),
                 lookback=lookback_days(),
                 require_live=require_live,
+                lock_held=True,
             )
         except Exception as exc:
             return {"ok": False, "prepared": False, "retryable": True, "error": str(exc)}
+        if planned.get("frozen"):
+            return {
+                "ok": False,
+                "prepared": False,
+                "retryable": False,
+                "error": "maintenance_freeze",
+                "skipped": [{"reason": "maintenance_freeze"}],
+                "coverage": planned.get("coverage"),
+            }
         coverage = planned["coverage"]
         claimed = coverage.get("claimed_jc_days") or []
         update_complete_unpushed_alert(home, coverage, False, now)
@@ -1008,7 +1079,14 @@ def check_alerts(home: Path, db: Path, live_root: Path, timeout_hours: float) ->
             lookback=lookback_days(),
         )
     except Exception as exc:
+        result["ok"] = False
         result["stale_error"] = str(exc)
+        return result
+    if planned.get("frozen") or planned.get("reason") == "lock_held":
+        result["ok"] = False
+        result["frozen"] = bool(planned.get("frozen"))
+        result["reason"] = planned.get("reason")
+        result["wrote_markers"] = False
         return result
     days = _past_incomplete(planned["reports"], now.date(), set(planned["pushed"]))
     if not days:
@@ -1133,7 +1211,10 @@ def main(argv=None) -> int:
         print(json.dumps({"acked_stale_incomplete": args.ack_stale_incomplete}, ensure_ascii=False, indent=2))
         return 0
     if args.check_alerts:
-        print(json.dumps(check_alerts(home, args.db, args.live_root, args.pending_timeout_hours), ensure_ascii=False, indent=2))
+        result = check_alerts(home, args.db, args.live_root, args.pending_timeout_hours)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if result.get("ok") is False or result.get("stale_error") or result.get("frozen"):
+            return 1
         return 0
     if args.scan_unpushed:
         try:
@@ -1185,15 +1266,22 @@ def main(argv=None) -> int:
         if args.date:
             print(json.dumps({"results": [check_day(args.date, args.db, args.live_root, args.require_live)]}, ensure_ascii=False, indent=2))
             return 0
-        planned = plan_coverage(
-            home=home,
-            markers=paths["markers"],
-            db=args.db,
-            live_root=args.live_root,
-            today=now_cn().date(),
-            lookback=lookback_days(),
-            require_live=args.require_live,
-        )
+        try:
+            planned = plan_coverage(
+                home=home,
+                markers=paths["markers"],
+                db=args.db,
+                live_root=args.live_root,
+                today=now_cn().date(),
+                lookback=lookback_days(),
+                require_live=args.require_live,
+            )
+        except CorruptRecord as exc:
+            print(json.dumps({"ok": False, "reason": "state_corrupt", "error": str(exc)}, ensure_ascii=False, indent=2))
+            return 1
+        if planned.get("frozen") or planned.get("ok") is False:
+            print(json.dumps({"ok": False, "frozen": bool(planned.get("frozen")), "reason": planned.get("reason"), "wrote_markers": False}, ensure_ascii=False, indent=2))
+            return 1
         print(json.dumps({"results": planned["reports"], "coverage": planned["coverage"]}, ensure_ascii=False, indent=2))
         return 0
     if not args.prepare:

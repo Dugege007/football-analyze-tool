@@ -444,7 +444,17 @@ def main(argv: list[str] | None = None) -> int:
         if str(script_dir) not in sys.path:
             sys.path.insert(0, str(script_dir))
         import run_auto_cn_push
-        if run_auto_cn_push.maintenance_freeze(home):
+        try:
+            frozen = run_auto_cn_push.maintenance_freeze(home)
+        except run_auto_cn_push.CorruptRecord:
+            print(json.dumps({
+                "action": "alert",
+                "reason": "maintenance_freeze_corrupt",
+                "kill": False,
+                "exit_code": 7,
+            }, ensure_ascii=False))
+            return 7
+        if frozen:
             print(json.dumps({
                 "action": "alert",
                 "reason": "maintenance_freeze",

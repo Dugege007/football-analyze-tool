@@ -46,6 +46,12 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(json.dumps({"status": "VERIFY_SCAN", "error": str(exc)}, ensure_ascii=False))
         return 6
+    if scanned.get("frozen") or scanned.get("reason") in {"maintenance_freeze", "maintenance_freeze_corrupt", "lock_held"}:
+        print(json.dumps({"status": "VERIFY_FROZEN", "reason": scanned.get("reason")}, ensure_ascii=False))
+        return 7
+    if scanned.get("ok") is False:
+        print(json.dumps({"status": "VERIFY_SCAN", "reason": scanned.get("reason")}, ensure_ascii=False))
+        return 6
     gaps = (scanned.get("coverage") or {}).get("gap_days") or []
     if gaps or scanned.get("complete_unpushed"):
         print(json.dumps({
