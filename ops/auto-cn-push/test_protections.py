@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -198,6 +198,313 @@ class CoverageTests(unittest.TestCase):
         dropped = evaluate("2026-11-20", drop_db, self.live, False)
         self.assertTrue(dropped["complete"])
         self.assertEqual(dropped["excluded_dropped_from_csl"], ["2026-11-20|m1"])
+
+    def test_explicit_catchup_floor_reaches_days_before_latest_marker(self):
+        make_db(self.db, {
+            "2026-11-07": "complete",
+            "2026-11-12": "complete",
+            "2026-11-14": "incomplete",
+            "2026-11-21": "complete",
+        })
+        marker = self.home / "markers" / "pushed_2026-11-21.json"
+        write_json(marker, {"jc_day": "2026-11-21", "db_sha256": "live-11-21"})
+        marker_bytes = marker.read_bytes()
+        receipt = self.tmp / "old-receipt.json"
+        receipt.write_bytes(b'{"jc_day":"2026-11-21","db_sha256":"live-11-21","gz_sha256":"aa"}\n')
+        receipt_bytes = receipt.read_bytes()
+        archived = self.tmp / "old-package.gz"
+        archived.write_bytes(b"OLD-PACKAGE")
+        bare = runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=TODAY, lookback=14,
+        )
+        self.assertEqual(bare["coverage"]["boundary"], "2026-11-21")
+        self.assertEqual(bare["coverage"]["claimed_jc_days"], [])
+        declared = subprocess.run(
+            ["python3", str(ROOT / "run_auto_cn_push.py"), "--home", str(self.home), "--declare-catchup-from", "2026-11-07"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(declared.returncode, 0, declared.stdout + declared.stderr)
+        self.assertFalse(list((self.home / "markers").glob("pushed_2026-11-0*.json")))
+        self.assertFalse(list((self.home / "markers").glob("pushed_2026-11-1[0-9].json")))
+        later = runner.declare_catchup_floor(self.home, "2026-11-12")
+        self.assertFalse(later["ok"])
+        self.assertEqual(later["reason"], "catchup_floor_later")
+        self.assertEqual(runner.load_catchup_floor(self.home).isoformat(), "2026-11-07")
+        first = runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=TODAY, lookback=14,
+        )
+        claimed = first["coverage"]["claimed_jc_days"]
+        self.assertIn("2026-11-07", claimed)
+        self.assertIn("2026-11-12", claimed)
+        self.assertNotIn("2026-11-14", claimed)
+        self.assertNotIn("2026-11-21", claimed)
+        self.assertEqual(marker.read_bytes(), marker_bytes)
+        again = runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=TODAY, lookback=14,
+        )
+        self.assertEqual(again["coverage"]["claimed_jc_days"], claimed)
+        self.db.unlink()
+        make_db(self.db, {
+            "2026-11-07": "complete",
+            "2026-11-12": "complete",
+            "2026-11-14": "complete",
+            "2026-11-21": "complete",
+        })
+        healed = runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=TODAY, lookback=14,
+        )
+        self.assertIn("2026-11-14", healed["coverage"]["claimed_jc_days"])
+        write_json(self.home / "markers" / "pushed_2026-11-12.json", {"jc_day": "2026-11-12", "db_sha256": "confirmed"})
+        write_json(self.home / "markers" / "pushed_2026-11-22.json", {"jc_day": "2026-11-22", "db_sha256": "newer"})
+        newer = runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=date(2026, 11, 22), lookback=14,
+        )
+        self.assertIn("2026-11-07", newer["coverage"]["claimed_jc_days"])
+        self.assertIn("2026-11-14", newer["coverage"]["claimed_jc_days"])
+        self.assertNotIn("2026-11-12", newer["coverage"]["claimed_jc_days"])
+        self.assertNotIn("2026-11-21", newer["coverage"]["claimed_jc_days"])
+        self.assertNotIn("2026-11-22", newer["coverage"]["claimed_jc_days"])
+        base = json.loads((self.home / "markers" / "push_base.json").read_text(encoding="utf-8"))
+        prepared = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        self.assertTrue(prepared["ok"], prepared)
+        self.assertNotIn("2026-11-21", prepared["coverage"]["claimed_jc_days"])
+        self.assertIn("2026-11-07", prepared["coverage"]["claimed_jc_days"])
+        meta = json.loads((self.home / "staging" / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["expected_commit_id"], base["commit_id"])
+        self.assertEqual(gzip.decompress((self.home / "staging" / "app_latest.db.gz").read_bytes())[:16], b"SQLite format 3\x00")
+        self.assertEqual(archived.read_bytes(), b"OLD-PACKAGE")
+        self.assertEqual(receipt.read_bytes(), receipt_bytes)
+        self.assertEqual(marker.read_bytes(), marker_bytes)
+        floor = self.home / "markers" / "catchup_floor.json"
+        floor.write_bytes(b"null\n")
+        kept = floor.read_bytes()
+        with self.assertRaises(runner.CorruptRecord):
+            runner.plan_coverage(
+                home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+                today=TODAY, lookback=14,
+            )
+        self.assertEqual(floor.read_bytes(), kept)
+        blocked = runner.declare_catchup_floor(self.home, "2026-11-07")
+        self.assertEqual(blocked["reason"], "catchup_floor_corrupt")
+        self.assertEqual(floor.read_bytes(), kept)
+
+    def test_maintenance_freeze_blocks_scan_before_start(self):
+        frozen = runner.set_maintenance_freeze(self.home, "人工核对", held=True)
+        self.assertTrue(frozen["ok"], frozen)
+        scanned = runner.scan_and_alert(home=self.home, db=self.db, live_root=self.live)
+        self.assertEqual(scanned["reason"], "maintenance_freeze")
+        self.assertFalse(scanned["wrote_markers"])
+        self.assertFalse(list((self.home / "markers").glob("checked_no_matches_*.json")))
+        prepared = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        self.assertEqual(prepared["error"], "maintenance_freeze")
+        completed = subprocess.run(
+            ["python3", str(ROOT / "watchdog.py"), "--home", str(self.home)],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 7, completed.stdout + completed.stderr)
+        self.assertIn("maintenance_freeze", completed.stdout)
+        self.assertFalse(list((self.home / "markers").glob("checked_no_matches_*.json")))
+        self.assertFalse(list((self.home / "markers").glob("gap_ledger.json")))
+
+    def test_freeze_blocks_check_entries_and_bad_ledger_is_kept(self):
+        make_db(self.db, {"2026-11-18": "complete", "2026-11-21": "incomplete"})
+        write_json(self.home / "markers" / "pushed_2026-11-11.json", {"jc_day": "2026-11-11", "db_sha256": "seed"})
+        ledger = self.home / "markers" / "gap_ledger.json"
+        broken = b'{"kind":"gap_ledger","days":"broken"}\n'
+        ledger.write_bytes(broken)
+        with self.assertRaises(runner.CorruptRecord):
+            runner.plan_coverage(
+                home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+                today=TODAY, lookback=14,
+            )
+        self.assertEqual(ledger.read_bytes(), broken)
+        self.assertFalse(list((self.home / "markers").glob("checked_no_matches_*.json")))
+        ledger.unlink()
+        future = (date.fromisoformat("2026-11-21") + timedelta(days=1)).isoformat()
+        floor = self.home / "markers" / "catchup_floor.json"
+        future_bytes = json.dumps({"kind": "catchup_floor", "scan_from": future}).encode() + b"\n"
+        floor.write_bytes(future_bytes)
+        with self.assertRaises(runner.CorruptRecord):
+            runner.load_catchup_floor(self.home)
+        self.assertEqual(floor.read_bytes(), future_bytes)
+        refused = runner.declare_catchup_floor(self.home, future)
+        self.assertFalse(refused["ok"])
+        self.assertEqual(floor.read_bytes(), future_bytes)
+        floor.unlink()
+        bad_freeze = self.home / "markers" / "MAINTENANCE_FREEZE.json"
+        bad_freeze.write_bytes(b'{"held":true,"kind":"other"}\n')
+        bad_bytes = bad_freeze.read_bytes()
+        with self.assertRaises(runner.CorruptRecord):
+            runner.maintenance_freeze(self.home)
+        self.assertEqual(bad_freeze.read_bytes(), bad_bytes)
+        kept = runner.set_maintenance_freeze(self.home, "不要覆盖损坏冻结", held=True)
+        self.assertEqual(kept["reason"], "maintenance_freeze_corrupt")
+        self.assertEqual(bad_freeze.read_bytes(), bad_bytes)
+        bad_freeze.unlink()
+        runner.set_maintenance_freeze(self.home, "停扫描", held=True)
+        env = os.environ.copy()
+        env["AUTO_CN_PUSH_NOW"] = "2026-11-21T12:00:00+08:00"
+        common = [
+            "python3", str(ROOT / "run_auto_cn_push.py"),
+            "--home", str(self.home),
+            "--db", str(self.db),
+            "--live-root", str(self.live),
+        ]
+        alerts = subprocess.run(common + ["--check-alerts"], env=env, text=True, capture_output=True, check=False)
+        self.assertEqual(alerts.returncode, 1, alerts.stdout + alerts.stderr)
+        self.assertIn("maintenance_freeze", alerts.stdout)
+        checked = subprocess.run(common + ["--check"], env=env, text=True, capture_output=True, check=False)
+        self.assertEqual(checked.returncode, 1, checked.stdout + checked.stderr)
+        self.assertIn("maintenance_freeze", checked.stdout)
+        self.assertFalse(list((self.home / "markers").glob("checked_no_matches_*.json")))
+        self.assertFalse((self.home / "markers" / "gap_ledger.json").exists())
+        odds = self.tmp / "odds-root"
+        (odds / "5dollar" / "live").mkdir(parents=True)
+        env_file = self.tmp / "verify.env"
+        env_file.write_text(f'APP_DB_PATH="{self.db}"\nODDS_DATA_DIR="{odds}"\n', encoding="utf-8")
+        lock = self.home / "logs" / "ensure_auto_cn_push.lock"
+        holder = self.tmp / "ensure_auto_cn_push_loop.sh"
+        holder.write_text("#!/bin/bash\nexec 9>\"$1\"\nflock -x 9\nsleep 30\n", encoding="utf-8")
+        holder.chmod(0o755)
+        proc = subprocess.Popen([str(holder), str(lock)], start_new_session=True)
+        try:
+            time.sleep(0.3)
+            start = watchdog.proc_starttime(proc.pid, Path("/proc"))
+            write_json(self.home / "logs" / "heartbeat.json", {
+                "pid": proc.pid, "beat_epoch": time.time(), "starttime": start, "phase": "sleep",
+            })
+            write_json(self.home / "logs" / "loop_identity.json", {"starttime": start})
+            (self.home / "logs" / "ensure_auto_cn_push.pid").write_text(str(proc.pid), encoding="utf-8")
+            verify_env = os.environ.copy()
+            verify_env["AUTO_CN_PUSH_ENV"] = str(env_file)
+            verified = subprocess.run(
+                ["python3", str(ROOT / "verify_status.py"), "--home", str(self.home),
+                 "--cron-text", "# fat-auto-cn-push-watchdog\n"],
+                env=verify_env, text=True, capture_output=True, check=False,
+            )
+        finally:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait(timeout=5)
+        self.assertEqual(verified.returncode, 7, verified.stdout + verified.stderr)
+        self.assertIn("VERIFY_FROZEN", verified.stdout)
+        self.assertNotIn("VERIFY_OK", verified.stdout)
+        self.assertFalse(list((self.home / "markers").glob("checked_no_matches_*.json")))
+        runner.set_maintenance_freeze(self.home, "解除后做并发", held=False)
+        pause_env = os.environ.copy()
+        pause_env["AUTO_CN_PUSH_NOW"] = "2026-11-21T12:00:00+08:00"
+        pause_env["AUTO_CN_PUSH_SCAN_PAUSE_SEC"] = "1.2"
+        inflight = subprocess.Popen(
+            common + ["--check-alerts"], env=pause_env, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        time.sleep(0.3)
+        racing = subprocess.run(
+            ["python3", str(ROOT / "run_auto_cn_push.py"), "--home", str(self.home), "--freeze-maintenance", "并发冻结"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(racing.returncode, 0, racing.stdout + racing.stderr)
+        self.assertIn("lock_held", racing.stdout)
+        self.assertFalse((self.home / "markers" / "MAINTENANCE_FREEZE.json").exists())
+        out, err = inflight.communicate(timeout=5)
+        self.assertEqual(inflight.returncode, 0, out + err)
+        after_scan = {
+            path.name: path.read_bytes()
+            for path in (self.home / "markers").iterdir()
+            if path.is_file()
+        }
+        frozen_again = subprocess.run(
+            ["python3", str(ROOT / "run_auto_cn_push.py"), "--home", str(self.home), "--freeze-maintenance", "冻结成功"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(frozen_again.returncode, 0, frozen_again.stdout + frozen_again.stderr)
+        blocked = subprocess.run(common + ["--check-alerts"], env=env, text=True, capture_output=True, check=False)
+        self.assertEqual(blocked.returncode, 1, blocked.stdout + blocked.stderr)
+        for name, content in after_scan.items():
+            if name == "MAINTENANCE_FREEZE.json":
+                continue
+            self.assertEqual((self.home / "markers" / name).read_bytes(), content)
+
+    def test_freeze_keeps_alert_bytes_and_blocks_tail_writes(self):
+        make_db(self.db, {"2026-11-18": "complete"})
+        pending = self.home / "markers" / "ALERT_PENDING_TIMEOUT.json"
+        stale = self.home / "markers" / "ALERT_STALE_INCOMPLETE.json"
+        unpushed = self.home / "markers" / "ALERT_COMPLETE_UNPUSHED.json"
+        pending.write_bytes(b'{"kind":"pending_timeout","keep":1}\n')
+        stale.write_bytes(b'{"kind":"stale_incomplete","keep":1}\n')
+        unpushed.write_bytes(b'{"kind":"complete_unpushed","keep":1}\n')
+        write_json(self.home / "markers" / "pending_push.json", {
+            "jc_day": "2026-11-18",
+            "ready_at": "2026-11-01T00:00:00+08:00",
+            "db_sha256": "a" * 64,
+            "gz_sha256": "b" * 64,
+        })
+        bad = self.home / "markers" / "pushed_2026-11-11.json"
+        bad.write_bytes(b"{")
+        before = {
+            path.name: path.read_bytes()
+            for path in (self.home / "markers").iterdir()
+            if path.is_file()
+        }
+        runner.set_maintenance_freeze(self.home, "停告警", held=True)
+        env = os.environ.copy()
+        env["AUTO_CN_PUSH_NOW"] = "2026-11-21T12:00:00+08:00"
+        common = [
+            "python3", str(ROOT / "run_auto_cn_push.py"),
+            "--home", str(self.home), "--db", str(self.db), "--live-root", str(self.live),
+        ]
+        alerts = subprocess.run(common + ["--check-alerts"], env=env, text=True, capture_output=True, check=False)
+        scanned = subprocess.run(common + ["--scan-unpushed"], env=env, text=True, capture_output=True, check=False)
+        self.assertEqual(alerts.returncode, 1, alerts.stdout + alerts.stderr)
+        self.assertEqual(scanned.returncode, 0, scanned.stdout + scanned.stderr)
+        self.assertIn("maintenance_freeze", scanned.stdout)
+        planned = runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=TODAY, lookback=14,
+        )
+        self.assertTrue(planned["frozen"])
+        self.assertEqual(bad.read_bytes(), before[bad.name])
+        self.assertFalse((self.home / "markers" / "quarantine").exists())
+        for name, content in before.items():
+            self.assertEqual((self.home / "markers" / name).read_bytes(), content)
+        runner.set_maintenance_freeze(self.home, "放开做尾写竞态", held=False)
+        bad.unlink()
+        pause_env = os.environ.copy()
+        pause_env["AUTO_CN_PUSH_NOW"] = "2026-11-21T12:00:00+08:00"
+        pause_env["AUTO_CN_PUSH_ALERT_PAUSE_SEC"] = "1.2"
+        inflight = subprocess.Popen(
+            common + ["--check-alerts"], env=pause_env, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        time.sleep(0.4)
+        self.assertEqual(unpushed.read_bytes(), before[unpushed.name])
+        racing = subprocess.run(
+            ["python3", str(ROOT / "run_auto_cn_push.py"), "--home", str(self.home), "--freeze-maintenance", "尾写期间"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(racing.returncode, 0, racing.stdout + racing.stderr)
+        self.assertIn("lock_held", racing.stdout)
+        self.assertFalse((self.home / "markers" / "MAINTENANCE_FREEZE.json").exists())
+        self.assertEqual(unpushed.read_bytes(), before[unpushed.name])
+        out, err = inflight.communicate(timeout=5)
+        self.assertEqual(inflight.returncode, 0, out + err)
+        settled = {
+            path.name: path.read_bytes()
+            for path in (self.home / "markers").iterdir()
+            if path.is_file()
+        }
+        again = runner.set_maintenance_freeze(self.home, "尾写结束后", held=True)
+        self.assertTrue(again["ok"], again)
+        blocked = subprocess.run(common + ["--scan-unpushed"], env=env, text=True, capture_output=True, check=False)
+        self.assertIn("maintenance_freeze", blocked.stdout)
+        for name, content in settled.items():
+            if name == "MAINTENANCE_FREEZE.json":
+                continue
+            self.assertEqual((self.home / "markers" / name).read_bytes(), content)
 
     def test_boundary_does_not_use_max_pushed_day(self):
         pushed = {"2026-11-11", "2026-11-20"}
@@ -576,6 +883,68 @@ class WatchdogTests(unittest.TestCase):
         self.assertTrue(note.is_file())
         os.kill(me, 0)
         self.assertIn("pid_reuse_loop_dead", completed.stdout)
+
+    def test_freeze_after_initial_check_does_not_start(self):
+        note = self.tmp / "started.txt"
+        starter = self.tmp / "starter.sh"
+        starter.write_text(f"#!/bin/sh\necho started > {note}\n", encoding="utf-8")
+        starter.chmod(0o755)
+        env = os.environ.copy()
+        env["AUTO_CN_PUSH_WATCH_PAUSE_SEC"] = "1.5"
+        proc = subprocess.Popen(
+            ["python3", str(ROOT / "watchdog.py"), "--home", str(self.home), "--starter", str(starter), "--skip-scan"],
+            env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        time.sleep(0.4)
+        frozen = subprocess.run(
+            ["python3", str(ROOT / "run_auto_cn_push.py"), "--home", str(self.home), "--freeze-maintenance", "初检后冻结"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(frozen.returncode, 0, frozen.stdout + frozen.stderr)
+        out, err = proc.communicate(timeout=5)
+        self.assertEqual(proc.returncode, 7, out + err)
+        self.assertIn("maintenance_freeze", out)
+        self.assertFalse(note.exists())
+
+    def test_freeze_cannot_land_between_recheck_and_starter(self):
+        note = self.tmp / "started.txt"
+        starter = self.tmp / "starter.sh"
+        starter.write_text(f"#!/bin/sh\necho started > {note}\n", encoding="utf-8")
+        starter.chmod(0o755)
+        env = os.environ.copy()
+        env["AUTO_CN_PUSH_WATCH_START_PAUSE_SEC"] = "1.5"
+        proc = subprocess.Popen(
+            ["python3", str(ROOT / "watchdog.py"), "--home", str(self.home), "--starter", str(starter), "--skip-scan"],
+            env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        gate = self.home / "logs" / "watch_start_gate"
+        deadline = time.time() + 5
+        while not gate.is_file():
+            if proc.poll() is not None:
+                out, err = proc.communicate()
+                self.fail(out + err)
+            if time.time() > deadline:
+                proc.kill()
+                out, err = proc.communicate()
+                self.fail("未进入最终复核后的启动窗口\n" + out + err)
+            time.sleep(0.05)
+        self.assertFalse(note.exists())
+        frozen = subprocess.run(
+            ["python3", str(ROOT / "run_auto_cn_push.py"), "--home", str(self.home), "--freeze-maintenance", "复核后启动前"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(frozen.returncode, 0, frozen.stdout + frozen.stderr)
+        self.assertIn("lock_held", frozen.stdout)
+        self.assertFalse((self.home / "markers" / "MAINTENANCE_FREEZE.json").exists())
+        self.assertFalse(note.exists())
+        out, err = proc.communicate(timeout=5)
+        self.assertEqual(proc.returncode, 0, out + err)
+        self.assertTrue(note.is_file())
+        later = subprocess.run(
+            ["python3", str(ROOT / "run_auto_cn_push.py"), "--home", str(self.home), "--freeze-maintenance", "启动返回后"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(later.returncode, 0, later.stdout + later.stderr)
 
     def test_duplicate_watchdog_does_not_start(self):
         import fcntl

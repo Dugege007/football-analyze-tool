@@ -355,6 +355,7 @@ def _acquire_watchdog_lock(home: Path):
     path = home / "logs" / "watchdog.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    os.set_inheritable(fd, False)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -370,11 +371,11 @@ def default_starter(script_dir: Path, home: Path) -> int:
     script = script_dir / "start_ensure_auto_cn_push.sh"
     env = os.environ.copy()
     env["AUTO_CN_PUSH_HOME"] = str(home)
-    completed = subprocess.run(["/bin/bash", str(script)], env=env, check=False)
+    completed = subprocess.run(["/bin/bash", str(script)], env=env, check=False, close_fds=True)
     return int(completed.returncode)
 
 
-def maybe_scan_alert(home: Path) -> None:
+def maybe_scan_alert(home: Path, *, lock_held: bool = False) -> dict:
     db = os.environ.get("APP_DB_PATH", "").strip()
     if not db or not Path(db).is_file():
         raise RuntimeError("APP_DB_PATH 未设置或不是已有文件，拒绝扫描默认库")
@@ -387,7 +388,9 @@ def maybe_scan_alert(home: Path) -> None:
     if not live or not Path(live).is_dir():
         raise RuntimeError("ODDS_DATA_DIR 未设置或不是已有目录，拒绝使用默认 live 目录")
     live_root = Path(live) / "5dollar" / "live"
-    run_auto_cn_push.scan_and_alert(home=home, db=Path(db), live_root=live_root)
+    return run_auto_cn_push.scan_and_alert(
+        home=home, db=Path(db), live_root=live_root, lock_held=lock_held,
+    )
 
 
 def apply_runtime_config(home: Path) -> str | None:
@@ -440,36 +443,110 @@ def main(argv: list[str] | None = None) -> int:
         if inspecting:
             print(json.dumps(decision, ensure_ascii=False))
             return 0
-        needs_config = decision.get("action") == "restart" or not args.skip_scan
-        if needs_config:
-            config_error = apply_runtime_config(home)
-            if config_error:
+        script_dir = Path(__file__).resolve().parent
+        if str(script_dir) not in sys.path:
+            sys.path.insert(0, str(script_dir))
+        import run_auto_cn_push
+        # 初检之后留出窗口。真正是否扫描和启动，以随后持有 prepare 锁的复核为准。
+        pause = os.environ.get("AUTO_CN_PUSH_WATCH_PAUSE_SEC", "").strip()
+        if pause:
+            time.sleep(float(pause))
+        prep = run_auto_cn_push.PrepareLock(run_auto_cn_push.home_paths(home)["prepare_lock"])
+        if not prep.acquire():
+            print(json.dumps({
+                "action": "alert",
+                "reason": "lock_held",
+                "kill": False,
+                "exit_code": 7,
+            }, ensure_ascii=False))
+            return 7
+        try:
+            try:
+                frozen = run_auto_cn_push.maintenance_freeze(home)
+            except run_auto_cn_push.CorruptRecord:
                 print(json.dumps({
                     "action": "alert",
-                    "reason": "config_missing",
-                    "error": config_error,
+                    "reason": "maintenance_freeze_corrupt",
                     "kill": False,
+                    "exit_code": 7,
                 }, ensure_ascii=False))
-                return 5
-        if not args.skip_scan:
+                return 7
+            if frozen:
+                print(json.dumps({
+                    "action": "alert",
+                    "reason": "maintenance_freeze",
+                    "kill": False,
+                    "exit_code": 7,
+                    "note": "维护冻结期间不扫描写标记，也不拉起循环。退出码 0 不表示业务健康",
+                }, ensure_ascii=False))
+                return 7
+            needs_config = decision.get("action") == "restart" or not args.skip_scan
+            if needs_config:
+                config_error = apply_runtime_config(home)
+                if config_error:
+                    print(json.dumps({
+                        "action": "alert",
+                        "reason": "config_missing",
+                        "error": config_error,
+                        "kill": False,
+                    }, ensure_ascii=False))
+                    return 5
+            if not args.skip_scan:
+                try:
+                    scanned = maybe_scan_alert(home, lock_held=True)
+                except Exception as exc:
+                    print(f"[scan_warn] {exc}", file=sys.stderr)
+                    (home / "markers").mkdir(parents=True, exist_ok=True)
+                    (home / "markers" / "ALERT_SCAN.json").write_text(
+                        json.dumps({"kind": "scan", "reason": "scan_failed", "error": str(exc)}, ensure_ascii=False) + "\n",
+                        encoding="utf-8",
+                    )
+                    if decision.get("action") != "restart":
+                        return 6
+                else:
+                    if scanned.get("frozen") or scanned.get("reason") in {"lock_held", "maintenance_freeze"}:
+                        print(json.dumps({
+                            "action": "alert",
+                            "reason": scanned.get("reason"),
+                            "frozen": bool(scanned.get("frozen")),
+                            "kill": False,
+                            "exit_code": 7,
+                        }, ensure_ascii=False))
+                        return 7
             try:
-                maybe_scan_alert(home)
-            except Exception as exc:
-                print(f"[scan_warn] {exc}", file=sys.stderr)
-                (home / "markers").mkdir(parents=True, exist_ok=True)
-                (home / "markers" / "ALERT_SCAN.json").write_text(
-                    json.dumps({"kind": "scan", "reason": "scan_failed", "error": str(exc)}, ensure_ascii=False) + "\n",
-                    encoding="utf-8",
-                )
-                if decision.get("action") != "restart":
-                    return 6
-        if args.starter:
-            starter = lambda: subprocess.run([args.starter], check=False).returncode  # noqa: E731
-        else:
-            starter = lambda: default_starter(args.script_dir, home)  # noqa: E731
-        code = apply_decision(decision, home=home, starter=starter)
-        print(json.dumps(decision, ensure_ascii=False))
-        return code
+                frozen_again = run_auto_cn_push.maintenance_freeze(home)
+            except run_auto_cn_push.CorruptRecord:
+                print(json.dumps({
+                    "action": "alert",
+                    "reason": "maintenance_freeze_corrupt",
+                    "kill": False,
+                    "exit_code": 7,
+                }, ensure_ascii=False))
+                return 7
+            if frozen_again:
+                print(json.dumps({
+                    "action": "alert",
+                    "reason": "maintenance_freeze",
+                    "kill": False,
+                    "exit_code": 7,
+                }, ensure_ascii=False))
+                return 7
+            # 最终复核之后继续持锁，写看门狗状态并调用启动器，返回后才释放。
+            # 启动脚本只等 pid 与 starting 心跳。循环先写这份心跳，再非阻塞 prepare。
+            # 锁描述符不可继承，子进程不会带着这把锁去准备。
+            start_pause = os.environ.get("AUTO_CN_PUSH_WATCH_START_PAUSE_SEC", "").strip()
+            if start_pause:
+                (home / "logs" / "watch_start_gate").write_text("after-recheck\n", encoding="utf-8")
+                time.sleep(float(start_pause))
+            if args.starter:
+                starter = lambda: subprocess.run([args.starter], check=False, close_fds=True).returncode  # noqa: E731
+            else:
+                starter = lambda: default_starter(args.script_dir, home)  # noqa: E731
+            code = apply_decision(decision, home=home, starter=starter)
+            print(json.dumps(decision, ensure_ascii=False))
+            return code
+        finally:
+            prep.release()
     finally:
         if lock_fd is not None:
             os.close(lock_fd)

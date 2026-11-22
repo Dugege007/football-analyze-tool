@@ -30,7 +30,16 @@ echo "ensure_auto_cn_push start $(date '+%Y-%m-%dT%H:%M:%S%z') pid=$$" | tee -a 
 export AUTO_CN_PUSH_HOME="$HOME_DIR"
 while true; do
   "$PY" "$SCRIPT_DIR/write_heartbeat.py" --home "$HOME_DIR" --pid "$$" --phase prepare
-  "$PY" "$SCRIPT_DIR/run_auto_cn_push.py" --home "$HOME_DIR" --db "$APP_DB_PATH" --prepare >>"$LOG/cron.log" 2>&1 || true
+  # 看门狗会持有 prepare 锁直到启动器看见 starting 心跳。这里只做非阻塞重试，不等待对方。
+  prep_last="$LOG/prepare-last.json"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    "$PY" "$SCRIPT_DIR/run_auto_cn_push.py" --home "$HOME_DIR" --db "$APP_DB_PATH" --prepare >"$prep_last" 2>&1 || true
+    cat "$prep_last" >>"$LOG/cron.log"
+    if ! grep -q 'lock_held' "$prep_last"; then
+      break
+    fi
+    sleep 0.2
+  done
   "$PY" "$SCRIPT_DIR/write_heartbeat.py" --home "$HOME_DIR" --pid "$$" --phase check-alerts
   "$PY" "$SCRIPT_DIR/run_auto_cn_push.py" --home "$HOME_DIR" --db "$APP_DB_PATH" --check-alerts >>"$LOG/alert.log" 2>&1 || true
   if [[ -f "$HOME_DIR/markers/pending_push.json" ]]; then
