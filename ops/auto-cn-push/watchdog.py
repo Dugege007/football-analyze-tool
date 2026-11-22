@@ -440,6 +440,19 @@ def main(argv: list[str] | None = None) -> int:
         if inspecting:
             print(json.dumps(decision, ensure_ascii=False))
             return 0
+        script_dir = Path(__file__).resolve().parent
+        if str(script_dir) not in sys.path:
+            sys.path.insert(0, str(script_dir))
+        import run_auto_cn_push
+        if run_auto_cn_push.maintenance_freeze(home):
+            print(json.dumps({
+                "action": "alert",
+                "reason": "maintenance_freeze",
+                "kill": False,
+                "exit_code": 7,
+                "note": "维护冻结期间不扫描写标记，也不拉起循环。退出码 0 不表示业务健康",
+            }, ensure_ascii=False))
+            return 7
         needs_config = decision.get("action") == "restart" or not args.skip_scan
         if needs_config:
             config_error = apply_runtime_config(home)

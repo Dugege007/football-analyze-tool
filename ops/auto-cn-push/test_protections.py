@@ -199,6 +199,118 @@ class CoverageTests(unittest.TestCase):
         self.assertTrue(dropped["complete"])
         self.assertEqual(dropped["excluded_dropped_from_csl"], ["2026-11-20|m1"])
 
+    def test_explicit_catchup_floor_reaches_days_before_latest_marker(self):
+        make_db(self.db, {
+            "2026-11-07": "complete",
+            "2026-11-12": "complete",
+            "2026-11-14": "incomplete",
+            "2026-11-21": "complete",
+        })
+        marker = self.home / "markers" / "pushed_2026-11-21.json"
+        write_json(marker, {"jc_day": "2026-11-21", "db_sha256": "live-11-21"})
+        marker_bytes = marker.read_bytes()
+        receipt = self.tmp / "old-receipt.json"
+        receipt.write_bytes(b'{"jc_day":"2026-11-21","db_sha256":"live-11-21","gz_sha256":"aa"}\n')
+        receipt_bytes = receipt.read_bytes()
+        archived = self.tmp / "old-package.gz"
+        archived.write_bytes(b"OLD-PACKAGE")
+        bare = runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=TODAY, lookback=14,
+        )
+        self.assertEqual(bare["coverage"]["boundary"], "2026-11-21")
+        self.assertEqual(bare["coverage"]["claimed_jc_days"], [])
+        declared = subprocess.run(
+            ["python3", str(ROOT / "run_auto_cn_push.py"), "--home", str(self.home), "--declare-catchup-from", "2026-11-07"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(declared.returncode, 0, declared.stdout + declared.stderr)
+        self.assertFalse(list((self.home / "markers").glob("pushed_2026-11-0*.json")))
+        self.assertFalse(list((self.home / "markers").glob("pushed_2026-11-1[0-9].json")))
+        later = runner.declare_catchup_floor(self.home, "2026-11-12")
+        self.assertFalse(later["ok"])
+        self.assertEqual(later["reason"], "catchup_floor_later")
+        self.assertEqual(runner.load_catchup_floor(self.home).isoformat(), "2026-11-07")
+        first = runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=TODAY, lookback=14,
+        )
+        claimed = first["coverage"]["claimed_jc_days"]
+        self.assertIn("2026-11-07", claimed)
+        self.assertIn("2026-11-12", claimed)
+        self.assertNotIn("2026-11-14", claimed)
+        self.assertNotIn("2026-11-21", claimed)
+        self.assertEqual(marker.read_bytes(), marker_bytes)
+        again = runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=TODAY, lookback=14,
+        )
+        self.assertEqual(again["coverage"]["claimed_jc_days"], claimed)
+        self.db.unlink()
+        make_db(self.db, {
+            "2026-11-07": "complete",
+            "2026-11-12": "complete",
+            "2026-11-14": "complete",
+            "2026-11-21": "complete",
+        })
+        healed = runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=TODAY, lookback=14,
+        )
+        self.assertIn("2026-11-14", healed["coverage"]["claimed_jc_days"])
+        write_json(self.home / "markers" / "pushed_2026-11-12.json", {"jc_day": "2026-11-12", "db_sha256": "confirmed"})
+        write_json(self.home / "markers" / "pushed_2026-11-22.json", {"jc_day": "2026-11-22", "db_sha256": "newer"})
+        newer = runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=date(2026, 11, 22), lookback=14,
+        )
+        self.assertIn("2026-11-07", newer["coverage"]["claimed_jc_days"])
+        self.assertIn("2026-11-14", newer["coverage"]["claimed_jc_days"])
+        self.assertNotIn("2026-11-12", newer["coverage"]["claimed_jc_days"])
+        self.assertNotIn("2026-11-21", newer["coverage"]["claimed_jc_days"])
+        self.assertNotIn("2026-11-22", newer["coverage"]["claimed_jc_days"])
+        base = json.loads((self.home / "markers" / "push_base.json").read_text(encoding="utf-8"))
+        prepared = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        self.assertTrue(prepared["ok"], prepared)
+        self.assertNotIn("2026-11-21", prepared["coverage"]["claimed_jc_days"])
+        self.assertIn("2026-11-07", prepared["coverage"]["claimed_jc_days"])
+        meta = json.loads((self.home / "staging" / "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["expected_commit_id"], base["commit_id"])
+        self.assertEqual(gzip.decompress((self.home / "staging" / "app_latest.db.gz").read_bytes())[:16], b"SQLite format 3\x00")
+        self.assertEqual(archived.read_bytes(), b"OLD-PACKAGE")
+        self.assertEqual(receipt.read_bytes(), receipt_bytes)
+        self.assertEqual(marker.read_bytes(), marker_bytes)
+        floor = self.home / "markers" / "catchup_floor.json"
+        floor.write_bytes(b"null\n")
+        kept = floor.read_bytes()
+        with self.assertRaises(runner.CorruptRecord):
+            runner.plan_coverage(
+                home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+                today=TODAY, lookback=14,
+            )
+        self.assertEqual(floor.read_bytes(), kept)
+        blocked = runner.declare_catchup_floor(self.home, "2026-11-07")
+        self.assertEqual(blocked["reason"], "catchup_floor_corrupt")
+        self.assertEqual(floor.read_bytes(), kept)
+
+    def test_maintenance_freeze_blocks_scan_before_start(self):
+        frozen = runner.set_maintenance_freeze(self.home, "人工核对", held=True)
+        self.assertTrue(frozen["ok"], frozen)
+        scanned = runner.scan_and_alert(home=self.home, db=self.db, live_root=self.live)
+        self.assertEqual(scanned["reason"], "maintenance_freeze")
+        self.assertFalse(scanned["wrote_markers"])
+        self.assertFalse(list((self.home / "markers").glob("checked_no_matches_*.json")))
+        prepared = runner.prepare_unpushed(home=self.home, db=self.db, live_root=self.live)
+        self.assertEqual(prepared["error"], "maintenance_freeze")
+        completed = subprocess.run(
+            ["python3", str(ROOT / "watchdog.py"), "--home", str(self.home)],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 7, completed.stdout + completed.stderr)
+        self.assertIn("maintenance_freeze", completed.stdout)
+        self.assertFalse(list((self.home / "markers").glob("checked_no_matches_*.json")))
+        self.assertFalse(list((self.home / "markers").glob("gap_ledger.json")))
+
     def test_boundary_does_not_use_max_pushed_day(self):
         pushed = {"2026-11-11", "2026-11-20"}
         self.assertEqual(protect.contiguous_boundary(pushed), "2026-11-11")

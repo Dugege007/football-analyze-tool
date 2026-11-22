@@ -22,8 +22,10 @@
 
 历史补打在 `--prepare` 里，扫描规则单独放在 `protect.py`，看门狗在拉起前也会用同一规则写 `markers/ALERT_COMPLETE_UNPUSHED.json`。循环停着的时候，这个告警不依赖循环自己还在跑。
 
-- 已推边界是从最早的已推标记，或已核对的无场次证据，连续走到的最后一天，不是日期最大的已推日。
-- 从这条边界的次日查到今天。无场次日写成 `checked_no_matches_<日>.json`，这不是已推标记。下次扫描仍会再查库，不用主库文件时间跳过 WAL 里的新比赛。
+- 已推边界是从最早的已推标记连续走到的最后一天，不是日期最大的已推日。只有 `pushed_2026-11-21.json` 时，边界是 11-21；如果只从边界次日扫描，就会从 11-22 开始，11-07 到 11-20 不再查询。
+- 追补起点由 `--declare-catchup-from 2026-11-07` 写到 `markers/catchup_floor.json`，并持有 `logs/prepare.lock`。它不是已推标记。扫描范围是边界窗口、起点到今天、以及 `gap_ledger.json` 里尚未推送日期的并集。把起点改晚会被拒绝。文件损坏时准备失败，不会把它当成没有起点。恢复时把损坏文件按原字节放到审计目录，再执行同一命令，不要手写 `pushed_*.json`，也不要用当前库哈希冒充旧日已经推送。
+- 从这条并集查到今天。无场次日写成 `checked_no_matches_<日>.json`，这不是已推标记。下次扫描仍会再查库，不用主库文件时间跳过 WAL 里的新比赛。
+- 历史漏日打进当前正式库的一份新快照，前驱是当前 `push_base`。已经上线的 11-21 旧包不要重投，也不要改旧回执。真实新协议回执之后才给这次 coverage 里的日期写已推标记。
 - 过去未齐套的日子记入 `markers/gap_ledger.json` 并继续告警，不标已推，也不挡住更晚已经齐套的日子。整库里含有缺口日的行，不表示那个日子齐套。
 - 今天还没齐套不标已推。未来赛程可以留在快照里，不会被标成已推。
 - 已经有 `pending_push.json` 时不重新打包，不改 staging。半截 JSON 会隔离到 `markers/quarantine/`，原字节保留，不当作已覆盖，也不另起一份 pending。
@@ -45,7 +47,7 @@
 
 2026-11-20 的 MSI 原 `LAST_PUSHED` 是 334 字节，sha256 为 `eddd8ca744cf5a6411a876071c2064e436de93f1cdd35b7086fe88e4004fe1e8`。字段只有 `jc_day`、`pushed_at`、`db_sha256`、`gz_sha256`、`backup`。db 哈希 `dd20c0e18359a388d752a6d72ef97c22e92745954b345ad631abd7b8d757fb30` 已与现服务器和 MSI 保留快照核对过。迁移时把这份原文件原样交给脚本，`--receipt-sha256` 就填上面这个文件哈希。不要先改文件再算哈希。
 
-2026-11-21 22:45 的旧循环已经写出 11-21 的旧格式 pending 和 staging，22 场齐套，尚未投递。处理顺序是：
+11-21 现已按真实迁移上线，活跃有效标记只有 `pushed_2026-11-21.json`。不要为了追补重投当时的旧包，也不要改那份回执。若审计目录里还留着迁移前的 pending 和 staging，保持原字节。追补用 `--declare-catchup-from` 之后的新 prepare，打当前正式库快照。此前若仍要归档未投递的旧包，处理顺序是：
 
 - 先停掉旧循环，避免它在归档期间再写 pending 或 staging。
 - 持有和 `--prepare` 相同的 `logs/prepare.lock`。锁内把 `pending_push.json` 和整个 `staging/` 按原字节复制到审计目录，再把活跃路径上的这两份移出。不要在锁外边复制边让旧循环继续写。
@@ -130,6 +132,12 @@ bash ops/auto-cn-push/install_watchdog.sh
 bash ops/auto-cn-push/verify_watchdog.sh
 bash ops/auto-cn-push/rollback_watchdog.sh
 ```
+
+`watchdog.py` 退出码 0 只说明这次看门狗进程按锁规则结束，例如另一份看门狗正拿着 `logs/watchdog.lock`，或循环锁看起来还在。它不等于业务齐套、没有缺口或推送健康。业务核对看 `verify_watchdog.sh` 是否打印 `VERIFY_OK`。
+
+每个 home 的锁互相独立。`logs/prepare.lock` 用于同一 home 的 prepare、已推标记、追补声明和维护冻结。`logs/watchdog.lock` 只避免同一 home 同时跑两份看门狗。服务器 `FAT_CN_LOCK` 用于正式推送和基线迁移。新旧 home 各用各的锁。仓外 recover wrapper 返回 0 不能当成新 home 的业务已经健康。
+
+`markers/MAINTENANCE_FREEZE.json` 是人工维护冻结。`--freeze-maintenance` 和 `--release-maintenance` 都要写原因，并持有 prepare 锁。冻结期间看门狗在扫描之前返回 7，不写无场次标记或缺口账本，也不拉起循环。`--prepare` 同样拒绝。
 
 `verify_watchdog.sh` 会看配置、循环是否真的健康、以及扫描。循环没在跑是 `VERIFY_LOOP` 退出 2，配置缺失是 `VERIFY_CONFIG` 退出 5，扫描失败是 `VERIFY_SCAN` 退出 6，仍有缺口日是 `VERIFY_GAP` 退出 3。只有这些都正常才打印 `VERIFY_OK`。
 

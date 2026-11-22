@@ -53,6 +53,10 @@ def scan_days(boundary: str | None, today: date, lookback_days: int) -> list[str
         start = date.fromisoformat(boundary) + timedelta(days=1)
     else:
         start = today - timedelta(days=lookback_days)
+    return _span(start, today)
+
+
+def _span(start: date, today: date) -> list[str]:
     if start > today:
         return []
     out: list[str] = []
@@ -61,6 +65,28 @@ def scan_days(boundary: str | None, today: date, lookback_days: int) -> list[str
         out.append(day.isoformat())
         day += timedelta(days=1)
     return out
+
+
+def coverage_scan_days(
+    *,
+    boundary: str | None,
+    today: date,
+    lookback_days: int,
+    floor: date | None,
+    gap_days: set[str],
+) -> list[str]:
+    """边界窗口、显式追补起点和未解决缺口的并集。
+
+    已有较新 pushed 标记时，不能只用边界次日，否则起点之前的漏日不再被查询。
+    """
+    days = set(scan_days(boundary, today, lookback_days))
+    if floor is not None:
+        days.update(_span(floor, today))
+    for raw in gap_days:
+        parsed = parse_day(raw)
+        if parsed is not None and parsed <= today:
+            days.add(parsed.isoformat())
+    return sorted(days)
 
 
 def _evidence(row: dict) -> dict:
