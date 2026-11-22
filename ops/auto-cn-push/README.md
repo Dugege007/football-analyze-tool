@@ -137,7 +137,7 @@ bash ops/auto-cn-push/rollback_watchdog.sh
 
 每个 home 的锁互相独立。`logs/prepare.lock` 用于同一 home 的 prepare、已推标记、追补声明和维护冻结。`logs/watchdog.lock` 只避免同一 home 同时跑两份看门狗。服务器 `FAT_CN_LOCK` 用于正式推送和基线迁移。新旧 home 各用各的锁。仓外 recover wrapper 返回 0 不能当成新 home 的业务已经健康。
 
-`markers/MAINTENANCE_FREEZE.json` 是人工维护冻结。`--freeze-maintenance` 和 `--release-maintenance` 都要写原因，并持有 prepare 锁。`--prepare`、`--check-alerts`、不带日期的 `--check` 和 `scan_and_alert` 都在同一把 prepare 锁里先看冻结，再写无场次标记、缺口账本和告警。锁释放前不会先写超时、陈旧或未推告警。冻结结果只读冻结文件，不读取会隔离损坏标记的路径。看门狗初检之后会重新拿这把锁确认冻结，确认未冻结才放开锁并启动；启动子进程不继承这把锁。扫描若返回冻结或锁被占用，不拉起循环。文件在但不是 `held=true` 的维护冻结时失败，原字节保留。`verify_status.py` 见到冻结打印 `VERIFY_FROZEN` 并返回 7，不会把它当成没有缺口。
+`markers/MAINTENANCE_FREEZE.json` 是人工维护冻结。`--freeze-maintenance` 和 `--release-maintenance` 都要写原因，并持有 prepare 锁。`--prepare`、`--check-alerts`、不带日期的 `--check` 和 `scan_and_alert` 都在同一把 prepare 锁里先看冻结，再写无场次标记、缺口账本和告警。锁释放前不会先写超时、陈旧或未推告警。冻结结果只读冻结文件，不读取会隔离损坏标记的路径。看门狗初检之后会重新拿这把锁确认冻结。确认未冻结后，仍持有这把锁写看门狗状态并完成启动，启动返回后才释放。启动子进程不继承这把锁。启动脚本只等 pid 和 starting 心跳；循环先写这份心跳，再非阻塞地做 prepare，因此父进程持锁等待启动不会和循环互相等待。扫描若返回冻结或锁被占用，不拉起循环。文件在但不是 `held=true` 的维护冻结时失败，原字节保留。`verify_status.py` 见到冻结打印 `VERIFY_FROZEN` 并返回 7，不会把它当成没有缺口。
 
 `catchup_floor.json` 和 `gap_ledger.json` 不存在时，分别表示没有额外追补起点、没有未解决缺口。文件在但结构不对、日期非法，或起点晚于当前钟点，准备和扫描失败且不覆盖原字节。这次上线前，生产 home 还必须已有追补起点，并且 `scan_from` 是 `2026-11-07`。缺文件的兼容只适用于还没声明的测试或新家目录，不能用来放过损坏账本。
 

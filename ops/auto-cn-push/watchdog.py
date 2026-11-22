@@ -371,7 +371,7 @@ def default_starter(script_dir: Path, home: Path) -> int:
     script = script_dir / "start_ensure_auto_cn_push.sh"
     env = os.environ.copy()
     env["AUTO_CN_PUSH_HOME"] = str(home)
-    completed = subprocess.run(["/bin/bash", str(script)], env=env, check=False)
+    completed = subprocess.run(["/bin/bash", str(script)], env=env, check=False, close_fds=True)
     return int(completed.returncode)
 
 
@@ -531,15 +531,22 @@ def main(argv: list[str] | None = None) -> int:
                     "exit_code": 7,
                 }, ensure_ascii=False))
                 return 7
+            # 最终复核之后继续持锁，写看门狗状态并调用启动器，返回后才释放。
+            # 启动脚本只等 pid 与 starting 心跳。循环先写这份心跳，再非阻塞 prepare。
+            # 锁描述符不可继承，子进程不会带着这把锁去准备。
+            start_pause = os.environ.get("AUTO_CN_PUSH_WATCH_START_PAUSE_SEC", "").strip()
+            if start_pause:
+                (home / "logs" / "watch_start_gate").write_text("after-recheck\n", encoding="utf-8")
+                time.sleep(float(start_pause))
+            if args.starter:
+                starter = lambda: subprocess.run([args.starter], check=False, close_fds=True).returncode  # noqa: E731
+            else:
+                starter = lambda: default_starter(args.script_dir, home)  # noqa: E731
+            code = apply_decision(decision, home=home, starter=starter)
+            print(json.dumps(decision, ensure_ascii=False))
+            return code
         finally:
             prep.release()
-        if args.starter:
-            starter = lambda: subprocess.run([args.starter], check=False).returncode  # noqa: E731
-        else:
-            starter = lambda: default_starter(args.script_dir, home)  # noqa: E731
-        code = apply_decision(decision, home=home, starter=starter)
-        print(json.dumps(decision, ensure_ascii=False))
-        return code
     finally:
         if lock_fd is not None:
             os.close(lock_fd)

@@ -906,6 +906,46 @@ class WatchdogTests(unittest.TestCase):
         self.assertIn("maintenance_freeze", out)
         self.assertFalse(note.exists())
 
+    def test_freeze_cannot_land_between_recheck_and_starter(self):
+        note = self.tmp / "started.txt"
+        starter = self.tmp / "starter.sh"
+        starter.write_text(f"#!/bin/sh\necho started > {note}\n", encoding="utf-8")
+        starter.chmod(0o755)
+        env = os.environ.copy()
+        env["AUTO_CN_PUSH_WATCH_START_PAUSE_SEC"] = "1.5"
+        proc = subprocess.Popen(
+            ["python3", str(ROOT / "watchdog.py"), "--home", str(self.home), "--starter", str(starter), "--skip-scan"],
+            env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        gate = self.home / "logs" / "watch_start_gate"
+        deadline = time.time() + 5
+        while not gate.is_file():
+            if proc.poll() is not None:
+                out, err = proc.communicate()
+                self.fail(out + err)
+            if time.time() > deadline:
+                proc.kill()
+                out, err = proc.communicate()
+                self.fail("未进入最终复核后的启动窗口\n" + out + err)
+            time.sleep(0.05)
+        self.assertFalse(note.exists())
+        frozen = subprocess.run(
+            ["python3", str(ROOT / "run_auto_cn_push.py"), "--home", str(self.home), "--freeze-maintenance", "复核后启动前"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(frozen.returncode, 0, frozen.stdout + frozen.stderr)
+        self.assertIn("lock_held", frozen.stdout)
+        self.assertFalse((self.home / "markers" / "MAINTENANCE_FREEZE.json").exists())
+        self.assertFalse(note.exists())
+        out, err = proc.communicate(timeout=5)
+        self.assertEqual(proc.returncode, 0, out + err)
+        self.assertTrue(note.is_file())
+        later = subprocess.run(
+            ["python3", str(ROOT / "run_auto_cn_push.py"), "--home", str(self.home), "--freeze-maintenance", "启动返回后"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(later.returncode, 0, later.stdout + later.stderr)
+
     def test_duplicate_watchdog_does_not_start(self):
         import fcntl
 
