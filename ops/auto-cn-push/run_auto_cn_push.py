@@ -231,6 +231,7 @@ class PrepareLock:
     def acquire(self) -> bool:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+        os.set_inheritable(self.fd, False)
         try:
             fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return True
@@ -442,7 +443,7 @@ def plan_coverage(
             "frozen": True,
             "reason": "maintenance_freeze",
             "wrote_markers": False,
-            "pushed": sorted(pushed_days(markers, home)),
+            "pushed": [],
             "reports": [],
             "coverage": {"claimed_jc_days": [], "gap_days": [], "boundary": None},
         }
@@ -539,31 +540,70 @@ def update_complete_unpushed_alert(home: Path, coverage: dict, pending_exists: b
     return {"complete_unpushed": payload, "cleared": False}
 
 
-def scan_and_alert(*, home: Path, db: Path, live_root: Path, require_live: bool = False) -> dict:
+def _pause_seconds(name: str) -> None:
+    raw = os.environ.get(name, "").strip()
+    if raw:
+        time.sleep(float(raw))
+
+
+def _frozen_result(reason: str, *, frozen: bool) -> dict:
+    return {
+        "ok": False,
+        "frozen": frozen,
+        "reason": reason,
+        "coverage": {"claimed_jc_days": [], "gap_days": [], "boundary": None},
+        "pending": False,
+        "alert": None,
+        "cleared": False,
+        "complete_unpushed": None,
+        "wrote_markers": False,
+    }
+
+
+def _run_locked(home: Path, body, *, lock_held: bool) -> dict:
+    if lock_held:
+        return body()
+    lock = PrepareLock(home_paths(home)["prepare_lock"])
+    if not lock.acquire():
+        return _frozen_result("lock_held", frozen=False)
+    try:
+        return body()
+    finally:
+        lock.release()
+
+
+def scan_and_alert(*, home: Path, db: Path, live_root: Path, require_live: bool = False, lock_held: bool = False) -> dict:
     now = now_cn()
     paths = home_paths(home)
-    planned = plan_coverage(
-        home=home,
-        markers=paths["markers"],
-        db=db,
-        live_root=live_root,
-        today=now.date(),
-        lookback=lookback_days(),
-        require_live=require_live,
-    )
-    if planned.get("frozen") or planned.get("reason") == "lock_held":
+
+    def _body() -> dict:
+        if maintenance_freeze(home):
+            return _frozen_result("maintenance_freeze", frozen=True)
+        planned = plan_coverage(
+            home=home,
+            markers=paths["markers"],
+            db=db,
+            live_root=live_root,
+            today=now.date(),
+            lookback=lookback_days(),
+            require_live=require_live,
+            lock_held=True,
+        )
+        if planned.get("frozen") or planned.get("reason") == "lock_held":
+            return _frozen_result(str(planned.get("reason") or "maintenance_freeze"), frozen=bool(planned.get("frozen")))
+        _pause_seconds("AUTO_CN_PUSH_ALERT_PAUSE_SEC")
+        pending = load_json(paths["pending"], None)
+        alert = update_complete_unpushed_alert(home, planned["coverage"], bool(pending), now)
         return {
-            "ok": False,
-            "frozen": bool(planned.get("frozen")),
-            "reason": planned.get("reason"),
-            "coverage": planned.get("coverage") or {"claimed_jc_days": [], "gap_days": []},
-            "pending": False,
-            "complete_unpushed": None,
-            "wrote_markers": False,
+            "ok": True,
+            "frozen": False,
+            "wrote_markers": True,
+            "coverage": planned["coverage"],
+            "pending": bool(pending),
+            **alert,
         }
-    pending = load_json(paths["pending"], None)
-    alert = update_complete_unpushed_alert(home, planned["coverage"], bool(pending), now)
-    return {"ok": True, "frozen": False, "wrote_markers": True, "coverage": planned["coverage"], "pending": bool(pending), **alert}
+
+    return _run_locked(home, _body, lock_held=lock_held)
 
 
 def _publish_work(work: Path, staging: Path) -> None:
@@ -1033,11 +1073,24 @@ def _advance_push_base_from_commit(paths: dict, receipts: list[dict], db_sha: st
     })
 
 
-def check_alerts(home: Path, db: Path, live_root: Path, timeout_hours: float) -> dict:
+def check_alerts(home: Path, db: Path, live_root: Path, timeout_hours: float, *, lock_held: bool = False) -> dict:
     paths = home_paths(home)
     now = now_cn()
+
+    def _body() -> dict:
+        if maintenance_freeze(home):
+            return _frozen_result("maintenance_freeze", frozen=True)
+        return _check_alerts_locked(home, db, live_root, timeout_hours, paths, now)
+
+    try:
+        return _run_locked(home, _body, lock_held=lock_held)
+    except CorruptRecord as exc:
+        return {"ok": False, "frozen": False, "reason": "state_corrupt", "stale_error": str(exc), "wrote_markers": False}
+
+
+def _check_alerts_locked(home: Path, db: Path, live_root: Path, timeout_hours: float, paths: dict, now: datetime) -> dict:
     pend = load_json(paths["pending"], None)
-    result = {"pending": pend, "alert": None, "cleared": False}
+    result = {"ok": True, "frozen": False, "pending": pend, "alert": None, "cleared": False, "wrote_markers": False}
     if not pend:
         if paths["alert_pending"].is_file():
             paths["alert_pending"].unlink(missing_ok=True)
@@ -1077,6 +1130,7 @@ def check_alerts(home: Path, db: Path, live_root: Path, timeout_hours: float) ->
             live_root=live_root,
             today=now.date(),
             lookback=lookback_days(),
+            lock_held=True,
         )
     except Exception as exc:
         result["ok"] = False
@@ -1088,6 +1142,7 @@ def check_alerts(home: Path, db: Path, live_root: Path, timeout_hours: float) ->
         result["reason"] = planned.get("reason")
         result["wrote_markers"] = False
         return result
+    _pause_seconds("AUTO_CN_PUSH_ALERT_PAUSE_SEC")
     days = _past_incomplete(planned["reports"], now.date(), set(planned["pushed"]))
     if not days:
         if paths["alert_stale"].is_file():

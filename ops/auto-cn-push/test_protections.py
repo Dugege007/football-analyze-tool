@@ -429,6 +429,83 @@ class CoverageTests(unittest.TestCase):
                 continue
             self.assertEqual((self.home / "markers" / name).read_bytes(), content)
 
+    def test_freeze_keeps_alert_bytes_and_blocks_tail_writes(self):
+        make_db(self.db, {"2026-11-18": "complete"})
+        pending = self.home / "markers" / "ALERT_PENDING_TIMEOUT.json"
+        stale = self.home / "markers" / "ALERT_STALE_INCOMPLETE.json"
+        unpushed = self.home / "markers" / "ALERT_COMPLETE_UNPUSHED.json"
+        pending.write_bytes(b'{"kind":"pending_timeout","keep":1}\n')
+        stale.write_bytes(b'{"kind":"stale_incomplete","keep":1}\n')
+        unpushed.write_bytes(b'{"kind":"complete_unpushed","keep":1}\n')
+        write_json(self.home / "markers" / "pending_push.json", {
+            "jc_day": "2026-11-18",
+            "ready_at": "2026-11-01T00:00:00+08:00",
+            "db_sha256": "a" * 64,
+            "gz_sha256": "b" * 64,
+        })
+        bad = self.home / "markers" / "pushed_2026-11-11.json"
+        bad.write_bytes(b"{")
+        before = {
+            path.name: path.read_bytes()
+            for path in (self.home / "markers").iterdir()
+            if path.is_file()
+        }
+        runner.set_maintenance_freeze(self.home, "停告警", held=True)
+        env = os.environ.copy()
+        env["AUTO_CN_PUSH_NOW"] = "2026-11-21T12:00:00+08:00"
+        common = [
+            "python3", str(ROOT / "run_auto_cn_push.py"),
+            "--home", str(self.home), "--db", str(self.db), "--live-root", str(self.live),
+        ]
+        alerts = subprocess.run(common + ["--check-alerts"], env=env, text=True, capture_output=True, check=False)
+        scanned = subprocess.run(common + ["--scan-unpushed"], env=env, text=True, capture_output=True, check=False)
+        self.assertEqual(alerts.returncode, 1, alerts.stdout + alerts.stderr)
+        self.assertEqual(scanned.returncode, 0, scanned.stdout + scanned.stderr)
+        self.assertIn("maintenance_freeze", scanned.stdout)
+        planned = runner.plan_coverage(
+            home=self.home, markers=self.home / "markers", db=self.db, live_root=self.live,
+            today=TODAY, lookback=14,
+        )
+        self.assertTrue(planned["frozen"])
+        self.assertEqual(bad.read_bytes(), before[bad.name])
+        self.assertFalse((self.home / "markers" / "quarantine").exists())
+        for name, content in before.items():
+            self.assertEqual((self.home / "markers" / name).read_bytes(), content)
+        runner.set_maintenance_freeze(self.home, "放开做尾写竞态", held=False)
+        bad.unlink()
+        pause_env = os.environ.copy()
+        pause_env["AUTO_CN_PUSH_NOW"] = "2026-11-21T12:00:00+08:00"
+        pause_env["AUTO_CN_PUSH_ALERT_PAUSE_SEC"] = "1.2"
+        inflight = subprocess.Popen(
+            common + ["--check-alerts"], env=pause_env, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        time.sleep(0.4)
+        self.assertEqual(unpushed.read_bytes(), before[unpushed.name])
+        racing = subprocess.run(
+            ["python3", str(ROOT / "run_auto_cn_push.py"), "--home", str(self.home), "--freeze-maintenance", "尾写期间"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(racing.returncode, 0, racing.stdout + racing.stderr)
+        self.assertIn("lock_held", racing.stdout)
+        self.assertFalse((self.home / "markers" / "MAINTENANCE_FREEZE.json").exists())
+        self.assertEqual(unpushed.read_bytes(), before[unpushed.name])
+        out, err = inflight.communicate(timeout=5)
+        self.assertEqual(inflight.returncode, 0, out + err)
+        settled = {
+            path.name: path.read_bytes()
+            for path in (self.home / "markers").iterdir()
+            if path.is_file()
+        }
+        again = runner.set_maintenance_freeze(self.home, "尾写结束后", held=True)
+        self.assertTrue(again["ok"], again)
+        blocked = subprocess.run(common + ["--scan-unpushed"], env=env, text=True, capture_output=True, check=False)
+        self.assertIn("maintenance_freeze", blocked.stdout)
+        for name, content in settled.items():
+            if name == "MAINTENANCE_FREEZE.json":
+                continue
+            self.assertEqual((self.home / "markers" / name).read_bytes(), content)
+
     def test_boundary_does_not_use_max_pushed_day(self):
         pushed = {"2026-11-11", "2026-11-20"}
         self.assertEqual(protect.contiguous_boundary(pushed), "2026-11-11")
@@ -806,6 +883,28 @@ class WatchdogTests(unittest.TestCase):
         self.assertTrue(note.is_file())
         os.kill(me, 0)
         self.assertIn("pid_reuse_loop_dead", completed.stdout)
+
+    def test_freeze_after_initial_check_does_not_start(self):
+        note = self.tmp / "started.txt"
+        starter = self.tmp / "starter.sh"
+        starter.write_text(f"#!/bin/sh\necho started > {note}\n", encoding="utf-8")
+        starter.chmod(0o755)
+        env = os.environ.copy()
+        env["AUTO_CN_PUSH_WATCH_PAUSE_SEC"] = "1.5"
+        proc = subprocess.Popen(
+            ["python3", str(ROOT / "watchdog.py"), "--home", str(self.home), "--starter", str(starter), "--skip-scan"],
+            env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        time.sleep(0.4)
+        frozen = subprocess.run(
+            ["python3", str(ROOT / "run_auto_cn_push.py"), "--home", str(self.home), "--freeze-maintenance", "初检后冻结"],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(frozen.returncode, 0, frozen.stdout + frozen.stderr)
+        out, err = proc.communicate(timeout=5)
+        self.assertEqual(proc.returncode, 7, out + err)
+        self.assertIn("maintenance_freeze", out)
+        self.assertFalse(note.exists())
 
     def test_duplicate_watchdog_does_not_start(self):
         import fcntl
