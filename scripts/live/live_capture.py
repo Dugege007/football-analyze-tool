@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """前向实时采集（todo live-capture-mid-close）：竞彩场次在规则中盘/临盘、例外场真实 T−8h/T−1h、竞彩日 11:10
 各抓一次 5DF `/v1/fixtures/{id}/odds`（一次调用拿全澳门/皇冠/威廉/平博/365/马会/竞彩等），落原始 JSON +
-归一化 staging，再只写 v2d3 研究副本 `odds_snapshot`（先备份、幂等 upsert），从不碰现网 app.db，DUAL_WRITE 不开。
+归一化 staging，再写 `odds_snapshot`（先备份、幂等 upsert）。未合并时只写 v2d3 研究副本，拒绝现网 app.db；
+合并后（FORMAL_MERGED）副本目标就是正式库 APP_DB_PATH，这条路径是授权生产写。DUAL_WRITE 不开。
 
 口径依据：schema/v2_0-odds-phase-terminology.md（末节例外场按竞彩编号 jc_code_ge_2300、即时（11:10））、
 v2_0-n5-poisson-spec-v1.md §7 + 接入细则 5/6（tick_age_rule=live_fetched_at、odds_source=live）、
@@ -129,8 +130,8 @@ from validate_ah_sign import check_rows  # noqa: E402  后端同一套正负号�
 TZ = timezone(timedelta(hours=8))
 BASE = "https://api.5dollarfootballapi.com/v1"
 LIVE = Path(str(_ODDS_DATA_DIR / "5dollar/live"))
-REPLICA_DB = _V2D3_DB  # V2D3_DB_PATH（研究副本，采集只写这里）
-PROD_DB = _APP_DB.resolve()  # APP_DB_PATH（现网库，采集拒绝写入）
+REPLICA_DB = _V2D3_DB  # 未合并：V2D3_DB_PATH；合并后且未另设 V2D3_DB_PATH：就是正式库
+PROD_DB = _APP_DB.resolve()  # APP_DB_PATH。未合并时拒绝写入；合并后这是授权生产写
 
 GAP_SEC = 2.5            # ≤24/分钟
 RESERVE = 8              # （账户上限） × 20%
@@ -1942,7 +1943,10 @@ def check_config() -> dict:
     if not REPLICA_DB.exists():
         hints.append("V2D3_DB_PATH 指向的副本库不存在：采集可抓取落盘，但 ingest 会跳过；可先把自己的备份 .db 复制一份作为副本")
     if REPLICA_DB.exists() and PROD_DB.exists() and REPLICA_DB.resolve() == PROD_DB:
-        hints.append("V2D3_DB_PATH 与 APP_DB_PATH 相同：采集拒绝写现网库，请给副本单独一份文件")
+        if _FORMAL_MERGED:
+            hints.append("V2D3_DB_PATH 与 APP_DB_PATH 相同，且已是合并后模式：直播入库会写这份正式库")
+        else:
+            hints.append("V2D3_DB_PATH 与 APP_DB_PATH 相同：未合并时采集拒绝写现网库，请给副本单独一份文件")
     rep["ready_for_capture"] = key_set and not dual
     rep["hints"] = hints
     return rep

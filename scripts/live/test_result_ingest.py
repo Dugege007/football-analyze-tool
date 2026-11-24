@@ -95,11 +95,22 @@ def test_due_schedule():
 
 
 def test_check_db_path_refuses_production(tmp_path, monkeypatch):
-    monkeypatch.setattr(R, "FORMAL_MERGED", False)  # 旧语义：未合并时拒写正式库
+    # 正式库用临时替身。未合并时拒绝该路径，研究副本路径仍允许。不打开导入时的 PROD_DB。
+    prod = tmp_path / "formal" / "app.db"
+    prod.parent.mkdir()
+    prod.write_bytes(b"formal")
+    monkeypatch.setattr(R, "PROD_DB", str(prod))
+    monkeypatch.setattr(R, "FORMAL_MERGED", False)
+    before = prod.read_bytes()
     with pytest.raises(SystemExit):
-        R.check_db_path(R.PROD_DB)
+        R.check_db_path(str(prod))
     with pytest.raises(SystemExit):
-        R.check_db_path(str(tmp_path / "app.db"))
+        R.check_db_path(str(tmp_path / "elsewhere" / "app.db"))
+    replica = tmp_path / "v2d3" / "app.db"
+    replica.parent.mkdir()
+    replica.write_bytes(b"replica")
+    assert R.check_db_path(str(replica)) == os.path.realpath(replica)
+    assert prod.read_bytes() == before
 
 
 def test_apply_inserts_only_missing_and_backs_up(tmp_path):
@@ -445,9 +456,15 @@ def test_sporttery_import_dry_run_records_nothing(tmp_path):
     assert r["ok"] and not (tmp_path / "cache").exists() and R.refresh_records(out) == []
 
 
-def test_check_db_path_allows_production_after_merge(monkeypatch):
-    monkeypatch.setattr(R, "FORMAL_MERGED", True)  # 合并后模式：正式库是唯一库
-    assert R.check_db_path(R.PROD_DB)
+def test_check_db_path_allows_production_after_merge(tmp_path, monkeypatch):
+    # 合并后模式：解析后的正式库路径是授权生产写。只用临时替身，不打开导入时的 PROD_DB。
+    prod = tmp_path / "formal" / "app.db"
+    prod.parent.mkdir()
+    prod.write_bytes(b"formal")
+    monkeypatch.setattr(R, "PROD_DB", str(prod))
+    monkeypatch.setattr(R, "FORMAL_MERGED", True)
+    assert R.check_db_path(str(prod)) == os.path.realpath(prod)
+    assert prod.read_bytes() == b"formal"
 
 
 # ---------------------------------------------------------------- 竞彩网二次核对（只用临时库）
