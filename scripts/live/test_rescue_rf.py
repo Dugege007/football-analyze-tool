@@ -308,6 +308,34 @@ def test_rf_does_not_overwrite_live_or_manual(tmp_path, monkeypatch):
     c.close()
 
 
+def test_asof_refuses_hardlink_of_formal_db(tmp_path, monkeypatch):
+    """漏采补写与直播入库同一条路径规则：正式库硬链接拒绝，合并后的正式库路径本身仍允许。"""
+    prod = tmp_path / "formal" / "app.db"
+    prod.parent.mkdir()
+    prod.write_bytes(b"formal-bytes")
+    link = tmp_path / "v2d3" / "app.db"
+    link.parent.mkdir()
+    try:
+        link.hardlink_to(prod)
+    except OSError as exc:
+        pytest.skip(f"当前文件系统不能建硬链接：{exc}")
+    monkeypatch.setattr(ab, "PROD_DB", prod.resolve())
+    monkeypatch.setattr(ab, "_FORMAL_MERGED", True)
+    with pytest.raises(SystemExit):
+        ab.assert_safe_db(link)
+    assert ab.assert_safe_db(prod) == prod.resolve()
+    replica = tmp_path / "copy" / "v2d3" / "app.db"
+    replica.parent.mkdir(parents=True)
+    replica.write_bytes(b"replica")
+    assert ab.assert_safe_db(replica) == replica.resolve()
+    monkeypatch.setattr(ab, "_FORMAL_MERGED", False)
+    with pytest.raises(SystemExit):
+        ab.assert_safe_db(prod)
+    with pytest.raises(SystemExit):
+        ab.assert_safe_db(link)
+    assert prod.read_bytes() == b"formal-bytes"
+
+
 def test_dual_write_still_refused(tmp_path, monkeypatch):
     _isolate(monkeypatch, tmp_path)
     db = tmp_path / "v2d3" / "app.db"

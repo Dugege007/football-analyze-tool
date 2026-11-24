@@ -109,11 +109,22 @@ def wdl(h: int, a: int) -> str:
     return "胜" if h > a else ("平" if h == a else "负")
 
 
+def _same_existing_file(left: str, right: str) -> bool:
+    """路径都存在且为同一 inode（含硬链接）时为真。"""
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
 def check_db_path(db: str) -> str:
     real = os.path.realpath(db)
-    if FORMAL_MERGED and real == os.path.realpath(PROD_DB):
-        return real  # 合并后模式：正式库就是唯一库
-    if real == os.path.realpath(PROD_DB) or not real.endswith(os.path.join("v2d3", "app.db")):
+    prod = os.path.realpath(PROD_DB)
+    # 授权生产写：合并后，且 realpath 就是正式库。符号链接已被 realpath 折进来。
+    if FORMAL_MERGED and real == prod:
+        return real
+    # 硬链接的 realpath 仍是另一条路径名。它和正式库是同一文件时拒绝，即使父目录叫 v2d3。
+    if real == prod or _same_existing_file(db, PROD_DB) or not real.endswith(os.path.join("v2d3", "app.db")):
         raise SystemExit(f"拒绝写入：{db} 不是研究副本 v2d3（正式库绝对不能写）。")
     return real
 
@@ -308,9 +319,9 @@ def ensure_results_red_card_columns(con: sqlite3.Connection) -> None:
 
 
 def is_formal_db_path(db: str) -> bool:
-    """正式库路径。研究副本 v2d3/app.db 不算正式库。"""
+    """正式库路径。普通的 v2d3/app.db 不算；它若是正式库文件的硬链接则算。"""
     real = os.path.realpath(db)
-    if real == os.path.realpath(PROD_DB):
+    if real == os.path.realpath(PROD_DB) or _same_existing_file(db, PROD_DB):
         return True
     formal_suffix = os.path.join("match-analysis-api", "data", "app.db")
     return real.endswith(formal_suffix)

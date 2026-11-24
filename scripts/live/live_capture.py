@@ -1115,10 +1115,33 @@ def flip(r: dict) -> dict:
     return r
 
 
-def ingest(D: str, db: Path = REPLICA_DB, dry_run=False, create_missing_matches: bool | None = None) -> dict:
-    db = db.resolve()
-    if not (_FORMAL_MERGED and db == PROD_DB) and (db == PROD_DB or db.name != "app.db" or db.parent.name != "v2d3"):
+def _same_existing_file(left: Path, right: Path) -> bool:
+    """两条已存在的路径是否同一 inode。符号链接与硬链接都算。任一路径不存在则无法比较。"""
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
+def assert_ingest_db(db: Path) -> Path:
+    """直播入库允许写入的库。
+
+    授权生产写只有一条：已经处于合并后模式，并且解析后的路径就是 PROD_DB。
+    tick 不传库时写 REPLICA_DB；合并后且未另设 V2D3_DB_PATH 时，REPLICA_DB 就是这份正式库。
+    其余只允许名为 …/v2d3/app.db、且不是正式库文件另一条路径的研究副本。
+    Path.resolve 会折开符号链接，但不会把硬链接收成同一路径；正式库的硬链接即使
+    放在 v2d3/app.db 这个名字下也拒绝。未合并时，正式库路径本身同样拒绝。
+    """
+    db = Path(db).resolve()
+    if _FORMAL_MERGED and db == PROD_DB:
+        return db
+    if db == PROD_DB or _same_existing_file(db, PROD_DB) or db.name != "app.db" or db.parent.name != "v2d3":
         raise SystemExit(f"拒绝写入 {db}：只允许 v2d3 研究副本（…/v2d3/app.db）")
+    return db
+
+
+def ingest(D: str, db: Path = REPLICA_DB, dry_run=False, create_missing_matches: bool | None = None) -> dict:
+    db = assert_ingest_db(db)
     if os.environ.get("DUAL_WRITE_ODDS_ASIAN", "0").strip().lower() in ("1", "true", "yes", "on"):
         raise SystemExit("DUAL_WRITE_ODDS_ASIAN 被打开了；本脚本要求保持关闭")
     if create_missing_matches is None:  # 默认关；只有显式打开（参数或环境变量）才在副本里补建场次行
@@ -1374,10 +1397,8 @@ _SCHEDULE_DB_COLS = {
 
 
 def _replica_write_allowed(db: Path) -> None:
-    """与 ingest 同一道门：只写 v2d3 研究副本。合并进正式库之后，正式库就是副本目标。"""
-    db = db.resolve()
-    if not (_FORMAL_MERGED and db == PROD_DB) and (db == PROD_DB or db.name != "app.db" or db.parent.name != "v2d3"):
-        raise SystemExit(f"拒绝写入 {db}：只允许 v2d3 研究副本（…/v2d3/app.db）")
+    """与 ingest 同一道门。合并后的授权生产写只认解析后的 PROD_DB，不认它的硬链接。"""
+    assert_ingest_db(db)
 
 
 def persist_schedule_status(D: str, db: Path | None = None, plan: dict | None = None) -> dict:

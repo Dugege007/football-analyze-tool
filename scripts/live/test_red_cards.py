@@ -297,6 +297,15 @@ def test_red_cards_cli_refuses_missing_db_and_formal_path_and_defaults_to_dry_ru
     with pytest.raises(SystemExit, match="正式库"):
         R.main(["red_cards", "--db", str(prod), "--apply"])
     assert prod.read_bytes() == b""
+    link = tmp_path / "v2d3-hard" / "app.db"
+    link.parent.mkdir()
+    try:
+        link.hardlink_to(prod)
+    except OSError as exc:
+        pytest.skip(f"当前文件系统不能建硬链接：{exc}")
+    with pytest.raises(SystemExit, match="正式库"):
+        R.main(["red_cards", "--db", str(link), "--apply"])
+    assert prod.read_bytes() == b""
     db = mkdb(tmp_path)
     conn = sqlite3.connect(db)
     conn.execute("insert into results values (1, 1, 0, 1, '胜')")

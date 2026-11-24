@@ -465,6 +465,19 @@ def test_check_db_path_allows_production_after_merge(tmp_path, monkeypatch):
     monkeypatch.setattr(R, "FORMAL_MERGED", True)
     assert R.check_db_path(str(prod)) == os.path.realpath(prod)
     assert prod.read_bytes() == b"formal"
+    link = tmp_path / "v2d3" / "app.db"
+    link.parent.mkdir()
+    try:
+        os.link(prod, link)
+    except OSError as exc:
+        pytest.skip(f"当前文件系统不能建硬链接：{exc}")
+    with pytest.raises(SystemExit):
+        R.check_db_path(str(link))
+    other = tmp_path / "copy" / "v2d3" / "app.db"
+    other.parent.mkdir(parents=True)
+    other.write_bytes(b"replica")
+    assert R.check_db_path(str(other)) == os.path.realpath(other)
+    assert prod.read_bytes() == b"formal"
 
 
 # ---------------------------------------------------------------- 竞彩网二次核对（只用临时库）

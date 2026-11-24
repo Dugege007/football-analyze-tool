@@ -530,6 +530,56 @@ def test_ingest_wrong_path_does_not_write_and_formal_path_is_explicit(env, monke
     assert _sha256(prod) == prod_after
 
 
+def test_ingest_refuses_formal_hardlink_without_writing(env, monkeypatch):
+    """正式库的硬链接即使位于 v2d3/app.db 也不写入。符号链接由 resolve 折进正式库路径。"""
+    tmp, replica = env
+    prod = tmp / "formal" / "app.db"
+    prod.parent.mkdir()
+    shutil.copy(replica, prod)
+    monkeypatch.setattr(lc, "PROD_DB", prod.resolve())
+    monkeypatch.setattr(lc, "_FORMAL_MERGED", True)
+    # 父目录名必须是 v2d3，否则旧的路径名规则自己就会拒绝，测不到硬链接。
+    hard = tmp / "alias" / "v2d3" / "app.db"
+    hard.parent.mkdir(parents=True)
+    try:
+        hard.hardlink_to(prod)
+    except OSError as exc:
+        pytest.skip(f"当前文件系统不能建硬链接：{exc}")
+    before = _sha256(prod)
+    with pytest.raises(SystemExit):
+        lc.ingest("2026-10-08", hard)
+    with pytest.raises(SystemExit):
+        lc.persist_schedule_status("2026-10-08", hard)
+    assert _sha256(prod) == before
+    monkeypatch.setattr(lc, "_FORMAL_MERGED", False)
+    with pytest.raises(SystemExit):
+        lc.ingest("2026-10-08", hard)
+    assert _sha256(prod) == before
+
+
+def test_ingest_symlink_uses_resolved_formal_path(env, monkeypatch):
+    """符号链接在解析后等于正式库：未合并拒绝，合并后视为授权路径。dry_run 不改文件。"""
+    tmp, replica = env
+    prod = tmp / "formal" / "app.db"
+    prod.parent.mkdir()
+    shutil.copy(replica, prod)
+    link = tmp / "by-link" / "app.db"
+    link.parent.mkdir()
+    link.symlink_to(prod)
+    monkeypatch.setattr(lc, "PROD_DB", prod.resolve())
+    monkeypatch.setattr(lc, "_FORMAL_MERGED", False)
+    before = _sha256(prod)
+    with pytest.raises(SystemExit):
+        lc.ingest("2026-10-08", link)
+    assert _sha256(prod) == before
+    monkeypatch.setattr(lc, "_FORMAL_MERGED", True)
+    p = _plan()
+    _stage(p, "2026-10-08|四001|close|rule", _sample_odds())
+    allowed = lc.ingest("2026-10-08", link, dry_run=True)
+    assert allowed["dry_run"] is True and allowed["db"] == str(prod.resolve())
+    assert _sha256(prod) == before
+
+
 def test_ingest_rolls_back_uncommitted_odds_when_close_refresh_raises(env, monkeypatch):
     """临盘已写进当前事务、结算刷新抛错时，ingest 回滚，库中仍是上一笔已提交的行。"""
     tmp, db = env

@@ -149,9 +149,19 @@ def jdump(p: Path, obj) -> None:
     p.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _same_existing_file(left: Path, right: Path) -> bool:
+    """与 live_capture 相同：硬链接与符号链接在文件存在时算同一 inode。"""
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
 def assert_safe_db(db: Path) -> Path:
     db = db.resolve()
-    if not (_FORMAL_MERGED and db == PROD_DB) and (db == PROD_DB or db.name != "app.db" or db.parent.name != "v2d3"):
+    # 授权生产写只认合并后的 PROD_DB 本身。硬链接不会被 resolve 折成同一路径，这里按 inode 拒绝。
+    if not (_FORMAL_MERGED and db == PROD_DB) and (
+            db == PROD_DB or _same_existing_file(db, PROD_DB) or db.name != "app.db" or db.parent.name != "v2d3"):
         raise SystemExit(f"拒绝写入 {db}：只允许 v2d3 研究副本（…/v2d3/app.db）")
     if os.environ.get("DUAL_WRITE_ODDS_ASIAN", "0").strip().lower() in ("1", "true", "yes", "on"):
         raise SystemExit("DUAL_WRITE_ODDS_ASIAN 被打开了；本脚本要求保持关闭")

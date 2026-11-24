@@ -363,6 +363,34 @@ def test_refuses_database_outside_replica(tmp_path):
     assert db.read_bytes() == b""
 
 
+def test_refuses_hardlink_of_formal_database(tmp_path, monkeypatch):
+    """与直播入库同一道门：合并后也不接受正式库文件的硬链接。"""
+    import live_capture as lc
+
+    prod = tmp_path / "formal" / "app.db"
+    prod.parent.mkdir()
+    prod.write_bytes(b"formal-bytes")
+    link = tmp_path / "v2d3" / "app.db"
+    link.parent.mkdir()
+    try:
+        link.hardlink_to(prod)
+    except OSError as exc:
+        pytest.skip(f"当前文件系统不能建硬链接：{exc}")
+    monkeypatch.setattr(lc, "PROD_DB", prod.resolve())
+    monkeypatch.setattr(lc, "_FORMAL_MERGED", True)
+    report = ps.capture_for_plans(
+        FakeClient({42: (200, _table())}),
+        _plans(_match("2026-11-08|日001", KICK)),
+        link,
+        now=BEFORE,
+        clock=lambda: BEFORE,
+        cache_dir=tmp_path / "cache",
+    )
+    assert report["status"] == "skipped"
+    assert report["reason"] == "db_refused"
+    assert prod.read_bytes() == b"formal-bytes"
+
+
 def test_history_probe_does_not_write_rank_columns():
     text = Path(__file__).resolve().parents[1].joinpath("backfill", "af_step2.py").read_text(encoding="utf-8")
     code = "\n".join(line for line in text.splitlines() if not line.strip().startswith("#"))
