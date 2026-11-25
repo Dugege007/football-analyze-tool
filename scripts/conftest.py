@@ -30,6 +30,9 @@ _DEMO_MAX_MATCHES = 50  # seed 演示库只有 2 场
 
 
 def _real_db_ready() -> bool:
+    # 隔离验收设置后，收集阶段不得探测或打开仓库里的库文件。
+    if os.environ.get("FAT_REFUSE_REPO_DB") == "1":
+        return False
     if not (_APP_DB.exists() and _V2D3_DB.exists()):
         return False
     try:

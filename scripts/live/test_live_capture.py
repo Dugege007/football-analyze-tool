@@ -35,8 +35,12 @@ _BACKUP_DIR = _rp_env('BACKUP_DIR', _REPO_ROOT / 'backups' / 'football')
 
 import hashlib
 import json
+import os
 import shutil
+import signal
 import sqlite3
+import subprocess
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -165,6 +169,19 @@ def test_ingest_idempotent_backup_and_refusals(env):
     assert r0["counts"] == {"no_replica_match": n} and r0["backup"] is None
     r1 = lc.ingest("2026-10-08", db, create_missing_matches=True)
     assert r1["written"] == n and r1["backup"] and Path(r1["backup"]).exists()
+    c = sqlite3.connect(db)
+    mid = c.execute("SELECT id FROM matches WHERE match_uid='2026-10-08|四001'").fetchone()[0]
+    kept = c.execute(
+        "SELECT home_team, away_team, kickoff_at, kickoff_rev FROM matches WHERE id=?", (mid,)).fetchone()
+    c.execute(
+        "INSERT INTO odds_snapshot (match_id, book, market, channel, point, line, water_home, source) "
+        "VALUES (?, 'sentinel', 'asian', 'rule', 'open', 1.25, 0.88, 'keep-me')",
+        (mid,))
+    c.commit()
+    frozen = c.execute(
+        "SELECT match_id, book, market, channel, point, line, water_home, water_away, source "
+        "FROM odds_snapshot ORDER BY book, market, channel, point").fetchall()
+    c.close()
     r2 = lc.ingest("2026-10-08", db)
     assert r2["written"] == 0 and r2["unchanged"] == n
     c = sqlite3.connect(db)
@@ -177,6 +194,12 @@ def test_ingest_idempotent_backup_and_refusals(env):
         "SELECT match_id, book, market, channel, point, count(*) FROM odds_snapshot "
         "GROUP BY match_id, book, market, channel, point HAVING count(*) > 1").fetchall()
     assert dup == []
+    again = c.execute(
+        "SELECT match_id, book, market, channel, point, line, water_home, water_away, source "
+        "FROM odds_snapshot ORDER BY book, market, channel, point").fetchall()
+    assert again == frozen
+    assert c.execute(
+        "SELECT home_team, away_team, kickoff_at, kickoff_rev FROM matches WHERE id=?", (mid,)).fetchone() == kept
     # 0.3.20：快照 extras 必有三字段；比赛行 kickoff_rev（列 + match_meta.extras）
     ex = json.loads(c.execute("SELECT extras_json FROM odds_snapshot WHERE source='5df_live' AND book='macau'"
                               " AND market='asian'").fetchone()[0])
@@ -209,9 +232,18 @@ def test_water_late_and_conflict(env, monkeypatch):
     mid = c.execute("SELECT id FROM matches WHERE match_uid='2026-10-08|四001'").fetchone()[0]
     c.execute("UPDATE odds_snapshot SET source='5df_macauslot_history' WHERE match_id=? AND book='macau' AND market='asian'", (mid,))
     c.commit()
+    kept_history = c.execute(
+        "SELECT line, water_home, water_away, source FROM odds_snapshot "
+        "WHERE match_id=? AND book='macau' AND market='asian'", (mid,)).fetchone()
+    c.close()
     _stage(p, "2026-10-08|四001|close|rule", raw, mutate=lambda r: r.__setitem__("water_away", 0.9) if r["book"] == "macau" else None)
     rep = lc.ingest("2026-10-08", db)
     assert rep["counts"].get("conflict_non_live_row_kept") == 1
+    c = sqlite3.connect(db)
+    assert c.execute(
+        "SELECT line, water_home, water_away, source FROM odds_snapshot "
+        "WHERE match_id=? AND book='macau' AND market='asian'", (mid,)).fetchone() == kept_history
+    c.close()
 
 
 def test_sign_batch_block_and_retract(env):
@@ -578,6 +610,25 @@ def test_ingest_symlink_uses_resolved_formal_path(env, monkeypatch):
     allowed = lc.ingest("2026-10-08", link, dry_run=True)
     assert allowed["dry_run"] is True and allowed["db"] == str(prod.resolve())
     assert _sha256(prod) == before
+    # 解析后的符号链接就是正式替身：真实写入落在同一 inode，不另建一份库。
+    wrote = lc.ingest("2026-10-08", link, create_missing_matches=True)
+    assert wrote["written"] > 0 and wrote["db"] == str(prod.resolve())
+    assert os.path.samefile(link, prod)
+    conn = sqlite3.connect(f"file:{prod}?mode=ro", uri=True)
+    try:
+        assert conn.execute("SELECT count(*) FROM odds_snapshot WHERE source='5df_live'").fetchone()[0] == wrote["written"]
+    finally:
+        conn.close()
+
+
+def test_ingest_refuses_dual_write_without_writing(env, monkeypatch):
+    """双写开关打开时，研究副本路径也拒绝，临时库字节不变。"""
+    tmp, db = env
+    before = _sha256(db)
+    monkeypatch.setenv("DUAL_WRITE_ODDS_ASIAN", "1")
+    with pytest.raises(SystemExit, match="DUAL_WRITE"):
+        lc.ingest("2026-10-08", db)
+    assert _sha256(db) == before
 
 
 def test_ingest_rolls_back_uncommitted_odds_when_close_refresh_raises(env, monkeypatch):
@@ -616,6 +667,70 @@ def test_ingest_rolls_back_uncommitted_odds_when_close_refresh_raises(env, monke
             "WHERE source='5df_live' ORDER BY book, market, channel, point").fetchall()
         assert after == before
         assert conn.execute("SELECT count(*) FROM odds_snapshot").fetchone()[0] == len(before)
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        conn.close()
+
+
+def test_killed_subprocess_discards_uncommitted_ingest(env):
+    """子进程在未提交的入库事务里被 SIGKILL。不跑 except/rollback，重开后临时库应完整且没有半写。"""
+    tmp, db = env
+    p = _plan()
+    key = "2026-10-08|四001|close|rule"
+    n = len(_stage(p, key, _sample_odds()))
+    first = lc.ingest("2026-10-08", db, create_missing_matches=True)
+    assert first["written"] == n
+
+    def bump(row):
+        if row["book"] == "macau" and row["market"] == "asian":
+            row["price_home"] = 1.97
+            row["water_home"] = lc.hk(1.97)
+
+    _stage(p, key, _sample_odds(), mutate=bump)
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    before = conn.execute(
+        "SELECT book, market, channel, point, water_home, line, source FROM odds_snapshot "
+        "ORDER BY book, market, channel, point").fetchall()
+    conn.close()
+    script = tmp / "kill_during_ingest.py"
+    script.write_text(
+        "import os, signal, sys\n"
+        "from pathlib import Path\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "os.environ['FAT_DISABLE_DOTENV'] = '1'\n"
+        "import live_capture as lc\n"
+        "db, stage, plan, state, log, bak, summary = map(Path, sys.argv[2:9])\n"
+        "lc.D_STAGE, lc.D_PLAN, lc.D_STATE = stage, plan, state\n"
+        "lc.D_LOG, lc.D_BAK, lc.D_SUM, lc.LIVE = log, bak, summary, db.parent.parent\n"
+        "def boom(conn, writes, now=None):\n"
+        "    if not writes:\n"
+        "        raise SystemExit(2)\n"
+        "    os.kill(os.getpid(), signal.SIGKILL)\n"
+        "import app.market_settle as ms\n"
+        "ms.refresh_after_close_writes = boom\n"
+        "lc.ingest('2026-10-08', db)\n"
+        "raise SystemExit(3)\n",
+        encoding="utf-8",
+    )
+    live_dir = str(Path(lc.__file__).resolve().parent)
+    proc = subprocess.run(
+        [sys.executable, str(script), live_dir, str(db), str(lc.D_STAGE), str(lc.D_PLAN),
+         str(lc.D_STATE), str(lc.D_LOG), str(lc.D_BAK), str(lc.D_SUM)],
+        cwd=live_dir,
+        env={**os.environ, "FAT_DISABLE_DOTENV": "1", "FAT_REFUSE_REPO_DB": "1"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == -signal.SIGKILL, proc.stderr
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        after = conn.execute(
+            "SELECT book, market, channel, point, water_home, line, source FROM odds_snapshot "
+            "ORDER BY book, market, channel, point").fetchall()
+        assert after == before
+        assert all(row[4] != lc.hk(1.97) for row in after)
     finally:
         conn.close()
 
