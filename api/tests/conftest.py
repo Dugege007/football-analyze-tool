@@ -2,11 +2,13 @@
 （api/tests/fixtures/regress_db/*.db），这些文件不进公开仓。
 
 规则：
-1. 真实库缺失、或 api/data/app.db 只是 seed 演示库时，`_private_db_tests.txt` 中列出的测试在收集阶段即标记 skipped；
-2. 兜底：任何测试若因「打不开 .db 文件」失败，且真实库缺失，同样改记 skipped（附原因）；
+1. 收集阶段不打开 api/data/app.db 与 api/data/v2d3/app.db。这两个文件可能是正式库或研究副本，
+   文件存在也不连接。`_private_db_tests.txt` 中的测试因此保持 skipped。
+   FAT_REFUSE_REPO_DB=1 是同一拒绝的显式开关；不设置它也不打开。
+2. 兜底：任何测试若因「打不开 .db 文件」失败，且没有经过上面的只读探测，同样改记 skipped（附原因）；
 3. 调好的策略参数不随公开仓发布：测试若因 StrategyParamsMissing 失败（config/strategy_params.json 未填），
    改记 skipped，原因 "strategy params not configured"（见 docs/STRATEGY_PARAMS.md）。
-其余失败（断言错误等）照常报错。把你自己的库放到上述路径后，这些测试会正常执行。
+其余失败（断言错误等）照常报错。私有库用例不要靠把正式库放到上述路径来解除跳过。
 """
 from __future__ import annotations
 
@@ -26,24 +28,17 @@ _APP_DB = API_ROOT / "data" / "app.db"
 _V2D3_DB = API_ROOT / "data" / "v2d3" / "app.db"
 _SKIP_REASON = "需要私有真实库/回归库（公开仓不含，见 docs/SENSITIVE.md）"
 _PARAMS_SKIP_REASON = "strategy params not configured（调好的参数不随公开仓发布，见 docs/STRATEGY_PARAMS.md）"
-_DEMO_MAX_MATCHES = 50  # seed 演示库只有 2 场
 
 
 def _real_db_ready() -> bool:
-    # 隔离验收设置后，收集阶段不得探测或打开仓库里的库文件。
+    """收集阶段不打开仓库里的正式库或研究副本。
+
+    文件存在也不足以授权只读连接。FAT_REFUSE_REPO_DB=1 是显式防护，
+    未设置时同样不调用 sqlite3.connect。
+    """
     if os.environ.get("FAT_REFUSE_REPO_DB") == "1":
         return False
-    if not (_APP_DB.exists() and _V2D3_DB.exists()):
-        return False
-    try:
-        conn = sqlite3.connect(f"file:{_APP_DB}?mode=ro", uri=True)
-        try:
-            n = conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        return False
-    return n > _DEMO_MAX_MATCHES
+    return False
 
 
 _READY = _real_db_ready()
