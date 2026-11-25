@@ -1,4 +1,4 @@
-"""live_capture.py 单测：目标时刻、窗口、入副本（只在临时副本上）、幂等、校验拦截。不调 5DF。"""
+"""live_capture.py 单测：目标时刻、窗口、入临时库、幂等、校验拦截。不调 5DF，不打开导入时的正式库路径。"""
 # --- public repo: paths are env-overridable (see config.example.env) ---
 import os as _rp_os
 from pathlib import Path as _RpPath
@@ -33,9 +33,14 @@ _V2D3_DB = _rp_env('V2D3_DB_PATH', _MA_API_ROOT / 'data' / 'v2d3' / 'app.db', _M
 _BACKUP_DIR = _rp_env('BACKUP_DIR', _REPO_ROOT / 'backups' / 'football')
 # --- end path config ---
 
+import hashlib
 import json
+import os
 import shutil
+import signal
 import sqlite3
+import subprocess
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -44,7 +49,6 @@ import pytest
 import live_capture as lc
 
 TZ = lc.TZ
-RAW = sorted(Path(str(_ODDS_DATA_DIR / "5dollar/live/all")).glob("*/*.json"))
 
 
 def _csl(D, items):
@@ -54,21 +58,58 @@ def _csl(D, items):
          "lottery": {"jingcailottery": {"number": num, "odds": None}}} for fid, num, h, a, k in items]}
 
 
+def _init_isolated_db(path: Path) -> None:
+    """按仓库 DDL 建空库，并装上带 source 列的 v_odds_asian_rule。不复制任何现成库文件。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    from app.db import SCHEMA_DIR, apply_schema
+
+    conn = sqlite3.connect(path)
+    try:
+        apply_schema(conn)
+        view = SCHEMA_DIR / "v2_0_d2_view_asian_rule.sql"
+        conn.executescript(view.read_text(encoding="utf-8"))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _sample_odds() -> dict:
+    """normalize() 已接受的赔率形状。水位落在 0.50–1.50，避免依赖磁盘上的原始抓包。"""
+    asian = {"line": -0.25, "home": 1.90, "away": 1.95}
+    ou = {"line": 2.5, "over": 1.85, "under": 1.95}
+    euro = {"home": 1.80, "draw": 3.40, "away": 4.20}
+    books = []
+    for slug in ("macauslot", "crown"):
+        books.append({"slug": slug, "odds": {
+            "asian_handicap": {"closing": dict(asian), "opening": dict(asian)},
+            "goal_line": {"closing": dict(ou), "opening": dict(ou)},
+            "1x2": {"closing": dict(euro), "opening": dict(euro)},
+        }})
+    return {"data": {"bookmakers": books}}
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     for n in ("D_ALL", "D_PIN", "D_CSL", "D_PLAN", "D_STAGE", "D_STATE", "D_LOG", "D_SUM", "D_BAK"):
         monkeypatch.setattr(lc, n, tmp_path / n.lower())
     monkeypatch.setattr(lc, "LIVE", tmp_path)
     db = tmp_path / "v2d3" / "app.db"
-    db.parent.mkdir()
-    shutil.copy(lc.REPLICA_DB, db)
-    # 隔离：真实副本可能已建好测试用的竞彩日场次（如 2026-10-08|四001）。只在临时副本里把它们改名，
-    # 保证"副本无对应场次"这一前提确定成立（FK 不受影响）。
-    c = sqlite3.connect(db)
-    c.execute("UPDATE matches SET match_uid = match_uid || ':shadowed_by_test'"
-              " WHERE match_uid LIKE '2026-10-08|%' OR match_uid LIKE '2026-10-09|%'")
-    c.commit()
-    c.close()
+    _init_isolated_db(db)
+    root = tmp_path.resolve()
+    original = lc.ingest
+
+    def guarded(D, db=lc.REPLICA_DB, dry_run=False, create_missing_matches=None):
+        # 测试失败即关闭：任何入库路径解析后必须落在本用例的临时目录里。
+        resolved = Path(db).resolve()
+        if resolved != root and root not in resolved.parents:
+            raise AssertionError(f"测试拒绝打开临时目录以外的库：{resolved}")
+        return original(D, db, dry_run=dry_run, create_missing_matches=create_missing_matches)
+
+    monkeypatch.setattr(lc, "ingest", guarded)
     return tmp_path, db
 
 
@@ -119,16 +160,28 @@ def _stage(p, key, raw, lag_min=-1.0, mutate=None):
     return rows
 
 
-@pytest.mark.skipif(not RAW, reason="no real raw capture on disk")
 def test_ingest_idempotent_backup_and_refusals(env):
     tmp, db = env
     p = _plan()
-    raw = json.loads(RAW[0].read_text())
+    raw = _sample_odds()
     n = len(_stage(p, "2026-10-08|四001|close|rule", raw))
     r0 = lc.ingest("2026-10-08", db)
     assert r0["counts"] == {"no_replica_match": n} and r0["backup"] is None
     r1 = lc.ingest("2026-10-08", db, create_missing_matches=True)
     assert r1["written"] == n and r1["backup"] and Path(r1["backup"]).exists()
+    c = sqlite3.connect(db)
+    mid = c.execute("SELECT id FROM matches WHERE match_uid='2026-10-08|四001'").fetchone()[0]
+    kept = c.execute(
+        "SELECT home_team, away_team, kickoff_at, kickoff_rev FROM matches WHERE id=?", (mid,)).fetchone()
+    c.execute(
+        "INSERT INTO odds_snapshot (match_id, book, market, channel, point, line, water_home, source) "
+        "VALUES (?, 'sentinel', 'asian', 'rule', 'open', 1.25, 0.88, 'keep-me')",
+        (mid,))
+    c.commit()
+    frozen = c.execute(
+        "SELECT match_id, book, market, channel, point, line, water_home, water_away, source "
+        "FROM odds_snapshot ORDER BY book, market, channel, point").fetchall()
+    c.close()
     r2 = lc.ingest("2026-10-08", db)
     assert r2["written"] == 0 and r2["unchanged"] == n
     c = sqlite3.connect(db)
@@ -137,6 +190,16 @@ def test_ingest_idempotent_backup_and_refusals(env):
                     " AND book='macau'").fetchall()
     assert got and got[0][3:] == ("actual", "5df_live", "rule", "close", "own", "live")
     assert c.execute("SELECT count(*) FROM odds_snapshot WHERE source='5df_live'").fetchone()[0] == n
+    dup = c.execute(
+        "SELECT match_id, book, market, channel, point, count(*) FROM odds_snapshot "
+        "GROUP BY match_id, book, market, channel, point HAVING count(*) > 1").fetchall()
+    assert dup == []
+    again = c.execute(
+        "SELECT match_id, book, market, channel, point, line, water_home, water_away, source "
+        "FROM odds_snapshot ORDER BY book, market, channel, point").fetchall()
+    assert again == frozen
+    assert c.execute(
+        "SELECT home_team, away_team, kickoff_at, kickoff_rev FROM matches WHERE id=?", (mid,)).fetchone() == kept
     # 0.3.20：快照 extras 必有三字段；比赛行 kickoff_rev（列 + match_meta.extras）
     ex = json.loads(c.execute("SELECT extras_json FROM odds_snapshot WHERE source='5df_live' AND book='macau'"
                               " AND market='asian'").fetchone()[0])
@@ -147,20 +210,12 @@ def test_ingest_idempotent_backup_and_refusals(env):
     assert c.execute("SELECT kickoff_rev FROM matches WHERE id=?", (mid,)).fetchone()[0] == 0
     meta = json.loads(c.execute("SELECT extras_json FROM match_meta WHERE match_id=?", (mid,)).fetchone()[0])
     assert meta["kickoff_rev"] == 0
-    with pytest.raises(SystemExit):
-        lc.ingest("2026-10-08", lc.PROD_DB)
-    other = tmp / "elsewhere" / "app.db"
-    other.parent.mkdir()
-    shutil.copy(db, other)
-    with pytest.raises(SystemExit):
-        lc.ingest("2026-10-08", other)
 
 
-@pytest.mark.skipif(not RAW, reason="no real raw capture on disk")
 def test_water_late_and_conflict(env, monkeypatch):
     tmp, db = env
     p = _plan()
-    raw = json.loads(RAW[0].read_text())
+    raw = _sample_odds()
 
     def bad(r):
         if r["book"] == "crown" and r["market"] == "asian":
@@ -177,18 +232,26 @@ def test_water_late_and_conflict(env, monkeypatch):
     mid = c.execute("SELECT id FROM matches WHERE match_uid='2026-10-08|四001'").fetchone()[0]
     c.execute("UPDATE odds_snapshot SET source='5df_macauslot_history' WHERE match_id=? AND book='macau' AND market='asian'", (mid,))
     c.commit()
+    kept_history = c.execute(
+        "SELECT line, water_home, water_away, source FROM odds_snapshot "
+        "WHERE match_id=? AND book='macau' AND market='asian'", (mid,)).fetchone()
+    c.close()
     _stage(p, "2026-10-08|四001|close|rule", raw, mutate=lambda r: r.__setitem__("water_away", 0.9) if r["book"] == "macau" else None)
     rep = lc.ingest("2026-10-08", db)
     assert rep["counts"].get("conflict_non_live_row_kept") == 1
+    c = sqlite3.connect(db)
+    assert c.execute(
+        "SELECT line, water_home, water_away, source FROM odds_snapshot "
+        "WHERE match_id=? AND book='macau' AND market='asian'", (mid,)).fetchone() == kept_history
+    c.close()
 
 
-@pytest.mark.skipif(not RAW, reason="no real raw capture on disk")
 def test_sign_batch_block_and_retract(env):
     tmp, db = env
     D = "2026-10-08"
     b = datetime(2026, 10, 8, tzinfo=TZ)
     p = lc.build_plan(D, _csl(D, [(i, f"周四00{i}", f"H{i}", f"A{i}", b.replace(hour=23)) for i in range(1, 6)]))
-    raw = json.loads(RAW[0].read_text())
+    raw = _sample_odds()
 
     def setline(v):
         def f(r):
@@ -342,7 +405,6 @@ def test_placeholder_confirmed_by_status_started(env):
 
 
 
-@pytest.mark.skipif(not RAW, reason="no real raw capture on disk")
 def test_ingest_writes_phase_assign_late_on_catchup(env):
     """补抓行入库：extras.phase_assign_late=true、kickoff_rev 来自比赛计划。"""
     tmp, db = env
@@ -353,7 +415,7 @@ def test_ingest_writes_phase_assign_late_on_catchup(env):
                       now=B.replace(hour=12))
     cu = _tk(p)["2026-10-08|四002|mid|rule|k1"]
     assert cu["catchup"] and cu["phase_assign_late"]
-    raw = json.loads(RAW[0].read_text())
+    raw = _sample_odds()
     n = len(_stage(p, cu["target_key"], raw))
     rep = lc.ingest(D, db, create_missing_matches=True)
     assert rep["written"] == n
@@ -424,12 +486,11 @@ def test_kickoff_advance_gap_catchup(env):
     assert _tk(p3)["2026-10-09|五005|mid|rule|k1"]["catchup"] is True  # 新中盘仍补抓
 
 
-@pytest.mark.skipif(not RAW, reason="no real raw capture on disk")
 def test_ingest_pending_rows_then_assign(env):
     tmp, db = env
     D = "2026-10-08"
     p = lc.build_plan(D, _csl_s(_items()), now=B.replace(hour=9))
-    raw = json.loads(RAW[0].read_text())
+    raw = _sample_odds()
     n = len(_stage(p, "2026-10-08|四003|pending|d2200", raw))
     r1 = lc.ingest(D, db, create_missing_matches=True)
     assert r1["written"] == n and r1["backup"]
@@ -452,6 +513,226 @@ def test_ingest_pending_rows_then_assign(env):
                               " AND book='macau' AND market='asian'").fetchone()[0])
     assert ex["postponed_announced_at"] is None and ex["kickoff_original"] == lc.iso(PH)
     assert ex["postpone_void_hours"] == 24 and ex["postpone_void_src"] == "OE67/2018-art11"
+
+
+def test_ingest_wrong_path_does_not_write_and_formal_path_is_explicit(env, monkeypatch):
+    """未合并时正式库路径拒绝且字节不变。合并后只有解析后的 PROD_DB 是授权生产写。
+
+    授权生产写的调用是：FORMAL_MERGED 为真，并且 ingest 的库解析后等于 PROD_DB。
+    tick 不传库时用 REPLICA_DB；合并后且未另设 V2D3_DB_PATH 时，REPLICA_DB 就是这份正式库。
+    本用例只把临时文件当作正式库替身，并断言它不是模块导入时的 PROD_DB。
+    """
+    tmp, replica = env
+    imported_prod = Path(lc.PROD_DB).resolve()
+    prod = tmp / "formal" / "app.db"
+    prod.parent.mkdir()
+    shutil.copy(replica, prod)
+    assert prod.resolve() != imported_prod
+    other = tmp / "elsewhere" / "app.db"
+    other.parent.mkdir()
+    shutil.copy(replica, other)
+    prod_hash = _sha256(prod)
+    other_hash = _sha256(other)
+    monkeypatch.setattr(lc, "PROD_DB", prod.resolve())
+    monkeypatch.setattr(lc, "_FORMAL_MERGED", False)
+    with pytest.raises(SystemExit):
+        lc.ingest("2026-10-08", prod)
+    with pytest.raises(SystemExit):
+        lc.ingest("2026-10-08", other)
+    assert _sha256(prod) == prod_hash and _sha256(other) == other_hash
+
+    monkeypatch.setattr(lc, "_FORMAL_MERGED", True)
+    with pytest.raises(SystemExit):
+        lc.ingest("2026-10-08", other)
+    assert _sha256(other) == other_hash
+    p = _plan()
+    n = len(_stage(p, "2026-10-08|四001|close|rule", _sample_odds()))
+    rep = lc.ingest("2026-10-08", prod, create_missing_matches=True)
+    assert rep["written"] == n and rep["db"] == str(prod.resolve())
+    assert _sha256(other) == other_hash
+    conn = sqlite3.connect(prod)
+    try:
+        assert conn.execute("SELECT count(*) FROM odds_snapshot WHERE source='5df_live'").fetchone()[0] == n
+    finally:
+        conn.close()
+    # 合并后，另一份不同文件的 v2d3/app.db 仍是研究副本，写入不落到正式替身。
+    prod_after = _sha256(prod)
+    rep_replica = lc.ingest("2026-10-08", replica, create_missing_matches=True)
+    assert rep_replica["written"] == n
+    assert _sha256(prod) == prod_after
+
+
+def test_ingest_refuses_formal_hardlink_without_writing(env, monkeypatch):
+    """正式库的硬链接即使位于 v2d3/app.db 也不写入。符号链接由 resolve 折进正式库路径。"""
+    tmp, replica = env
+    prod = tmp / "formal" / "app.db"
+    prod.parent.mkdir()
+    shutil.copy(replica, prod)
+    monkeypatch.setattr(lc, "PROD_DB", prod.resolve())
+    monkeypatch.setattr(lc, "_FORMAL_MERGED", True)
+    # 父目录名必须是 v2d3，否则旧的路径名规则自己就会拒绝，测不到硬链接。
+    hard = tmp / "alias" / "v2d3" / "app.db"
+    hard.parent.mkdir(parents=True)
+    try:
+        hard.hardlink_to(prod)
+    except OSError as exc:
+        pytest.skip(f"当前文件系统不能建硬链接：{exc}")
+    before = _sha256(prod)
+    with pytest.raises(SystemExit):
+        lc.ingest("2026-10-08", hard)
+    with pytest.raises(SystemExit):
+        lc.persist_schedule_status("2026-10-08", hard)
+    assert _sha256(prod) == before
+    monkeypatch.setattr(lc, "_FORMAL_MERGED", False)
+    with pytest.raises(SystemExit):
+        lc.ingest("2026-10-08", hard)
+    assert _sha256(prod) == before
+
+
+def test_ingest_symlink_uses_resolved_formal_path(env, monkeypatch):
+    """符号链接在解析后等于正式库：未合并拒绝，合并后视为授权路径。dry_run 不改文件。"""
+    tmp, replica = env
+    prod = tmp / "formal" / "app.db"
+    prod.parent.mkdir()
+    shutil.copy(replica, prod)
+    link = tmp / "by-link" / "app.db"
+    link.parent.mkdir()
+    link.symlink_to(prod)
+    monkeypatch.setattr(lc, "PROD_DB", prod.resolve())
+    monkeypatch.setattr(lc, "_FORMAL_MERGED", False)
+    before = _sha256(prod)
+    with pytest.raises(SystemExit):
+        lc.ingest("2026-10-08", link)
+    assert _sha256(prod) == before
+    monkeypatch.setattr(lc, "_FORMAL_MERGED", True)
+    p = _plan()
+    _stage(p, "2026-10-08|四001|close|rule", _sample_odds())
+    allowed = lc.ingest("2026-10-08", link, dry_run=True)
+    assert allowed["dry_run"] is True and allowed["db"] == str(prod.resolve())
+    assert _sha256(prod) == before
+    # 解析后的符号链接就是正式替身：真实写入落在同一 inode，不另建一份库。
+    wrote = lc.ingest("2026-10-08", link, create_missing_matches=True)
+    assert wrote["written"] > 0 and wrote["db"] == str(prod.resolve())
+    assert os.path.samefile(link, prod)
+    conn = sqlite3.connect(f"file:{prod}?mode=ro", uri=True)
+    try:
+        assert conn.execute("SELECT count(*) FROM odds_snapshot WHERE source='5df_live'").fetchone()[0] == wrote["written"]
+    finally:
+        conn.close()
+
+
+def test_ingest_refuses_dual_write_without_writing(env, monkeypatch):
+    """双写开关打开时，研究副本路径也拒绝，临时库字节不变。"""
+    tmp, db = env
+    before = _sha256(db)
+    monkeypatch.setenv("DUAL_WRITE_ODDS_ASIAN", "1")
+    with pytest.raises(SystemExit, match="DUAL_WRITE"):
+        lc.ingest("2026-10-08", db)
+    assert _sha256(db) == before
+
+
+def test_ingest_rolls_back_uncommitted_odds_when_close_refresh_raises(env, monkeypatch):
+    """临盘已写进当前事务、结算刷新抛错时，ingest 回滚，库中仍是上一笔已提交的行。"""
+    tmp, db = env
+    p = _plan()
+    key = "2026-10-08|四001|close|rule"
+    n = len(_stage(p, key, _sample_odds()))
+    first = lc.ingest("2026-10-08", db, create_missing_matches=True)
+    assert first["written"] == n
+    conn = sqlite3.connect(db)
+    before = conn.execute(
+        "SELECT book, market, channel, point, water_home, line FROM odds_snapshot "
+        "WHERE source='5df_live' ORDER BY book, market, channel, point").fetchall()
+    conn.close()
+    assert before
+
+    def bump(row):
+        if row["book"] == "macau" and row["market"] == "asian":
+            row["price_home"] = 1.96
+            row["water_home"] = lc.hk(1.96)
+
+    _stage(p, key, _sample_odds(), mutate=bump)
+
+    def boom(conn, writes, now=None):
+        assert writes, "临盘写入没有进入同一事务的结算刷新"
+        raise RuntimeError("未提交事务中断")
+
+    monkeypatch.setattr("app.market_settle.refresh_after_close_writes", boom)
+    with pytest.raises(RuntimeError, match="未提交事务中断"):
+        lc.ingest("2026-10-08", db)
+    conn = sqlite3.connect(db)
+    try:
+        after = conn.execute(
+            "SELECT book, market, channel, point, water_home, line FROM odds_snapshot "
+            "WHERE source='5df_live' ORDER BY book, market, channel, point").fetchall()
+        assert after == before
+        assert conn.execute("SELECT count(*) FROM odds_snapshot").fetchone()[0] == len(before)
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        conn.close()
+
+
+def test_killed_subprocess_discards_uncommitted_ingest(env):
+    """子进程在未提交的入库事务里被 SIGKILL。不跑 except/rollback，重开后临时库应完整且没有半写。"""
+    tmp, db = env
+    p = _plan()
+    key = "2026-10-08|四001|close|rule"
+    n = len(_stage(p, key, _sample_odds()))
+    first = lc.ingest("2026-10-08", db, create_missing_matches=True)
+    assert first["written"] == n
+
+    def bump(row):
+        if row["book"] == "macau" and row["market"] == "asian":
+            row["price_home"] = 1.97
+            row["water_home"] = lc.hk(1.97)
+
+    _stage(p, key, _sample_odds(), mutate=bump)
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    before = conn.execute(
+        "SELECT book, market, channel, point, water_home, line, source FROM odds_snapshot "
+        "ORDER BY book, market, channel, point").fetchall()
+    conn.close()
+    script = tmp / "kill_during_ingest.py"
+    script.write_text(
+        "import os, signal, sys\n"
+        "from pathlib import Path\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "os.environ['FAT_DISABLE_DOTENV'] = '1'\n"
+        "import live_capture as lc\n"
+        "db, stage, plan, state, log, bak, summary = map(Path, sys.argv[2:9])\n"
+        "lc.D_STAGE, lc.D_PLAN, lc.D_STATE = stage, plan, state\n"
+        "lc.D_LOG, lc.D_BAK, lc.D_SUM, lc.LIVE = log, bak, summary, db.parent.parent\n"
+        "def boom(conn, writes, now=None):\n"
+        "    if not writes:\n"
+        "        raise SystemExit(2)\n"
+        "    os.kill(os.getpid(), signal.SIGKILL)\n"
+        "import app.market_settle as ms\n"
+        "ms.refresh_after_close_writes = boom\n"
+        "lc.ingest('2026-10-08', db)\n"
+        "raise SystemExit(3)\n",
+        encoding="utf-8",
+    )
+    live_dir = str(Path(lc.__file__).resolve().parent)
+    proc = subprocess.run(
+        [sys.executable, str(script), live_dir, str(db), str(lc.D_STAGE), str(lc.D_PLAN),
+         str(lc.D_STATE), str(lc.D_LOG), str(lc.D_BAK), str(lc.D_SUM)],
+        cwd=live_dir,
+        env={**os.environ, "FAT_DISABLE_DOTENV": "1", "FAT_REFUSE_REPO_DB": "1"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == -signal.SIGKILL, proc.stderr
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        after = conn.execute(
+            "SELECT book, market, channel, point, water_home, line, source FROM odds_snapshot "
+            "ORDER BY book, market, channel, point").fetchall()
+        assert after == before
+        assert all(row[4] != lc.hk(1.97) for row in after)
+    finally:
+        conn.close()
 
 
 # --- heartbeat / interruptible_sleep (2026-10-10 stall fix) ---

@@ -290,8 +290,22 @@ def test_red_cards_cli_refuses_missing_db_and_formal_path_and_defaults_to_dry_ru
         R.main(["red_cards"])
     with pytest.raises(SystemExit, match="必须显式传入 --db"):
         R.main(["red_cards", "--apply"])
+    prod = tmp_path / "formal" / "app.db"
+    prod.parent.mkdir()
+    prod.write_bytes(b"")
+    monkeypatch.setattr(R, "PROD_DB", str(prod))
     with pytest.raises(SystemExit, match="正式库"):
-        R.main(["red_cards", "--db", R.PROD_DB, "--apply"])
+        R.main(["red_cards", "--db", str(prod), "--apply"])
+    assert prod.read_bytes() == b""
+    link = tmp_path / "v2d3-hard" / "app.db"
+    link.parent.mkdir()
+    try:
+        link.hardlink_to(prod)
+    except OSError as exc:
+        pytest.skip(f"当前文件系统不能建硬链接：{exc}")
+    with pytest.raises(SystemExit, match="正式库"):
+        R.main(["red_cards", "--db", str(link), "--apply"])
+    assert prod.read_bytes() == b""
     db = mkdb(tmp_path)
     conn = sqlite3.connect(db)
     conn.execute("insert into results values (1, 1, 0, 1, '胜')")

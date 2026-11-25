@@ -232,11 +232,9 @@ def _db_writable(db: Path) -> tuple[bool, str]:
     import live_capture as lc
 
     resolved = db.resolve()
-    formal_ok = bool(lc._FORMAL_MERGED and resolved == lc.PROD_DB)
-    replica_ok = resolved.name == "app.db" and resolved.parent.name == "v2d3"
-    if resolved == lc.PROD_DB and not formal_ok:
-        return False, "db_refused"
-    if not formal_ok and not replica_ok:
+    try:
+        lc.assert_ingest_db(resolved)
+    except SystemExit:
         return False, "db_refused"
     if not resolved.is_file():
         return False, "db_missing"
